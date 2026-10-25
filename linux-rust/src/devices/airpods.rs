@@ -236,7 +236,7 @@ async fn session(
                         route.lock().claimed_at = Some(Instant::now());
                         claim_audio_route(&aacp, &local).await;
                         if had != Some(true) {
-                            route_regained(audio.as_ref());
+                            route_regained(audio.as_ref(), had == Some(false));
                         }
                     }
                 }
@@ -296,12 +296,18 @@ fn owns_audio(hub: &crate::hub::Hub, mac: &str) -> Option<bool> {
 /// the A2DP transport to this PC, so have the audio guard check at once and repair it.
 /// The repair rebuilds the output, which makes players pause; resume the ones that were
 /// playing when the audio came back, so one press of play is enough.
-fn route_regained(audio: Option<&AudioGuardHandle>) {
+fn route_regained(audio: Option<&AudioGuardHandle>, from_other_device: bool) {
     info!("Audio route is back on this PC; re-checking the audio setup");
     let Some(audio) = audio.cloned() else {
         return;
     };
-    audio.route_back();
+    // While another device had the audio, the AirPods broke this PC's transport and the
+    // output node went into an error state that never stalls, so rebuild it now.
+    if from_other_device {
+        audio.repair();
+    } else {
+        audio.route_back();
+    }
     tokio::spawn(async move {
         let playing = MediaController::playing_players().await;
         if playing.is_empty() {
@@ -444,7 +450,7 @@ async fn subscribe_controls(
                 info!("Another device took the AirPods; pausing local media");
                 media.lock().await.pause_all_media().await;
             } else if had == Some(false) && owns {
-                route_regained(audio.as_ref());
+                route_regained(audio.as_ref(), true);
             }
         }
     });
@@ -576,7 +582,7 @@ async fn handle_event(
                     ctx.hub
                         .update_device(&mac_s, name, |d| d.owns_audio = Some(true));
                     if had == Some(false) {
-                        route_regained(audio);
+                        route_regained(audio, true);
                     }
                 }
                 // We just took the AirPods; this report is from before the switch.

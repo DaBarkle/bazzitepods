@@ -80,6 +80,10 @@ pub(crate) enum Cmd {
     Wearing(bool),
     Resume,
     RouteBack,
+    /// The audio came back from a device that streamed while it had the route: the
+    /// AirPods broke this PC's transport, so rebuild the output now instead of waiting
+    /// for playback to stall on it.
+    Repair,
     Shutdown,
 }
 
@@ -277,6 +281,8 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     /// Until then, a stall is acted on almost at once: the audio route just came back
     /// from another device, and its transport was probably broken while it was away.
     fast_until: Option<Instant>,
+    /// Rebuild the output at the next monitor pass, stall or not.
+    repair_pending: bool,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -310,6 +316,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             we_were_default: was_default(&mac.to_string().to_uppercase()),
             wearing: false,
             fast_until: None,
+            repair_pending: false,
         }
     }
 
@@ -409,6 +416,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                         self.ensure_attempts = 0;
                         self.ensure_at = Some(now + self.cfg.poll);
                     }
+                }
+            }
+            Cmd::Repair => {
+                if self.linked {
+                    self.on_cmd(Cmd::RouteBack);
+                    self.repair_pending = true;
                 }
             }
             Cmd::Shutdown => self.shutdown = true,
@@ -821,6 +834,14 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 self.mac_str
             );
             self.lose_ready(now);
+            return;
+        }
+        if std::mem::take(&mut self.repair_pending) && is_a2dp(&active) {
+            info!(
+                "[audio {}] audio came back from another device, rebuilding the output",
+                self.mac_str
+            );
+            self.maybe_run_ladder().await;
             return;
         }
         let Some(sink) = snap.sink_for_card(card).cloned() else {

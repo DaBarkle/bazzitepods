@@ -518,6 +518,25 @@ async fn route_back_repairs_without_waiting_for_the_cooldown() {
 }
 
 #[tokio::test]
+async fn repair_rebuilds_an_idle_output_without_a_stall() {
+    // The iPhone had the audio and broke the transport; nothing plays here, so there is
+    // no stall to notice. Taking the audio back rebuilds the output anyway.
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    assert_eq!(lock(&world).count("profile:off"), 0);
+
+    handle.repair();
+    settle(1500).await;
+    let w = lock(&world);
+    assert_eq!(w.count("profile:off"), 1, "log: {:?}", w.log);
+    assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"));
+}
+
+#[tokio::test]
 async fn recovery_ladders_per_link_are_bounded() {
     let mut cfg = fast();
     cfg.ladder_cooldown = Duration::from_millis(30);

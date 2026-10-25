@@ -112,6 +112,12 @@ impl AudioGuardHandle {
         self.send(Cmd::RouteBack);
     }
 
+    /// Like [`Self::route_back`], and rebuild the output right away: use it when the device
+    /// that had the audio was streaming, which breaks this PC's transport.
+    pub fn repair(&self) {
+        self.send(Cmd::Repair);
+    }
+
     pub fn health(&self) -> watch::Receiver<AudioHealth> {
         self.health_rx.clone()
     }
