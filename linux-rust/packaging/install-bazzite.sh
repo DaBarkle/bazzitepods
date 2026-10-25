@@ -140,6 +140,8 @@ do_uninstall() {
     else
         ok "No autostart entry"
     fi
+    # Forget the Background-portal autostart grant.
+    flatpak permission-remove background background "$APP_ID" >/dev/null 2>&1 || true
 
     printf '\n%sLibrePods has been uninstalled.%s\n' "$BOLD" "$RESET"
 }

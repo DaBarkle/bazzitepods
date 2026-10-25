@@ -453,7 +453,11 @@ async fn run_tray(
     // No StatusNotifierWatcher (e.g. GNOME without the AppIndicator extension): retry quietly,
     // the rest of the app works without a tray.
     let handle = loop {
-        match make_tray().spawn().await {
+        match make_tray()
+            .disable_dbus_name(autostart::running_in_flatpak())
+            .spawn()
+            .await
+        {
             Ok(h) => break h,
             Err(e) => {
                 debug!("Tray not available yet: {e}");
