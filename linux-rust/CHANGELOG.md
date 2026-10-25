@@ -22,6 +22,9 @@ All notable changes to BazzitePods are documented here. The format follows
 - While the iPhone plays, it keeps the AirPods. The PC no longer takes them back when an
   app here keeps its audio open after pausing (Plex does this), or when its own sound
   check sees the AirPods' output go quiet. ([#6])
+- When the iPhone stops playing, the AirPods come back to the PC by themselves if media
+  is still playing here, including media that was already playing before the iPhone
+  connected or BazzitePods started. ([#6])
 - Switching back from an iPhone now works with media apps that do not publish an MPRIS
   player, such as the Plex desktop app. The AirPods return to the PC about a second after
   playback starts. ([#5])

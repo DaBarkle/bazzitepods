@@ -733,27 +733,30 @@ struct RouteState {
 #[derive(Default)]
 struct StreamTracker {
     started: bool,
-    /// Stream index -> (ticks seen playing, capped at 2; was playing when tracking began).
-    seen: HashMap<u32, (u8, bool)>,
+    /// Stream index -> ticks seen playing, capped at 2.
+    seen: HashMap<u32, u8>,
 }
 
 impl StreamTracker {
-    /// Feeds the streams playing now. Returns (a real stream is playing, one just started).
+    /// Feeds the streams playing now. Returns (a stream is playing, one just started).
+    /// Streams already playing when tracking begins count as playing, but never as just
+    /// started: media that was playing before the iPhone joined still brings the AirPods
+    /// back when the iPhone stops, without counting as a fresh press of play.
     fn update(&mut self, playing: &[u32]) -> (bool, bool) {
         let baseline = !std::mem::replace(&mut self.started, true);
         let mut seen = HashMap::with_capacity(playing.len());
         let (mut active, mut started) = (false, false);
         for &index in playing {
-            let (count, background) = match self.seen.get(&index) {
-                _ if baseline => (2, true),
-                Some(&(count, background)) => ((count + 1).min(2), background),
-                None => (1, false),
+            let count = match self.seen.get(&index) {
+                _ if baseline => 2,
+                Some(&count) => (count + 1).min(2),
+                None => 1,
             };
-            if !background && count == 2 {
+            if count == 2 {
                 active = true;
-                started |= self.seen.get(&index).is_some_and(|&(c, _)| c == 1);
+                started |= self.seen.get(&index) == Some(&1);
             }
-            seen.insert(index, (count, background));
+            seen.insert(index, count);
         }
         self.seen = seen;
         (active, started)
@@ -1027,26 +1030,26 @@ mod tests {
     }
 
     #[test]
-    fn stream_tracker_ignores_background_and_short_sounds() {
+    fn stream_tracker_counts_playback_and_ignores_short_sounds() {
         let mut t = StreamTracker::default();
-        // Idle voice chat streams already playing: background.
-        assert_eq!(t.update(&[1, 2]), (false, false));
-        assert_eq!(t.update(&[1, 2]), (false, false));
+        // Plex was already playing when tracking began: playing, but not a fresh start.
+        assert_eq!(t.update(&[1]), (true, false));
+        assert_eq!(t.update(&[1]), (true, false));
+        // Paused (corked): nothing plays.
+        assert_eq!(t.update(&[]), (false, false));
         // A notification sound for a single tick doesn't count.
-        assert_eq!(t.update(&[1, 2, 3]), (false, false));
-        assert_eq!(t.update(&[1, 2]), (false, false));
-        // Plex starts playing: counts on its second tick, once.
-        assert_eq!(t.update(&[1, 2, 4]), (false, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, true));
-        assert_eq!(t.update(&[1, 2, 4]), (true, false));
-        // Paused (corked) and resumed: a fresh start.
-        assert_eq!(t.update(&[1, 2]), (false, false));
-        assert_eq!(t.update(&[1, 2, 4]), (false, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, true));
-        // A background stream that stops and starts again is real playback.
-        assert_eq!(t.update(&[2, 4]), (true, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, true));
+        assert_eq!(t.update(&[3]), (false, false));
+        assert_eq!(t.update(&[]), (false, false));
+        // Plex resumes: counts on its second tick, as a start once.
+        assert_eq!(t.update(&[1]), (false, false));
+        assert_eq!(t.update(&[1]), (true, true));
+        assert_eq!(t.update(&[1]), (true, false));
+        // A second app starting while one plays is a fresh start too.
+        assert_eq!(t.update(&[1, 4]), (true, false));
+        assert_eq!(t.update(&[1, 4]), (true, true));
+        // After a reset (the iPhone left and came back), playing streams are a baseline.
+        t.reset();
+        assert_eq!(t.update(&[1, 4]), (true, false));
     }
 
     #[test]
