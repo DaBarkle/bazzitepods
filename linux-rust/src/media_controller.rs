@@ -139,11 +139,18 @@ impl MediaController {
             drop(state);
 
             if !was_playing && is_playing {
-                let aacp_state = aacp_manager.state.lock().await;
-                if !aacp_state
-                    .ear_detection_status
-                    .contains(&EarDetectionStatus::InEar)
-                {
+                // Copy what we need and release the lock before any await: send_packet
+                // takes the same (non-reentrant) mutex, so holding it here deadlocks.
+                let (any_in_ear, connected_devices) = {
+                    let aacp_state = aacp_manager.state.lock().await;
+                    (
+                        aacp_state
+                            .ear_detection_status
+                            .contains(&EarDetectionStatus::InEar),
+                        aacp_state.connected_devices.clone(),
+                    )
+                };
+                if !any_in_ear {
                     info!("Media playback started but buds not in ear, skipping takeover");
                     continue;
                 }
@@ -156,9 +163,8 @@ impl MediaController {
 
                 info!("already connected locally, hijacking connection by asking AirPods");
 
-                let connected_devices = aacp_state.connected_devices.clone();
                 for device in connected_devices {
-                    if device.mac != local_mac {
+                    if !device.mac.eq_ignore_ascii_case(&local_mac) {
                         if let Err(e) = aacp_manager
                             .send_media_information(&local_mac, &device.mac, true)
                             .await

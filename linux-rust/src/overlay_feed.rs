@@ -135,10 +135,19 @@ struct Notifier {
 
 impl Notifier {
     fn observe(&mut self, d: Option<&DeviceSnapshot>) {
-        let Some(d) = d.filter(|d| d.link == LinkState::Connected) else {
+        let Some(d) = d else {
             self.connected = None;
             return;
         };
+        // Only a real disconnect resets; control-channel blips (Reconnecting) must not
+        // produce another "connected" notification.
+        if d.link == LinkState::Disconnected {
+            self.connected = None;
+            return;
+        }
+        if d.link != LinkState::Connected {
+            return;
+        }
         if !d.battery.has_any() {
             return;
         }

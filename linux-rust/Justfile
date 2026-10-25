@@ -94,7 +94,7 @@ flatpak-bundle:
     flatpak-builder --force-clean --install-deps-from=flathub --user \
         --repo=repo build-dir {{FLATPAK_MANIFEST}}
     mkdir -p dist
-    flatpak build-bundle repo dist/LibrePods.flatpak {{APP_ID}}
+    flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo dist/LibrePods.flatpak {{APP_ID}}
 
 # Static checks for the packaging files.
 lint-packaging:

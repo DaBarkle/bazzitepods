@@ -71,6 +71,8 @@ impl OverlayClient {
             backoff: Duration::from_secs(1),
             unsupported: unsupported.clone(),
             running: running.clone(),
+            late_retries: 0,
+            started_at: None,
         };
         let thread = std::thread::Builder::new()
             .name("overlay-client".into())
@@ -181,7 +183,14 @@ struct Supervisor {
     backoff: Duration,
     unsupported: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
+    /// Retries after an "unsupported" exit. At login autostart the compositor socket may not be
+    /// ready yet, which looks the same as a compositor without layer-shell.
+    late_retries: u8,
+    started_at: Option<Instant>,
 }
+
+const LATE_RETRIES: u8 = 2;
+const LATE_RETRY_DELAY: Duration = Duration::from_secs(30);
 
 impl Supervisor {
     fn run(mut self, rx: mpsc::Receiver<Msg>) {
@@ -191,8 +200,14 @@ impl Supervisor {
             return;
         };
         loop {
-            if self.unsupported.load(Ordering::SeqCst) {
+            if self.unsupported.load(Ordering::SeqCst) && self.late_retries >= LATE_RETRIES {
                 break;
+            }
+            // A late retry that stays up means the overlay works after all.
+            if self.child.is_some()
+                && self.started_at.is_some_and(|t| t.elapsed() > Duration::from_secs(5))
+            {
+                self.unsupported.store(false, Ordering::SeqCst);
             }
             if self.child.is_none() && Instant::now() >= self.next_start {
                 self.start(&binary);
@@ -239,6 +254,7 @@ impl Supervisor {
                 info!("overlay: started {} (pid {})", binary.display(), child.id());
                 self.stdin = child.stdin.take();
                 self.child = Some(child);
+                self.started_at = Some(Instant::now());
                 self.running.store(true, Ordering::SeqCst);
                 let replay = [
                     Some(OverlayCommand::Config(self.config.clone())),
@@ -303,6 +319,10 @@ impl Supervisor {
         if status.code() == Some(EXIT_UNSUPPORTED) {
             info!("overlay: not supported by this compositor; falling back to notifications");
             self.unsupported.store(true, Ordering::SeqCst);
+            if self.late_retries < LATE_RETRIES {
+                self.late_retries += 1;
+                self.next_start = Instant::now() + LATE_RETRY_DELAY;
+            }
             return;
         }
         warn!(

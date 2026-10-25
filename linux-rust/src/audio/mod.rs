@@ -131,6 +131,11 @@ pub(crate) async fn ensure_a2dp_profile_with<P: PulseApi>(
         .card_for(mac)
         .ok_or_else(|| format!("no audio card for {mac}"))?;
     let active = card.active_profile.clone().unwrap_or_default();
+    // Called on playback start / buds inserted. A headset profile here means a call app put
+    // it there (maybe with the mic muted, so not "recording"); never yank the user out of it.
+    if active.starts_with("headset") {
+        return Ok(active);
+    }
     match decide_profile(card, snap.is_recording_from_card(card.index)) {
         ProfileAction::Keep | ProfileAction::LeaveHeadset => Ok(active),
         ProfileAction::Set(candidates) => {

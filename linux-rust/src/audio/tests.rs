@@ -573,6 +573,41 @@ async fn default_sink_and_streams_restored_after_range_loss() {
 }
 
 #[tokio::test]
+async fn default_restored_by_a_new_guard_after_reconnect() {
+    // Real reconnects create a fresh device task and guard; the "we were default" memory
+    // must survive that.
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    w.snap.default_sink = Some(bt_sink_name());
+    w.snap.sink_inputs.push(SinkInputInfo {
+        index: 100,
+        sink: BT_SINK,
+        corked: true,
+    });
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(60).await;
+    handle.link_down();
+    lock(&world).remove_card();
+    wait_health(&handle, "disconnected", |h| *h == AudioHealth::Disconnected).await;
+    handle.shutdown();
+
+    lock(&world).add_card("a2dp-sink-aac");
+    let handle2 = AudioGuard::spawn_with(
+        mac(),
+        FakePulse(world.clone()),
+        FakeBluez(world.clone()),
+        fast(),
+    );
+    handle2.link_up();
+    wait_health(&handle2, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    let w = lock(&world);
+    assert_eq!(w.snap.default_sink.as_deref(), Some(bt_sink_name().as_str()));
+    assert_eq!(w.snap.sink_inputs[0].sink, BT_SINK);
+}
+
+#[tokio::test]
 async fn user_chosen_default_is_respected() {
     // We were never the default: do not steal it.
     let mut w = World::new();

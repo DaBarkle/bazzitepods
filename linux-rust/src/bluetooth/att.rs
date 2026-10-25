@@ -237,6 +237,10 @@ async fn recv_thread(manager: ATTManager, sp: Arc<SeqPacket>) {
                     continue;
                 }
                 if data[0] == OPCODE_HANDLE_VALUE_NTF {
+                    if data.len() < 3 {
+                        debug!("Ignoring short ATT notification: {}", hex::encode(data));
+                        continue;
+                    }
                     // Notification
                     let handle = (data[1] as u16) | ((data[2] as u16) << 8);
                     let value = data[3..].to_vec();

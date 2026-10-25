@@ -2,7 +2,7 @@
 # LibrePods installer for Bazzite (and any Flatpak-based Linux desktop).
 #
 #   Install / update the latest release:
-#     curl -fsSL https://raw.githubusercontent.com/DaBarkle/librepods/bazzite/linux-rust/packaging/install-bazzite.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/packaging/install-bazzite.sh | bash
 #   Install a bundle you already downloaded:
 #     ./install-bazzite.sh ~/Downloads/LibrePods.flatpak
 #   Uninstall (app, its data and the autostart entry):
@@ -13,8 +13,9 @@
 set -euo pipefail
 
 readonly APP_ID="io.github.dabarkle.LibrePods"
-readonly REPO="DaBarkle/librepods"
+readonly REPO="DaBarkle/bazzitepods"
 readonly API_URL="https://api.github.com/repos/${REPO}/releases/latest"
+readonly ONE_LINER="curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/packaging/install-bazzite.sh | bash -s --"
 readonly FLATHUB_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
 readonly ASSET_NAME="LibrePods.flatpak"
 readonly AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/${APP_ID}.desktop"
@@ -66,7 +67,7 @@ download_latest() {
     require curl
     step "Looking up the latest release of ${REPO}" >&2
     if ! json=$(curl -fsSL -H "Accept: application/vnd.github+json" "$API_URL"); then
-        die "could not reach the GitHub API. Download ${ASSET_NAME} manually from https://github.com/${REPO}/releases and run: $0 /path/to/${ASSET_NAME}"
+        die "could not reach the GitHub API. Download ${ASSET_NAME} manually from https://github.com/${REPO}/releases and run: ${ONE_LINER} /path/to/${ASSET_NAME}"
     fi
     # Pick the browser_download_url of the first *.flatpak asset (no jq on a stock system).
     url=$(printf '%s\n' "$json" \
@@ -96,6 +97,9 @@ do_install() {
 
     ensure_flathub
 
+    # Stop a running copy so the new version is what starts afterwards.
+    flatpak kill "$APP_ID" >/dev/null 2>&1 || true
+
     step "Installing ${APP_ID} (per user)"
     # --reinstall makes repeated runs (and updates from a bundle) idempotent.
     flatpak install --user --noninteractive -y --reinstall "$bundle"
@@ -113,7 +117,7 @@ do_install() {
     fi
 
     printf '\n%sDone.%s LibrePods starts automatically at login and lives in the system tray.\n' "$BOLD" "$RESET"
-    printf 'Run "%s --uninstall" to remove it.\n' "$(basename "$0")"
+    printf 'To remove it later run:\n  %s --uninstall\n' "$ONE_LINER"
 }
 
 do_uninstall() {
@@ -136,6 +140,8 @@ do_uninstall() {
     else
         ok "No autostart entry"
     fi
+    # Forget the Background-portal autostart grant.
+    flatpak permission-remove background background "$APP_ID" >/dev/null 2>&1 || true
 
     printf '\n%sLibrePods has been uninstalled.%s\n' "$BOLD" "$RESET"
 }

@@ -30,7 +30,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
 
 /// BlueZ service UUID advertised by AirPods (and Beats) for the AACP control channel.
@@ -170,8 +170,20 @@ async fn async_main(
         }
     });
     let battery_ble = battery.clone();
+    let ble_kick = kick_tx.clone();
     tokio::spawn(async move {
+        // Adverts arrive about once a second; only nudge the supervisor occasionally.
+        let mut last_kick: HashMap<Address, Instant> = HashMap::new();
         while let Some((mac, reading)) = ble_rx.recv().await {
+            let in_use = reading.left_in_ear == Some(true)
+                || reading.right_in_ear == Some(true)
+                || reading.lid_open == Some(true)
+                || (reading.left.is_some() && !reading.left_in_case)
+                || (reading.right.is_some() && !reading.right_in_case);
+            if in_use && last_kick.get(&mac).is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
+                last_kick.insert(mac, Instant::now());
+                let _ = ble_kick.send(Kick::BleSeen(mac, in_use));
+            }
             battery_ble.send(battery_service::BatteryInput::Ble(mac, reading));
         }
     });
@@ -192,8 +204,9 @@ async fn async_main(
 #[derive(Debug, Clone, Copy)]
 pub enum Kick {
     DeviceChanged,
-    AdapterChanged,
     Resumed,
+    /// A known AirPods is advertising nearby; `in_use` when a pod is out of the case or in an ear.
+    BleSeen(Address, bool),
 }
 
 struct SupervisorCtx {
@@ -209,7 +222,27 @@ struct SupervisorCtx {
 struct RunningDevice {
     cancel: CancellationToken,
     handle: JoinHandle<()>,
+    is_airpods: bool,
 }
+
+/// Per-adapter bookkeeping that outlives individual device tasks.
+#[derive(Default)]
+struct AdapterState_ {
+    running: HashMap<Address, RunningDevice>,
+    /// Tasks that were cancelled but may still be cleaning up. A new task for the same device
+    /// waits until the old one is gone so the two never overwrite each other's state.
+    stopping: HashMap<Address, JoinHandle<()>>,
+    /// AirPods whose link dropped on its own (walked out of range), and when.
+    lost_link: HashMap<Address, Instant>,
+    /// Last time we asked BlueZ to reconnect a device.
+    last_reconnect: HashMap<Address, Instant>,
+}
+
+/// How long after losing the link we still reconnect automatically when the AirPods come back.
+const AUTO_RECONNECT_WINDOW: Duration = Duration::from_secs(4 * 60 * 60);
+const RECONNECT_INTERVAL: Duration = Duration::from_secs(20);
+/// Upper bound on waiting for a cancelled device task to finish.
+const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Outer loop: (re)acquire the BlueZ session and adapter forever. bluetoothd restarts, adapter
 /// unplug/replug and rfkill all end up back here instead of crashing the app.
@@ -246,6 +279,16 @@ async fn acquire_adapter() -> bluer::Result<Adapter> {
     Ok(adapter)
 }
 
+/// Cancel a device task and wait (bounded) for it to clean up.
+async fn stop_task(dev: RunningDevice) {
+    dev.cancel.cancel();
+    let abort = dev.handle.abort_handle();
+    if tokio::time::timeout(TASK_STOP_TIMEOUT, dev.handle).await.is_err() {
+        warn!("Device task did not stop in time; aborting it");
+        abort.abort();
+    }
+}
+
 /// Inner loop for one adapter: keep exactly one device task per connected AirPods.
 async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
     let local_mac = match adapter.address().await {
@@ -256,7 +299,7 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         }
     };
 
-    let mut running: HashMap<Address, RunningDevice> = HashMap::new();
+    let mut st = AdapterState_::default();
     let mut watched: HashMap<Address, JoinHandle<()>> = HashMap::new();
 
     let mut adapter_events = match adapter.events().await {
@@ -275,7 +318,7 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
 
     let mut sweep = tokio::time::interval(Duration::from_secs(10));
     loop {
-        reconcile(adapter, &local_mac, ctx, &mut running).await;
+        reconcile(adapter, &local_mac, ctx, &mut st).await;
         // Adapter vanished: stop everything and let the outer loop re-acquire.
         if adapter.is_powered().await.is_err() {
             break;
@@ -283,6 +326,8 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
 
         tokio::select! {
             ev = adapter_events.next() => match ev {
+                // New objects appear for every nearby BLE advertiser; only paired devices
+                // matter, and watch_device filters those.
                 Some(AdapterEvent::DeviceAdded(addr)) => {
                     watch_device(adapter, addr, &mut watched, &ctx.kick_tx).await;
                 }
@@ -295,17 +340,24 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
             kick = ctx.kick_rx.recv() => {
                 // Coalesce bursts (a connect fires several property changes at once).
                 sleep(Duration::from_millis(150)).await;
-                let mut resumed = matches!(kick, Some(Kick::Resumed));
+                let mut kicks: Vec<Kick> = kick.into_iter().collect();
                 while let Ok(k) = ctx.kick_rx.try_recv() {
-                    resumed |= matches!(k, Kick::Resumed);
+                    kicks.push(k);
                 }
-                if resumed {
+                if kicks.iter().any(|k| matches!(k, Kick::Resumed)) {
                     info!("System resumed; restarting device sessions");
                     // Sleep often kills the L2CAP channel without a clean disconnect. Restart
                     // device tasks so they reconnect fresh instead of waiting on a dead socket.
-                    for (_, dev) in running.drain() {
-                        dev.cancel.cancel();
-                        let _ = dev.handle.await;
+                    for (addr, dev) in st.running.drain() {
+                        if dev.is_airpods {
+                            st.lost_link.insert(addr, Instant::now());
+                        }
+                        stop_task(dev).await;
+                    }
+                }
+                for k in kicks {
+                    if let Kick::BleSeen(addr, in_use) = k {
+                        maybe_reconnect(adapter, addr, in_use, &mut st).await;
                     }
                 }
             }
@@ -313,13 +365,50 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         }
     }
 
-    for (_, dev) in running.drain() {
-        dev.cancel.cancel();
-        let _ = dev.handle.await;
+    for (_, dev) in st.running.drain() {
+        stop_task(dev).await;
     }
     for (_, h) in watched.drain() {
         h.abort();
     }
+}
+
+/// Bring AirPods back after a range loss. BlueZ gives up reconnecting after ~2 minutes, so
+/// when we see the AirPods advertising again (case open / pods out) we ask BlueZ to connect.
+/// Only for AirPods that dropped off this PC on their own, so we never steal them from a phone
+/// the user deliberately switched to.
+async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mut AdapterState_) {
+    if !in_use || st.running.contains_key(&addr) {
+        return;
+    }
+    let Some(lost_at) = st.lost_link.get(&addr).copied() else { return };
+    if lost_at.elapsed() > AUTO_RECONNECT_WINDOW {
+        st.lost_link.remove(&addr);
+        return;
+    }
+    if st
+        .last_reconnect
+        .get(&addr)
+        .is_some_and(|t| t.elapsed() < RECONNECT_INTERVAL)
+    {
+        return;
+    }
+    if !adapter.is_powered().await.unwrap_or(false) {
+        return;
+    }
+    let Ok(device) = adapter.device(addr) else { return };
+    if !device.is_paired().await.unwrap_or(false) || device.is_connected().await.unwrap_or(true) {
+        return;
+    }
+    st.last_reconnect.insert(addr, Instant::now());
+    info!("AirPods {} are back in range; reconnecting", addr);
+    tokio::spawn(async move {
+        match tokio::time::timeout(Duration::from_secs(15), device.connect()).await {
+            Ok(Ok(())) => info!("Reconnected {}", addr),
+            Ok(Err(e)) => debug!("Reconnect to {} failed: {}", addr, e),
+            Err(_) => debug!("Reconnect to {} timed out", addr),
+        }
+    });
 }
 
 async fn watch_device(
@@ -332,6 +421,11 @@ async fn watch_device(
         return;
     }
     let Ok(device) = adapter.device(addr) else { return };
+    // Unpaired objects are transient BLE advertisers (phones, beacons, ...). Ignoring them
+    // keeps busy places (offices, trains) from triggering a reconcile per advert.
+    if !device.is_paired().await.unwrap_or(false) {
+        return;
+    }
     let Ok(events) = device.events().await else { return };
     let kick_tx = kick_tx.clone();
     let _ = kick_tx.send(Kick::DeviceChanged);
@@ -342,7 +436,10 @@ async fn watch_device(
             while let Some(DeviceEvent::PropertyChanged(prop)) = events.next().await {
                 if matches!(
                     prop,
-                    DeviceProperty::Connected(_) | DeviceProperty::Uuids(_) | DeviceProperty::ServicesResolved(_)
+                    DeviceProperty::Connected(_)
+                        | DeviceProperty::Paired(_)
+                        | DeviceProperty::Uuids(_)
+                        | DeviceProperty::ServicesResolved(_)
                 ) && kick_tx.send(Kick::DeviceChanged).is_err()
                 {
                     break;
@@ -352,12 +449,7 @@ async fn watch_device(
     );
 }
 
-async fn reconcile(
-    adapter: &Adapter,
-    local_mac: &str,
-    ctx: &SupervisorCtx,
-    running: &mut HashMap<Address, RunningDevice>,
-) {
+async fn reconcile(adapter: &Adapter, local_mac: &str, ctx: &SupervisorCtx, st: &mut AdapterState_) {
     let powered = adapter.is_powered().await.unwrap_or(false);
     ctx.hub.set_adapter(if powered {
         AdapterState::On
@@ -366,25 +458,39 @@ async fn reconcile(
     });
 
     // Drop tasks that ended on their own (e.g. Nothing device setup failure).
-    running.retain(|_, d| !d.handle.is_finished());
+    st.running.retain(|_, d| !d.handle.is_finished());
+    st.stopping.retain(|_, h| !h.is_finished());
 
     let addrs = adapter.device_addresses().await.unwrap_or_default();
     let saved = saved_devices();
     for addr in addrs {
         let Ok(device) = adapter.device(addr) else { continue };
-        let connected = powered && device.is_connected().await.unwrap_or(false);
+        let connected = if powered {
+            match device.is_connected().await {
+                Ok(c) => c,
+                // A transient D-Bus hiccup must not tear down a healthy session.
+                Err(e) => {
+                    debug!("Could not read Connected for {}: {}", addr, e);
+                    continue;
+                }
+            }
+        } else {
+            false
+        };
         if !connected {
-            if let Some(dev) = running.remove(&addr) {
+            if let Some(dev) = st.running.remove(&addr) {
                 info!("{} disconnected", addr);
+                if dev.is_airpods && powered {
+                    st.lost_link.insert(addr, Instant::now());
+                }
                 dev.cancel.cancel();
                 // The task publishes its own Disconnected state when it exits.
-                tokio::spawn(async move {
-                    let _ = dev.handle.await;
-                });
+                st.stopping.insert(addr, dev.handle);
             }
             continue;
         }
-        if running.contains_key(&addr) {
+        if st.running.contains_key(&addr) || st.stopping.contains_key(&addr) {
+            // Already handled, or the previous session is still cleaning up (next pass).
             continue;
         }
         let uuids = device.uuids().await.ok().flatten().unwrap_or_default();
@@ -399,6 +505,7 @@ async fn reconcile(
         let cancel = CancellationToken::new();
         let handle = if is_airpods {
             info!("AirPods connected: {} ({})", name, addr);
+            st.lost_link.remove(&addr);
             let dctx = DeviceContext {
                 hub: ctx.hub.clone(),
                 battery: ctx.battery.clone(),
@@ -419,7 +526,14 @@ async fn reconcile(
         } else {
             continue;
         };
-        running.insert(addr, RunningDevice { cancel, handle });
+        st.running.insert(
+            addr,
+            RunningDevice {
+                cancel,
+                handle,
+                is_airpods,
+            },
+        );
     }
 }
 

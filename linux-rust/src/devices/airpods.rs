@@ -80,7 +80,10 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         if cancel.is_cancelled() {
             break;
         }
-        let aacp = connect_aacp(mac).await;
+        let aacp = tokio::select! {
+            _ = cancel.cancelled() => break,
+            aacp = connect_aacp(mac) => aacp,
+        };
         let Some(aacp) = aacp else {
             let delay = RETRY_DELAYS[(attempt as usize).min(RETRY_DELAYS.len() - 1)];
             attempt += 1;
@@ -102,9 +105,9 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         session(mac, &name, &aacp, &ctx, &media, audio.as_ref(), &cancel).await;
 
         aacp.shutdown().await;
+        media.lock().await.stop_playback_listener().await;
         ctx.battery.send(BatteryInput::AacpLink(mac, false));
-        ctx.device_managers.write().await.remove(&mac_s);
-        *ctx.active_commands.lock().await = None;
+        release_shared_state(&ctx, &mac_s, &aacp).await;
         if cancel.is_cancelled() {
             break;
         }
@@ -120,7 +123,20 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         audio.link_down();
         audio.shutdown();
     }
-    media.lock().await.stop_playback_listener().await;
+    // Link lost while being worn (walked away): pause like iPhone does, instead of letting
+    // the music jump to the speakers.
+    let was_worn = ctx
+        .hub
+        .snapshot()
+        .devices
+        .get(&mac_s)
+        .is_some_and(|d| d.in_ear.0 == Some(true) || d.in_ear.1 == Some(true));
+    let controller = media.lock().await;
+    if was_worn {
+        controller.pause_all_media().await;
+    }
+    controller.stop_playback_listener().await;
+    drop(controller);
 
     ctx.hub.update_device(&mac_s, &name, |d| {
         d.link = LinkState::Disconnected;
@@ -132,6 +148,25 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         .ui_tx
         .send(BluetoothUIMessage::DeviceDisconnected(mac_s.clone()));
     info!("Device task finished for {}", mac_s);
+}
+
+/// Clear the device-manager entry and tray command route, but only if they still belong to
+/// this session (a newer session for the same AirPods may already have replaced them).
+async fn release_shared_state(ctx: &DeviceContext, mac_s: &str, aacp: &AACPManager) {
+    {
+        let mut managers = ctx.device_managers.write().await;
+        let ours = managers
+            .get(mac_s)
+            .and_then(|m| m.get_aacp())
+            .is_some_and(|m| Arc::ptr_eq(&m.state, &aacp.state));
+        if ours {
+            managers.remove(mac_s);
+        }
+    }
+    let mut active = ctx.active_commands.lock().await;
+    if active.as_ref().is_some_and(|tx| tx.is_closed()) {
+        *active = None;
+    }
 }
 
 async fn connect_aacp(mac: Address) -> Option<AACPManager> {
@@ -222,6 +257,8 @@ async fn session(
         }
     }
     tasks.abort_all();
+    // Wait for aborted tasks so their channels are really closed before cleanup checks them.
+    while tasks.join_next().await.is_some() {}
 }
 
 async fn handshake(aacp: &AACPManager) -> bluer::Result<()> {
