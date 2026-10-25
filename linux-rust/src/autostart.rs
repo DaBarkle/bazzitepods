@@ -1,4 +1,4 @@
-//! Start LibrePods with the user's session.
+//! Start BazzitePods with the user's session.
 //!
 //! Inside Flatpak we ask the XDG Background portal
 //! (`org.freedesktop.portal.Background.RequestBackground`), which writes or removes
@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-pub const APP_ID: &str = "io.github.dabarkle.LibrePods";
+pub const APP_ID: &str = "io.github.dabarkle.BazzitePods";
 const START_MINIMIZED_FLAG: &str = "--start-minimized";
 const PORTAL_BUS_NAME: &str = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
@@ -34,7 +34,7 @@ const METHOD_TIMEOUT: Duration = Duration::from_secs(10);
 /// GNOME may show the user a permission dialog before the Response arrives.
 const RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// Enable or disable starting LibrePods (minimized) at login.
+/// Enable or disable starting BazzitePods (minimized) at login.
 ///
 /// Safe to call on every start: the portal and the fallback are both idempotent.
 pub async fn ensure_autostart(enable: bool) -> Result<(), String> {
@@ -244,7 +244,7 @@ fn desktop_entry(exe: &Path) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
-         Name=LibrePods\n\
+         Name=BazzitePods\n\
          Comment=AirPods battery, controls and overlay for Linux\n\
          Exec={} {START_MINIMIZED_FLAG}\n\
          Icon={APP_ID}\n\
@@ -303,7 +303,7 @@ mod tests {
 
         let exe = Path::new("/opt/Libre Pods/bin/librepods");
         set_autostart_file(&dir, exe, true).expect("enable");
-        let file = dir.join("io.github.dabarkle.LibrePods.desktop");
+        let file = dir.join("io.github.dabarkle.BazzitePods.desktop");
         let text = std::fs::read_to_string(&file).expect("read entry");
         assert!(text.starts_with("[Desktop Entry]\n"));
         assert!(text.contains("Exec=\"/opt/Libre Pods/bin/librepods\" --start-minimized\n"));

@@ -4,6 +4,7 @@ mod battery_service;
 mod bluetooth;
 mod core;
 mod devices;
+mod fullscreen_watch;
 mod hub;
 mod media_controller;
 mod single_instance;
@@ -66,7 +67,7 @@ fn main() -> iced::Result {
 
     if args.version {
         println!(
-            "You are running LibrePods version {}",
+            "You are running BazzitePods version {}",
             env!("CARGO_PKG_VERSION")
         );
         return Ok(());
@@ -155,6 +156,7 @@ async fn async_main(
 ) {
     let battery = BatteryService::spawn(hub.clone());
     overlay_feed::spawn(hub.clone());
+    fullscreen_watch::spawn();
 
     // Zero-config: register for login autostart unless the user switched it off.
     tokio::spawn(async {

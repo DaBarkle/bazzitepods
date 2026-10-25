@@ -295,7 +295,7 @@ impl Conn {
     fn open(deadline: Instant) -> Result<Conn, PulseError> {
         let mainloop = Mainloop::new()
             .ok_or_else(|| PulseError::Connect("mainloop creation failed".into()))?;
-        let mut context = Context::new(&mainloop, "LibrePods")
+        let mut context = Context::new(&mainloop, "BazzitePods")
             .ok_or_else(|| PulseError::Connect("context creation failed".into()))?;
         context
             .connect(None, ContextFlagSet::NOAUTOSPAWN, None)

@@ -419,14 +419,22 @@ async fn run_monitor(tx: &BleReadingSender, keys: &mut KeyStore) -> bluer::Resul
         start_position: 0,
         content: vec![0x4C, 0x00], // Apple company ID, little-endian
     };
-    let mm = adapter.monitor().await?;
-    let mut monitor_handle = mm
-        .register(Monitor {
-            monitor_type: bluer::monitor::Type::OrPatterns,
-            patterns: Some(vec![pattern]),
-            ..Default::default()
-        })
-        .await?;
+    let registered = match adapter.monitor().await {
+        Ok(mm) => {
+            mm.register(Monitor {
+                monitor_type: bluer::monitor::Type::OrPatterns,
+                patterns: Some(vec![pattern]),
+                ..Default::default()
+            })
+            .await
+        }
+        Err(e) => Err(e),
+    };
+    let mut monitor_handle = match registered {
+        Ok(h) => h,
+        Err(e) if monitor_unsupported(&e) => return run_discovery(&adapter, tx, keys).await,
+        Err(e) => return Err(e),
+    };
     debug!("Started LE monitor on {}", adapter.name());
 
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -486,6 +494,120 @@ async fn run_monitor(tx: &BleReadingSender, keys: &mut KeyStore) -> bluer::Resul
                         kind: bluer::ErrorKind::NotReady,
                         message: "adapter was powered off".into(),
                     });
+                }
+            }
+        }
+    }
+}
+
+/// AdvertisementMonitorManager1 only exists when bluetoothd runs with experimental
+/// features (`-E`), which Bazzite and Fedora don't enable by default.
+fn monitor_unsupported(e: &bluer::Error) -> bool {
+    if matches!(e.kind, bluer::ErrorKind::NotSupported) {
+        return true;
+    }
+    let text = format!("{e} {e:?}");
+    ["doesn't exist", "UnknownMethod", "UnknownInterface", "UnknownObject"]
+        .iter()
+        .any(|needle| text.contains(needle))
+}
+
+/// True while any of our AirPods has a classic link to this PC. AACP then supplies
+/// battery, and an LE scan would only compete with A2DP for radio time.
+async fn any_connected(adapter: &bluer::Adapter, keys: &KeyStore) -> bool {
+    for k in &keys.keys {
+        if let Ok(dev) = adapter.device(k.public)
+            && dev.is_connected().await.unwrap_or(false)
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// Fallback for bluetoothd without the advertisement monitor API: a plain LE
+/// discovery session, run only while all of our AirPods are away from this PC
+/// (that is when adverts matter: walk-away reconnect, case battery). Discovery
+/// never connects or pairs anything.
+async fn run_discovery(
+    adapter: &bluer::Adapter,
+    tx: &BleReadingSender,
+    keys: &mut KeyStore,
+) -> bluer::Result<()> {
+    info!("bluetoothd has no LE advertisement monitor; scanning only while AirPods are away");
+    type Scan = std::pin::Pin<Box<dyn futures::Stream<Item = bluer::AdapterEvent> + Send>>;
+    let mut scan: Option<Scan> = None;
+    let mut tasks: JoinSet<()> = JoinSet::new();
+    let mut watching: HashMap<Address, AbortHandle> = HashMap::new();
+    let mut check = tokio::time::interval(Duration::from_secs(10));
+
+    loop {
+        tokio::select! {
+            ev = async {
+                match scan.as_mut() {
+                    Some(s) => s.next().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                match ev {
+                    Some(bluer::AdapterEvent::DeviceAdded(addr)) => {
+                        if watching.get(&addr).is_some_and(|h| !h.is_finished()) {
+                            continue;
+                        }
+                        let Some(public) = keys.resolve(addr) else {
+                            continue;
+                        };
+                        let Ok(dev) = adapter.device(addr) else {
+                            continue;
+                        };
+                        let handle = tasks.spawn(watch_device(
+                            dev,
+                            public,
+                            keys.enc_keys.clone(),
+                            tx.clone(),
+                        ));
+                        watching.insert(addr, handle);
+                    }
+                    Some(bluer::AdapterEvent::DeviceRemoved(addr)) => {
+                        if let Some(h) = watching.remove(&addr) {
+                            h.abort();
+                        }
+                    }
+                    Some(_) => {}
+                    // Discovery was stopped under us; the next check restarts it.
+                    None => scan = None,
+                }
+            }
+            _ = check.tick() => {
+                if tx.is_closed() {
+                    return Ok(());
+                }
+                while tasks.try_join_next().is_some() {}
+                watching.retain(|_, h| !h.is_finished());
+                if !adapter.is_powered().await.unwrap_or(false) {
+                    return Err(bluer::Error {
+                        kind: bluer::ErrorKind::NotReady,
+                        message: "adapter was powered off".into(),
+                    });
+                }
+                keys.refresh_if_changed().await;
+                let wanted = !keys.keys.is_empty() && !any_connected(adapter, keys).await;
+                if wanted && scan.is_none() {
+                    adapter
+                        .set_discovery_filter(bluer::DiscoveryFilter {
+                            transport: bluer::DiscoveryTransport::Le,
+                            duplicate_data: true,
+                            ..Default::default()
+                        })
+                        .await?;
+                    scan = Some(Box::pin(adapter.discover_devices().await?));
+                    debug!("LE discovery started");
+                } else if !wanted && scan.is_some() {
+                    scan = None;
+                    for (_, h) in watching.drain() {
+                        h.abort();
+                    }
+                    debug!("LE discovery stopped");
                 }
             }
         }

@@ -13,9 +13,13 @@ use std::time::SystemTime;
 
 static CLIENT: OnceLock<Arc<OverlayClient>> = OnceLock::new();
 
-/// Overlay settings as stored in app_settings.json (`overlay_mode`, `overlay_position`).
+/// Overlay settings as stored in app_settings.json (`overlay_mode`, `overlay_position`,
+/// `overlay_opacity`). A missing mode means compact, the app's default.
 pub fn load_config() -> OverlayConfig {
-    let mut cfg = OverlayConfig::default();
+    let mut cfg = OverlayConfig {
+        mode: OverlayMode::Compact,
+        ..OverlayConfig::default()
+    };
     let Some(v) = std::fs::read_to_string(get_app_settings_path())
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -32,6 +36,12 @@ pub fn load_config() -> OverlayConfig {
     {
         cfg.position = pos;
     }
+    if let Some(g) = v.get("overlay_glass").and_then(|g| g.as_f64()) {
+        cfg.glass = (g as f32).clamp(0.0, 1.0);
+    }
+    if let Some(o) = v.get("overlay_opacity").and_then(|o| o.as_f64()) {
+        cfg.opacity = (o as f32).clamp(0.2, 1.0);
+    }
     cfg
 }
 
@@ -46,6 +56,21 @@ pub fn apply_config(cfg: OverlayConfig) {
 pub fn preview() {
     if let Some(client) = CLIENT.get() {
         client.show("preview");
+    }
+}
+
+/// Like [`preview`], but drawn with the fullscreen opacity (while dragging the slider).
+pub fn preview_opacity() {
+    if let Some(client) = CLIENT.get() {
+        client.show("opacity");
+    }
+}
+
+/// The compositor says a fullscreen window is (or isn't) in front.
+pub fn set_fullscreen(active: bool) {
+    debug!("fullscreen window in front: {active}");
+    if let Some(client) = CLIENT.get() {
+        client.set_fullscreen(active);
     }
 }
 
@@ -196,9 +221,9 @@ fn notify(summary: String, body: String) {
                 "org.freedesktop.Notifications",
                 "Notify",
                 (
-                    "LibrePods",
+                    "BazzitePods",
                     0u32,
-                    "io.github.dabarkle.LibrePods",
+                    "io.github.dabarkle.BazzitePods",
                     summary.as_str(),
                     body.as_str(),
                     Vec::<String>::new(),

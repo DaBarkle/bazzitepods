@@ -277,6 +277,9 @@ impl Overlay {
         canvas(view::Pill {
             state,
             visual: self.ctl.visual(),
+            expand: self.ctl.expansion(),
+            opacity: self.ctl.effective_opacity(),
+            glass: self.ctl.config.glass,
             position: self.ctl.config.position,
         })
         .width(Length::Fill)

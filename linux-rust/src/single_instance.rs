@@ -1,4 +1,4 @@
-//! One LibrePods per session. A second launch (app menu click while the app sits in the tray)
+//! One BazzitePods per session. A second launch (app menu click while the app sits in the tray)
 //! asks the running copy to show its window and exits, instead of starting a duplicate that
 //! would fight over the Bluetooth control channel.
 
@@ -10,9 +10,9 @@ use log::{debug, info};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
-const BUS_NAME: &str = "io.github.dabarkle.LibrePods";
-const PATH: &str = "/io/github/dabarkle/LibrePods";
-const IFACE: &str = "io.github.dabarkle.LibrePods";
+const BUS_NAME: &str = "io.github.dabarkle.BazzitePods";
+const PATH: &str = "/io/github/dabarkle/BazzitePods";
+const IFACE: &str = "io.github.dabarkle.BazzitePods";
 
 pub enum Instance {
     /// We are the only instance; keep running.
@@ -42,7 +42,7 @@ pub fn claim(ui_tx: UnboundedSender<BluetoothUIMessage>, show_window: bool) -> I
                     debug!("Could not activate running instance: {e}");
                 }
             }
-            info!("LibrePods is already running");
+            info!("BazzitePods is already running");
             return Instance::Secondary;
         }
         Err(e) => {
@@ -58,10 +58,19 @@ pub fn claim(ui_tx: UnboundedSender<BluetoothUIMessage>, show_window: bool) -> I
             conn.start_receive(
                 MatchRule::new_method_call(),
                 Box::new(move |msg, conn| {
-                    if msg.interface().as_deref() == Some(IFACE)
-                        && msg.member().as_deref() == Some("Activate")
-                    {
-                        let _ = tx.send(BluetoothUIMessage::OpenWindow);
+                    if msg.interface().as_deref() == Some(IFACE) {
+                        match msg.member().as_deref() {
+                            Some("Activate") => {
+                                let _ = tx.send(BluetoothUIMessage::OpenWindow);
+                            }
+                            // From our KWin script (see fullscreen_watch.rs).
+                            Some("SetFullscreen") => {
+                                if let Ok(active) = msg.read1::<bool>() {
+                                    crate::overlay_feed::set_fullscreen(active);
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                     if !msg.get_no_reply() {
                         use dbus::channel::Sender;

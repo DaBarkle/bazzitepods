@@ -108,9 +108,9 @@ pub fn theme(dark: bool) -> Theme {
     let t = if dark { DARK } else { LIGHT };
     Theme::custom(
         if dark {
-            "LibrePods Dark"
+            "BazzitePods Dark"
         } else {
-            "LibrePods Light"
+            "BazzitePods Light"
         },
         Palette {
             background: t.bg,

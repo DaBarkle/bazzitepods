@@ -64,6 +64,7 @@ impl OverlayClient {
             binary,
             config,
             state: None,
+            fullscreen: false,
             child: None,
             stdin: None,
             starts: VecDeque::new(),
@@ -113,6 +114,10 @@ impl OverlayClient {
 
     pub fn hide(&self) {
         self.send(OverlayCommand::Hide);
+    }
+
+    pub fn set_fullscreen(&self, active: bool) {
+        self.send(OverlayCommand::Fullscreen { active });
     }
 
     pub fn set_config(&self, config: OverlayConfig) {
@@ -176,6 +181,7 @@ struct Supervisor {
     binary: Option<PathBuf>,
     config: OverlayConfig,
     state: Option<OverlayState>,
+    fullscreen: bool,
     child: Option<Child>,
     stdin: Option<ChildStdin>,
     starts: VecDeque<Instant>,
@@ -218,6 +224,7 @@ impl Supervisor {
                     match &cmd {
                         OverlayCommand::Config(c) => self.config = c.clone(),
                         OverlayCommand::State { state } => self.state = Some(state.clone()),
+                        OverlayCommand::Fullscreen { active } => self.fullscreen = *active,
                         _ => {}
                     }
                     self.write(&cmd);
@@ -261,6 +268,8 @@ impl Supervisor {
                     self.state
                         .clone()
                         .map(|state| OverlayCommand::State { state }),
+                    self.fullscreen
+                        .then_some(OverlayCommand::Fullscreen { active: true }),
                 ];
                 for cmd in replay.into_iter().flatten() {
                     self.write(&cmd);

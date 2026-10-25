@@ -1,15 +1,15 @@
 [Desktop Entry]
 Type=Application
-Name=LibrePods
+Name=BazzitePods
 GenericName=Earbuds Companion
 Comment=AirPods battery, controls and overlay for Linux
 Exec=librepods
-Icon=io.github.dabarkle.LibrePods
+Icon=io.github.dabarkle.BazzitePods
 Terminal=false
 Categories=Utility;
 Keywords=airpods;bluetooth;battery;earbuds;headphones;anc;noise;
 StartupNotify=true
-StartupWMClass=io.github.dabarkle.LibrePods
+StartupWMClass=io.github.dabarkle.BazzitePods
 SingleMainWindow=true
 X-GNOME-UsesNotifications=true
 X-GNOME-Autostart-enabled=true

@@ -1,6 +1,6 @@
 //! System tray (StatusNotifierItem via ksni). Reads only from the hub.
 //!
-//! Icon: the themed `io.github.dabarkle.LibrePods-symbolic` icon (recoloured by the panel), plus a
+//! Icon: the themed `io.github.dabarkle.BazzitePods-symbolic` icon (recoloured by the panel), plus a
 //! small rendered battery badge as the overlay pixmap while connected. A fully rendered pixmap is
 //! provided as a fallback for hosts that cannot resolve the icon name. Rendered icons are cached
 //! by (level bucket, tone, charging, connected).
@@ -18,7 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc::UnboundedSender;
 
-const ICON_NAME: &str = "io.github.dabarkle.LibrePods-symbolic";
+const ICON_NAME: &str = "io.github.dabarkle.BazzitePods-symbolic";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IconKey {
@@ -94,7 +94,7 @@ impl ksni::Tray for LibreTray {
     }
 
     fn title(&self) -> String {
-        "LibrePods".into()
+        "BazzitePods".into()
     }
 
     fn category(&self) -> ksni::Category {
@@ -210,7 +210,7 @@ impl ksni::Tray for LibreTray {
         items.push(MenuItem::Separator);
         items.push(
             StandardItem {
-                label: "Open LibrePods".into(),
+                label: "Open BazzitePods".into(),
                 icon_name: "window-new".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.ui_tx.send(BluetoothUIMessage::OpenWindow);

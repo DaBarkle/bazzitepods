@@ -9,6 +9,8 @@ use crate::overlay_protocol::{
 
 pub const APPEAR: Duration = Duration::from_millis(240);
 pub const DISAPPEAR: Duration = Duration::from_millis(320);
+/// Morph between the compact widget and the full pill.
+pub const MORPH: Duration = Duration::from_millis(280);
 
 /// Battery band used to detect "crossed 20% / 10%".
 fn band(level: u8) -> u8 {
@@ -101,6 +103,12 @@ pub struct Controller {
     /// `show` with reason "preview" (settings button): visible until this instant
     /// whatever the mode or link state, with a placeholder when there is no data.
     preview_until: Option<Instant>,
+    /// Compact mode morph, 0 = small widget, 1 = full pill (always 1 in other modes).
+    expand: f32,
+    /// A fullscreen window is active on the desktop (reported by the compositor).
+    fullscreen: bool,
+    /// Preview started from the opacity slider: show the fullscreen look.
+    opacity_preview: bool,
 }
 
 impl Default for Controller {
@@ -120,12 +128,15 @@ impl Controller {
             mapped: false,
             last_tick: None,
             preview_until: None,
+            expand: 1.0,
+            fullscreen: false,
+            opacity_preview: false,
         }
     }
 
     fn trigger(&mut self, now: Instant) {
         self.forced_hidden = false;
-        if self.config.mode == OverlayMode::Auto {
+        if matches!(self.config.mode, OverlayMode::Auto | OverlayMode::Compact) {
             let secs = self.config.auto_hide_secs.clamp(0.5, 600.0);
             self.hide_at = Some(now + Duration::from_secs_f32(secs));
         }
@@ -137,7 +148,7 @@ impl Controller {
             OverlayCommand::Config(cfg) => {
                 let was = self.config.mode;
                 self.config = cfg;
-                if was != OverlayMode::Auto && self.config.mode == OverlayMode::Auto {
+                if was == OverlayMode::Always && self.config.mode != OverlayMode::Always {
                     // Leaving `always`: keep it up for one more auto period, then go.
                     if self.mapped {
                         self.trigger(now);
@@ -156,7 +167,9 @@ impl Controller {
                     self.trigger(now);
                 }
             }
-            OverlayCommand::Show { reason } if reason == "preview" => {
+            OverlayCommand::Fullscreen { active } => self.fullscreen = active,
+            OverlayCommand::Show { reason } if reason == "preview" || reason == "opacity" => {
+                self.opacity_preview = reason == "opacity";
                 self.forced_hidden = false;
                 let secs = self.config.auto_hide_secs.clamp(2.0, 600.0);
                 self.preview_until = Some(now + Duration::from_secs_f32(secs));
@@ -188,6 +201,16 @@ impl Controller {
         }
     }
 
+    /// The user's opacity applies while a fullscreen window is in front (or while
+    /// they drag the slider); otherwise the pill is solid.
+    pub fn effective_opacity(&self) -> f32 {
+        if self.fullscreen || self.opacity_preview {
+            self.config.opacity.clamp(0.2, 1.0)
+        } else {
+            1.0
+        }
+    }
+
     pub fn wants_visible(&self, now: Instant) -> bool {
         if self.previewing(now) {
             return true;
@@ -199,20 +222,34 @@ impl Controller {
             return false;
         }
         match self.config.mode {
-            OverlayMode::Always => true,
+            OverlayMode::Always | OverlayMode::Compact => true,
             OverlayMode::Auto => self.hide_at.is_some_and(|t| now < t),
             OverlayMode::Off => false,
         }
     }
 
+    /// True while the full pill should show (vs. the compact widget).
+    pub fn wants_expanded(&self, now: Instant) -> bool {
+        self.config.mode != OverlayMode::Compact
+            || self.previewing(now)
+            || self.hide_at.is_some_and(|t| now < t)
+    }
+
+    /// Eased 0..1 morph from compact widget to full pill.
+    pub fn expansion(&self) -> f32 {
+        let t = self.expand.clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    }
+
     /// Advances the animation to `now` and says what to do with the surface.
     pub fn tick(&mut self, now: Instant) -> SurfaceAction {
         let target = self.wants_visible(now);
-        if !target && self.hide_at.is_some_and(|t| now >= t) {
+        if self.hide_at.is_some_and(|t| now >= t) {
             self.hide_at = None;
         }
         if self.preview_until.is_some_and(|t| now >= t) {
             self.preview_until = None;
+            self.opacity_preview = false;
         }
         let dt = self
             .last_tick
@@ -221,6 +258,16 @@ impl Controller {
             // A long gap (no ticks while idle) must not skip the animation.
             .min(Duration::from_millis(50));
         self.last_tick = Some(now);
+
+        let expand_target = if self.wants_expanded(now) { 1.0 } else { 0.0 };
+        if target && !self.mapped {
+            // Appear directly in the right form.
+            self.expand = expand_target;
+        } else if self.expand < expand_target {
+            self.expand = (self.expand + dt.as_secs_f32() / MORPH.as_secs_f32()).min(1.0);
+        } else if self.expand > expand_target {
+            self.expand = (self.expand - dt.as_secs_f32() / MORPH.as_secs_f32()).max(0.0);
+        }
 
         if target {
             if !self.mapped {
@@ -253,7 +300,9 @@ impl Controller {
     /// True while frames must be produced (fading in or out).
     pub fn is_animating(&self, now: Instant) -> bool {
         let target = self.wants_visible(now);
-        (target && (!self.mapped || self.progress < 1.0)) || (!target && self.mapped)
+        let expand_target = if self.wants_expanded(now) { 1.0 } else { 0.0 };
+        (target && (!self.mapped || self.progress < 1.0 || self.expand != expand_target))
+            || (!target && self.mapped)
     }
 
     /// True while a timer must run to notice the auto-hide deadline.
@@ -539,5 +588,35 @@ mod tests {
         let (acts, t1) = run(&mut c, t0, 5000);
         assert_eq!(acts, vec![SurfaceAction::Unmap]);
         assert!(c.display_state(t1).is_none());
+    }
+
+    #[test]
+    fn compact_expands_on_change_then_collapses() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(OverlayConfig {
+            mode: OverlayMode::Compact,
+            ..OverlayConfig::default()
+        });
+        c.apply(
+            OverlayCommand::State {
+                state: buds(80, 75, 40),
+            },
+            t0,
+        );
+        assert_eq!(c.tick(t0), SurfaceAction::Map);
+        assert!((c.expansion() - 1.0).abs() < 1e-6, "connect shows the full pill");
+        assert!(c.has_deadline());
+        let (acts, t1) = run(&mut c, t0, 5000);
+        assert!(acts.is_empty(), "compact never unmaps while connected");
+        assert!(c.expansion() < 1e-6, "collapsed to the widget");
+        assert!(!c.is_animating(t1));
+
+        // A pod leaving expands it again.
+        let mut s = buds(80, 75, 40);
+        s.left.as_mut().unwrap().present = false;
+        c.apply(OverlayCommand::State { state: s }, t1);
+        let (acts, _) = run(&mut c, t1, 500);
+        assert!(acts.is_empty());
+        assert!((c.expansion() - 1.0).abs() < 1e-6);
     }
 }

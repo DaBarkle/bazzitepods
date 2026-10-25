@@ -18,7 +18,8 @@ use crate::ui::style::{self, Tokens};
 use crate::ui::widgets::{self, Glyph, Ink};
 use futures::Stream;
 use iced::widget::{
-    Space, button, column, container, pick_list, row, scrollable, text, text_input, toggler,
+    Space, button, column, container, pick_list, row, scrollable, slider, text, text_input,
+    toggler,
 };
 use iced::{Center, Element, Fill, Length, Padding, Size, Subscription, Task, Theme, window};
 use log::{debug, info, warn};
@@ -77,7 +78,7 @@ pub fn start_ui(ctx: UiContext) -> iced::Result {
     )
     .subscription(App::subscription)
     .theme(App::theme)
-    .title(|_: &App, _| "LibrePods".to_string())
+    .title(|_: &App, _| "BazzitePods".to_string())
     .settings(iced::Settings {
         id: Some(crate::autostart::APP_ID.to_string()),
         fonts: vec![
@@ -153,6 +154,9 @@ pub enum Message {
     SetOverlayMode(OverlayMode),
     PreviewOverlay,
     SetOverlayPosition(OverlayPosition),
+    SetOverlayOpacity(f32),
+    SetOverlayGlass(f32),
+    CommitOverlaySliders,
     SetStartAtLogin(bool),
     SetStemControl(bool),
     SetAppearance(Appearance),
@@ -244,7 +248,7 @@ pub struct App {
 }
 
 fn load_window_icon() -> Option<window::Icon> {
-    let bytes = include_bytes!("../../assets/icons/io.github.dabarkle.LibrePods.png");
+    let bytes = include_bytes!("../../assets/icons/io.github.dabarkle.BazzitePods.png");
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     window::icon::from_rgba(img.into_raw(), w, h).ok()
@@ -370,6 +374,20 @@ impl App {
         Task::perform(store.persist(), |_| Message::Ignore)
     }
 
+    /// Slider drag: update the overlay live without touching the disk (saved on release).
+    fn live_overlay(&mut self, f: impl FnOnce(&mut Settings)) {
+        self.store.update(f);
+        self.settings = self.store.get();
+        let s = &self.settings;
+        crate::overlay_feed::apply_config(crate::overlay_protocol::OverlayConfig {
+            mode: s.overlay_mode,
+            position: s.overlay_position,
+            opacity: s.overlay_opacity,
+            glass: s.overlay_glass,
+            ..Default::default()
+        });
+    }
+
     /// Save overlay settings, then push the new config to the running overlay.
     fn save_overlay(&mut self, f: impl FnOnce(&mut Settings)) -> Task<Message> {
         self.store.update(f);
@@ -417,7 +435,7 @@ impl App {
                 Task::none()
             }
             Message::WindowClosed(id) => {
-                // Closing the window keeps LibrePods running in the tray.
+                // Closing the window keeps BazzitePods running in the tray.
                 if self.window == Some(id) {
                     self.window = None;
                 }
@@ -462,6 +480,17 @@ impl App {
             }
             Message::SetOverlayMode(m) => self.save_overlay(|s| s.overlay_mode = m),
             Message::SetOverlayPosition(p) => self.save_overlay(|s| s.overlay_position = p),
+            Message::SetOverlayOpacity(v) => {
+                self.live_overlay(|s| s.overlay_opacity = v);
+                crate::overlay_feed::preview_opacity();
+                Task::none()
+            }
+            Message::SetOverlayGlass(v) => {
+                self.live_overlay(|s| s.overlay_glass = v);
+                crate::overlay_feed::preview();
+                Task::none()
+            }
+            Message::CommitOverlaySliders => self.save_overlay(|_| {}),
             Message::PreviewOverlay => {
                 crate::overlay_feed::preview();
                 Task::none()
@@ -648,7 +677,7 @@ impl App {
                     Glyph::Bluetooth,
                     "Bluetooth is off",
                     "Turn on Bluetooth from the system tray or System Settings › Bluetooth. \
-                     LibrePods reconnects on its own.",
+                     BazzitePods reconnects on its own.",
                 ));
             }
             (AdapterState::Missing, None) => {
@@ -668,7 +697,7 @@ impl App {
                     Glyph::Earbuds,
                     "No AirPods yet",
                     "Pair your AirPods in System Settings › Bluetooth. \
-                     LibrePods finds them automatically — nothing to set up here.",
+                     BazzitePods finds them automatically — nothing to set up here.",
                 ));
             }
             (_, Some(d)) => {
@@ -810,8 +839,9 @@ impl App {
         let overlay_on = s.overlay_mode != OverlayMode::Off;
         let mode = segmented(
             &[
-                ("Auto", OverlayMode::Auto),
-                ("Always", OverlayMode::Always),
+                ("Pop-up", OverlayMode::Auto),
+                ("Compact", OverlayMode::Compact),
+                ("Full", OverlayMode::Always),
                 ("Off", OverlayMode::Off),
             ],
             s.overlay_mode,
@@ -824,6 +854,7 @@ impl App {
                 Some(match s.overlay_mode {
                     OverlayMode::Auto => "Appears briefly when battery or pods change",
                     OverlayMode::Always => "Stays on screen while connected",
+                    OverlayMode::Compact => "Small widget; expands when something changes",
                     OverlayMode::Off => "Never shown",
                 }),
                 mode,
@@ -843,6 +874,42 @@ impl App {
                         .style(style::secondary)
                         .on_press_maybe(overlay_on.then_some(Message::PreviewOverlay)),
                     corner_picker(s.overlay_position, overlay_on),
+                ]
+                .spacing(10)
+                .align_y(Center)
+                .into(),
+            ),
+            divider(),
+            setting_row(
+                "Glass",
+                Some("From smoked to clear liquid glass"),
+                row![
+                    slider(0.0..=1.0, s.overlay_glass, Message::SetOverlayGlass)
+                        .step(0.05_f32)
+                        .on_release(Message::CommitOverlaySliders)
+                        .width(Length::Fixed(140.0)),
+                    text(format!("{}%", (s.overlay_glass * 100.0).round() as u32))
+                        .size(12)
+                        .font(style::INTER_MEDIUM)
+                        .width(Length::Fixed(36.0)),
+                ]
+                .spacing(10)
+                .align_y(Center)
+                .into(),
+            ),
+            divider(),
+            setting_row(
+                "Opacity in fullscreen games",
+                Some("Solid on the desktop, see-through over games and videos"),
+                row![
+                    slider(0.2..=1.0, s.overlay_opacity, Message::SetOverlayOpacity)
+                        .step(0.05_f32)
+                        .on_release(Message::CommitOverlaySliders)
+                        .width(Length::Fixed(140.0)),
+                    text(format!("{}%", (s.overlay_opacity * 100.0).round() as u32))
+                        .size(12)
+                        .font(style::INTER_MEDIUM)
+                        .width(Length::Fixed(36.0)),
                 ]
                 .spacing(10)
                 .align_y(Center)

@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Copyright 2026 LibrePods contributors -->
 <component type="desktop-application">
-  <id>io.github.dabarkle.LibrePods</id>
+  <id>io.github.dabarkle.BazzitePods</id>
 
-  <name>LibrePods</name>
+  <name>BazzitePods</name>
   <summary>AirPods battery, controls and overlay for Linux</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
@@ -15,7 +15,7 @@
 
   <description>
     <p>
-      LibrePods is a zero-configuration companion for AirPods and Beats earbuds on Linux.
+      BazzitePods is a zero-configuration companion for AirPods and Beats earbuds on Linux.
       It finds your earbuds on its own, starts with your session and stays out of the way in the
       system tray.
     </p>
@@ -32,12 +32,16 @@
       use with anti-cheat protected games.
     </p>
     <p>
-      LibrePods is not affiliated with or endorsed by Apple Inc. AirPods is a trademark of
+      BazzitePods is built on LibrePods (https://github.com/librepods-org/librepods) and shares
+      its AGPL-3.0 licence.
+    </p>
+    <p>
+      BazzitePods is not affiliated with or endorsed by Apple Inc. AirPods is a trademark of
       Apple Inc.
     </p>
   </description>
 
-  <launchable type="desktop-id">io.github.dabarkle.LibrePods.desktop</launchable>
+  <launchable type="desktop-id">io.github.dabarkle.BazzitePods.desktop</launchable>
   <provides>
     <binary>librepods</binary>
     <binary>librepods-overlay</binary>

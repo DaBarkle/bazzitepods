@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# LibrePods installer for Bazzite (and any Flatpak-based Linux desktop).
+# BazzitePods installer for Bazzite (and any Flatpak-based Linux desktop).
 #
 #   Install / update the latest release:
 #     curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/packaging/install-bazzite.sh | bash
 #   Install a bundle you already downloaded:
-#     ./install-bazzite.sh ~/Downloads/LibrePods.flatpak
+#     ./install-bazzite.sh ~/Downloads/BazzitePods.flatpak
 #   Uninstall (app, its data and the autostart entry):
 #     ./install-bazzite.sh --uninstall
 #
@@ -12,13 +12,16 @@
 
 set -euo pipefail
 
-readonly APP_ID="io.github.dabarkle.LibrePods"
+readonly APP_ID="io.github.dabarkle.BazzitePods"
 readonly REPO="DaBarkle/bazzitepods"
 readonly API_URL="https://api.github.com/repos/${REPO}/releases/latest"
 readonly ONE_LINER="curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/packaging/install-bazzite.sh | bash -s --"
 readonly FLATHUB_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
-readonly ASSET_NAME="LibrePods.flatpak"
-readonly AUTOSTART_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/${APP_ID}.desktop"
+readonly ASSET_NAME="BazzitePods.flatpak"
+readonly AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+readonly AUTOSTART_FILE="${AUTOSTART_DIR}/${APP_ID}.desktop"
+# The app's id before it was renamed to BazzitePods; removed on install.
+readonly OLD_APP_ID="io.github.dabarkle.LibrePods"
 
 if [[ -t 1 ]]; then
     BOLD=$'\e[1m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; RED=$'\e[31m'; RESET=$'\e[0m'
@@ -35,11 +38,11 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS] [BUNDLE.flatpak]
 
-Installs or updates LibrePods as a per-user Flatpak.
+Installs or updates BazzitePods as a per-user Flatpak.
 
   BUNDLE.flatpak   install this local bundle instead of downloading the latest release
-  --uninstall      remove LibrePods, its data and its autostart entry
-  --no-launch      do not start LibrePods after installing
+  --uninstall      remove BazzitePods, its data and its autostart entry
+  --no-launch      do not start BazzitePods after installing
   -h, --help       show this help
 EOF
 }
@@ -84,6 +87,19 @@ download_latest() {
     printf '%s\n' "${dest_dir}/${ASSET_NAME}"
 }
 
+remove_old_id() {
+    if ! flatpak info --user "$OLD_APP_ID" >/dev/null 2>&1; then
+        return
+    fi
+    step "Replacing the pre-rename build (${OLD_APP_ID})"
+    flatpak kill "$OLD_APP_ID" >/dev/null 2>&1 || true
+    flatpak uninstall --user --noninteractive -y --delete-data "$OLD_APP_ID" >/dev/null
+    flatpak override --user --reset "$OLD_APP_ID" >/dev/null 2>&1 || true
+    flatpak permission-remove background background "$OLD_APP_ID" >/dev/null 2>&1 || true
+    rm -f -- "${AUTOSTART_DIR}/${OLD_APP_ID}.desktop"
+    ok "Old build removed"
+}
+
 do_install() {
     local bundle=$1 launch=$2
     require flatpak
@@ -100,29 +116,31 @@ do_install() {
     # Stop a running copy so the new version is what starts afterwards.
     flatpak kill "$APP_ID" >/dev/null 2>&1 || true
 
+    remove_old_id
+
     step "Installing ${APP_ID} (per user)"
     # --reinstall makes repeated runs (and updates from a bundle) idempotent.
     flatpak install --user --noninteractive -y --reinstall "$bundle"
-    ok "LibrePods installed"
+    ok "BazzitePods installed"
 
     if [[ "$launch" == "yes" ]]; then
-        step "Starting LibrePods once so it can register to start at login"
+        step "Starting BazzitePods once so it can register to start at login"
         if flatpak ps --columns=application 2>/dev/null | grep -qx "$APP_ID"; then
-            ok "LibrePods is already running"
+            ok "BazzitePods is already running"
         else
             nohup flatpak run "$APP_ID" --start-minimized >/dev/null 2>&1 &
             disown || true
-            ok "LibrePods is running in the system tray"
+            ok "BazzitePods is running in the system tray"
         fi
     fi
 
-    printf '\n%sDone.%s LibrePods starts automatically at login and lives in the system tray.\n' "$BOLD" "$RESET"
+    printf '\n%sDone.%s BazzitePods starts automatically at login and lives in the system tray.\n' "$BOLD" "$RESET"
     printf 'To remove it later run:\n  %s --uninstall\n' "$ONE_LINER"
 }
 
 do_uninstall() {
     require flatpak
-    step "Stopping LibrePods"
+    step "Stopping BazzitePods"
     flatpak kill "$APP_ID" >/dev/null 2>&1 || true
 
     step "Removing ${APP_ID}"
@@ -143,7 +161,7 @@ do_uninstall() {
     # Forget the Background-portal autostart grant.
     flatpak permission-remove background background "$APP_ID" >/dev/null 2>&1 || true
 
-    printf '\n%sLibrePods has been uninstalled.%s\n' "$BOLD" "$RESET"
+    printf '\n%sBazzitePods has been uninstalled.%s\n' "$BOLD" "$RESET"
 }
 
 main() {

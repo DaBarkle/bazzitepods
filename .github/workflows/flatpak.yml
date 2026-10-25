@@ -1,4 +1,4 @@
-name: Flatpak (LibrePods)
+name: Flatpak (BazzitePods)
 
 on:
   push:
@@ -36,25 +36,25 @@ jobs:
       - name: Validate desktop file and metainfo
         run: |
           if command -v desktop-file-validate >/dev/null; then
-            desktop-file-validate linux-rust/assets/io.github.dabarkle.LibrePods.desktop
+            desktop-file-validate linux-rust/assets/io.github.dabarkle.BazzitePods.desktop
           fi
           if command -v appstreamcli >/dev/null; then
-            appstreamcli validate --no-net linux-rust/flatpak/io.github.dabarkle.LibrePods.metainfo.xml
+            appstreamcli validate --no-net linux-rust/flatpak/io.github.dabarkle.BazzitePods.metainfo.xml
           fi
 
       - name: Build
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest-path: linux-rust/flatpak/io.github.dabarkle.LibrePods.yml
-          bundle: LibrePods.flatpak
+          manifest-path: linux-rust/flatpak/io.github.dabarkle.BazzitePods.yml
+          bundle: BazzitePods.flatpak
           cache-key: flatpak-builder-${{ hashFiles('linux-rust/Cargo.lock') }}
           upload-artifact: false
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LibrePods.flatpak
-          path: LibrePods.flatpak
+          name: BazzitePods.flatpak
+          path: BazzitePods.flatpak
           if-no-files-found: error
 
       - name: Attach bundle to GitHub Release
@@ -62,7 +62,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
-          files: LibrePods.flatpak
+          files: BazzitePods.flatpak
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

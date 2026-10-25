@@ -40,6 +40,10 @@ pub struct Settings {
     pub appearance: Appearance,
     pub overlay_mode: OverlayMode,
     pub overlay_position: OverlayPosition,
+    /// Overlay opacity while a fullscreen window is in front (solid otherwise).
+    pub overlay_opacity: f32,
+    /// Overlay material, 0 = smoked solid .. 1 = clear liquid glass.
+    pub overlay_glass: f32,
     /// Login autostart (applied through `crate::autostart`).
     pub start_at_login: bool,
     /// Stem double/triple press -> next/previous track. Read by the device task.
@@ -52,8 +56,10 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             appearance: Appearance::default(),
-            overlay_mode: OverlayMode::default(),
+            overlay_mode: OverlayMode::Compact,
             overlay_position: OverlayPosition::default(),
+            overlay_opacity: 0.6,
+            overlay_glass: 0.7,
             start_at_login: true,
             stem_control: false,
             extra: Map::new(),
@@ -61,10 +67,12 @@ impl Default for Settings {
     }
 }
 
-const KEYS: [&str; 5] = [
+const KEYS: [&str; 7] = [
+    "overlay_glass",
     "appearance",
     "overlay_mode",
     "overlay_position",
+    "overlay_opacity",
     "start_at_login",
     "stem_control",
 ];
@@ -94,6 +102,8 @@ impl Settings {
             appearance: field(&map, "appearance", d.appearance),
             overlay_mode: field(&map, "overlay_mode", d.overlay_mode),
             overlay_position: field(&map, "overlay_position", d.overlay_position),
+            overlay_opacity: field(&map, "overlay_opacity", d.overlay_opacity).clamp(0.2, 1.0),
+            overlay_glass: field(&map, "overlay_glass", d.overlay_glass).clamp(0.0, 1.0),
             start_at_login: field(&map, "start_at_login", d.start_at_login),
             stem_control: field(&map, "stem_control", d.stem_control),
             extra,
@@ -117,6 +127,8 @@ impl Settings {
             "overlay_position",
             serde_json::to_value(self.overlay_position).unwrap_or(Value::Null),
         );
+        put("overlay_opacity", Value::from(self.overlay_opacity));
+        put("overlay_glass", Value::from(self.overlay_glass));
         put("start_at_login", Value::from(self.start_at_login));
         put("stem_control", Value::from(self.stem_control));
         serde_json::to_string_pretty(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
@@ -217,7 +229,7 @@ mod tests {
         assert_eq!(Settings::from_json("[1,2]"), Settings::default());
         let d = Settings::default();
         assert!(d.start_at_login);
-        assert_eq!(d.overlay_mode, OverlayMode::Auto);
+        assert_eq!(d.overlay_mode, OverlayMode::Compact);
         assert_eq!(d.appearance, Appearance::System);
     }
 
@@ -229,7 +241,7 @@ mod tests {
         );
         assert!(s.stem_control);
         assert!(!s.start_at_login);
-        assert_eq!(s.overlay_mode, OverlayMode::Auto);
+        assert_eq!(s.overlay_mode, OverlayMode::Compact);
         assert_eq!(s.overlay_position, OverlayPosition::BottomLeft);
         assert_eq!(s.extra.get("theme"), Some(&Value::from("Dark")));
 

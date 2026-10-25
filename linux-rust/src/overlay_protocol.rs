@@ -42,6 +42,9 @@ pub enum OverlayMode {
     Auto,
     /// Stay visible while connected.
     Always,
+    /// Stay visible while connected as a small widget; expand to the full pill for
+    /// `auto_hide_secs` on `show` and on meaningful state changes.
+    Compact,
     /// Never show.
     Off,
 }
@@ -55,6 +58,10 @@ pub struct OverlayConfig {
     /// How long the pill stays up in `auto` mode, in seconds.
     pub auto_hide_secs: f32,
     pub mode: OverlayMode,
+    /// Overall opacity of the pill, 0.2..=1.0 (clamped when drawn).
+    pub opacity: f32,
+    /// Material, 0 = smoked solid .. 1 = clear liquid glass.
+    pub glass: f32,
 }
 
 impl Default for OverlayConfig {
@@ -64,6 +71,8 @@ impl Default for OverlayConfig {
             margin: 16,
             auto_hide_secs: 4.0,
             mode: OverlayMode::Auto,
+            opacity: 1.0,
+            glass: 0.7,
         }
     }
 }
@@ -112,6 +121,11 @@ pub enum OverlayCommand {
         reason: String,
     },
     Hide,
+    /// Whether a fullscreen window (game, video) is in front. The pill then uses the
+    /// configured opacity; otherwise it is drawn solid.
+    Fullscreen {
+        active: bool,
+    },
     Quit,
 }
 

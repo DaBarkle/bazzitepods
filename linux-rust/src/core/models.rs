@@ -84,7 +84,9 @@ impl ModelInfo {
         has_conversation_awareness: true,
         has_head_gestures: true,
         has_adaptive_volume: true,
-        ..base("AirPods 4 (ANC)", ModelKind::AirPods4Anc)
+        // Apple calls it "AirPods 4 with Active Noise Cancellation"; a name that
+        // mentions ANC reads like noise cancellation is switched on, so keep it short.
+        ..base("AirPods 4", ModelKind::AirPods4Anc)
     };
     /// Capabilities follow the upstream Android table; not independently verified.
     pub const AIRPODS_5: ModelInfo = ModelInfo {
