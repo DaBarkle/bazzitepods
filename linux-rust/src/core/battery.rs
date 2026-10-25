@@ -650,3 +650,7 @@ mod tests {
         assert_eq!(back, t.snapshot());
     }
 }
+
+#[cfg(test)]
+#[path = "battery_tests.rs"]
+mod scenario_tests;

@@ -674,3 +674,7 @@ mod tests {
         assert!(!s2.is_recording_from_card(8));
     }
 }
+
+#[cfg(test)]
+#[path = "pulse_tests.rs"]
+mod snapshot_tests;

@@ -1,0 +1,93 @@
+# Runs the BazzitePods test suite (linux-rust/) on every pull request and on pushes to
+# main/bazzite, and reports how much of the code the tests exercise.
+#
+# The tests need no Bluetooth, AirPods, sound server or display: packets, adverts and the
+# audio server are faked, so they run the same here as on a desktop.
+#
+# The coverage floor below fails the run if coverage drops noticeably (for example, a big
+# new feature landing without tests). Raise it as coverage grows; never lower it to get a
+# PR through. Code that only works against real hardware (the window, the Bluetooth and
+# D-Bus plumbing) is not expected to be covered, so the floor is well below 100%.
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - bazzite
+    paths:
+      - 'linux-rust/**'
+      - '.github/workflows/tests.yml'
+  pull_request:
+    paths:
+      - 'linux-rust/**'
+      - '.github/workflows/tests.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # Lines covered by tests, in percent. 45.2% when this was set up (2026-10-25).
+  COVERAGE_FLOOR: 44
+
+jobs:
+  test:
+    # The Dependabot auto-merge workflow waits for a check with exactly this name.
+    name: Run tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: linux-rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
+
+      - name: Cache Cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            linux-rust/target
+          key: ${{ runner.os }}-tests-${{ hashFiles('linux-rust/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-tests-
+
+      - name: Run tests with coverage
+        run: |
+          cargo llvm-cov --all-targets --locked \
+            --ignore-filename-regex 'third_party/' \
+            --fail-under-lines "$COVERAGE_FLOOR" \
+            --summary-only | tee coverage.txt
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          if [ -f coverage.txt ]; then
+            {
+              echo "### Test coverage (floor: ${COVERAGE_FLOOR}% of lines)"
+              echo '```'
+              grep -E '^(Filename|-{10,}|TOTAL|[^ ]+\.rs )' coverage.txt || cat coverage.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
