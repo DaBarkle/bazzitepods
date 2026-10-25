@@ -307,6 +307,8 @@ pub enum AACPEvent {
     AudioSource(AudioSource),
     ConnectedDevices(Vec<ConnectedDevice>, Vec<ConnectedDevice>),
     OwnershipToFalseRequest,
+    /// Another device on the AirPods says whether it is streaming media right now.
+    PeerStreaming(bool),
     StemPress(StemPressType, StemPressBudType),
 }
 
@@ -325,6 +327,8 @@ pub struct AACPManagerState {
     pub old_connected_devices: Vec<ConnectedDevice>,
     pub connected_devices: Vec<ConnectedDevice>,
     pub audio_source: Option<AudioSource>,
+    /// Whether another device last said it is streaming media (Smart Routing).
+    pub peer_streaming: bool,
     pub battery_info: Vec<BatteryInfo>,
     pub conversational_awareness_status: u8,
     pub old_ear_detection_status: Vec<EarDetectionStatus>,
@@ -348,6 +352,7 @@ impl AACPManagerState {
             old_connected_devices: Vec::new(),
             connected_devices: Vec::new(),
             audio_source: None,
+            peer_streaming: false,
             battery_info: Vec::new(),
             conversational_awareness_status: 0,
             old_ear_detection_status: Vec::new(),
@@ -774,6 +779,13 @@ impl AACPManager {
             opcodes::SMART_ROUTING_RESP => {
                 let packet_string = String::from_utf8_lossy(payload.get(2..).unwrap_or(&[]));
                 info!("Received Smart Routing Response: {}", packet_string);
+                if let Some(streaming) = peer_streaming_state(&packet_string) {
+                    let mut state = self.state.lock().await;
+                    state.peer_streaming = streaming;
+                    if let Some(ref tx) = state.event_tx {
+                        let _ = tx.send(AACPEvent::PeerStreaming(streaming));
+                    }
+                }
                 if packet_string.contains("SetOwnershipToFalse") {
                     info!("Received OwnershipToFalse request");
                     if let Some(ref tx) = self.state.lock().await.event_tx {
@@ -921,34 +933,8 @@ impl AACPManager {
         target_mac_address: &str,
         streaming_state: bool,
     ) -> Result<()> {
-        let opcode = [opcodes::SMART_ROUTING, 0x00];
-        let mut buffer = Vec::with_capacity(138);
-        buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
-        buffer.extend_from_slice(&[0x82, 0x00]);
-        buffer.extend_from_slice(&[0x01, 0xE5, 0x4A]);
-        buffer.extend_from_slice(b"PlayingApp");
-        buffer.push(0x56);
-        buffer.extend_from_slice(b"com.google.ios.youtube");
-        buffer.push(0x52);
-        buffer.extend_from_slice(b"HostStreamingState");
-        buffer.push(0x42);
-        buffer.extend_from_slice(if streaming_state { b"YES" } else { b"NO" });
-        buffer.push(0x49);
-        buffer.extend_from_slice(b"btAddress");
-        buffer.push(0x51);
-        buffer.extend_from_slice(self_mac_address.as_bytes());
-        buffer.extend_from_slice(b"btName");
-        buffer.push(0x43);
-        buffer.extend_from_slice(b"Mac");
-        buffer.push(0x58);
-        buffer.extend_from_slice(b"otherDevice");
-        buffer.extend_from_slice(b"AudioCategory");
-        buffer.extend_from_slice(&[0x31, 0x2D, 0x01]);
-
-        while buffer.len() < 138 {
-            buffer.push(0x00);
-        }
-        let packet = [opcode.as_slice(), buffer.as_slice()].concat();
+        let packet =
+            media_information_packet(self_mac_address, target_mac_address, streaming_state)?;
         self.send_data_packet(&packet).await
     }
 
@@ -1237,6 +1223,65 @@ pub fn parse_proximity_keys(payload: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
 }
 
 /// Parse "AA:BB:CC:DD:EE:FF" into bytes in over-the-air (reversed) order.
+/// Smart Routing "media information": tells another device on the AirPods whether this
+/// host is streaming media, which decides whether that device may take the audio route.
+fn media_information_packet(
+    self_mac_address: &str,
+    target_mac_address: &str,
+    streaming_state: bool,
+) -> Result<Vec<u8>> {
+    let opcode = [opcodes::SMART_ROUTING, 0x00];
+    let mut buffer = Vec::with_capacity(138);
+    buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
+    buffer.extend_from_slice(&[0x82, 0x00]);
+    buffer.extend_from_slice(&[0x01, 0xE5, 0x4A]);
+    // Keys are lowercase camelCase, as an iPhone sends them.
+    buffer.extend_from_slice(b"playingApp");
+    buffer.push(0x56);
+    buffer.extend_from_slice(b"com.google.ios.youtube");
+    buffer.push(0x52);
+    buffer.extend_from_slice(b"hostStreamingState");
+    // OPACK strings carry their length in the type byte (0x40 + length), so "YES" needs
+    // 0x43; upstream sent 0x42 for both, which made "YES" unreadable.
+    let state: &[u8] = if streaming_state { b"YES" } else { b"NO" };
+    buffer.push(0x40 + state.len() as u8);
+    buffer.extend_from_slice(state);
+    buffer.push(0x49);
+    buffer.extend_from_slice(b"btAddress");
+    buffer.push(0x51);
+    buffer.extend_from_slice(self_mac_address.as_bytes());
+    buffer.push(0x46);
+    buffer.extend_from_slice(b"btName");
+    buffer.push(0x43);
+    buffer.extend_from_slice(b"Mac");
+    buffer.push(0x58);
+    buffer.extend_from_slice(b"otherDevice");
+    buffer.extend_from_slice(b"AudioCategory");
+    buffer.extend_from_slice(&[0x31, 0x2D, 0x01]);
+
+    while buffer.len() < 138 {
+        buffer.push(0x00);
+    }
+    Ok([opcode.as_slice(), buffer.as_slice()].concat())
+}
+
+/// Reads `hostStreamingState` (any casing) from a Smart Routing message another device
+/// sent: `Some(true)` for YES, `Some(false)` for NO, `None` when the message has no such key.
+pub fn peer_streaming_state(packet: &str) -> Option<bool> {
+    let lower = packet.to_ascii_lowercase();
+    let key = "hoststreamingstate";
+    let rest = &lower[lower.find(key)? + key.len()..];
+    // The value follows the key after one OPACK type byte.
+    let value: String = rest.chars().skip(1).take(3).collect();
+    if value.starts_with("yes") {
+        Some(true)
+    } else if value.starts_with("no") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
 pub fn mac_to_reversed_bytes(mac: &str) -> Result<[u8; 6]> {
     let addr: Address = mac.trim().parse().map_err(|_| {
         Error::from(std::io::Error::new(
@@ -1448,6 +1493,38 @@ impl AACPManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_peer_streaming_state() {
+        let yes = "v=\u{fffd}JplayingAppVcom.google.ios.youtubeRhostStreamingStateCYESIbtAddressQ10:A2:D3:BF:3D:76FbtNameFiPhone";
+        let no = "JplayingAppGUnknownRhostStreamingStateBNOIbtAddressQ10:A2:D3:BF:3D:76";
+        assert_eq!(peer_streaming_state(yes), Some(true));
+        assert_eq!(peer_streaming_state(no), Some(false));
+        assert_eq!(
+            peer_streaming_state("audioRoutingSetOwnershipToFalse"),
+            None
+        );
+    }
+
+    #[test]
+    fn media_information_is_tagged_like_an_iphone_sends_it() {
+        let find = |hay: &[u8], needle: &[u8]| hay.windows(needle.len()).any(|w| w == needle);
+        let local = "E8:65:38:93:3D:9E";
+        let phone = "10:A2:D3:BF:3D:76";
+        let yes = media_information_packet(local, phone, true).unwrap();
+        assert!(find(
+            &yes,
+            b"RhostStreamingStateCYESIbtAddressQE8:65:38:93:3D:9EFbtNameCMac"
+        ));
+        let no = media_information_packet(local, phone, false).unwrap();
+        assert!(find(&no, b"RhostStreamingStateBNOIbtAddress"));
+        assert_eq!(yes.len(), 140);
+        // Our own message reads back as streaming, like the iPhone's do.
+        assert_eq!(
+            peer_streaming_state(&String::from_utf8_lossy(&yes)),
+            Some(true)
+        );
+    }
 
     fn bi(component: BatteryComponent, level: u8, status: BatteryStatus) -> BatteryInfo {
         BatteryInfo {

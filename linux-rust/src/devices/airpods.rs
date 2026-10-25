@@ -7,8 +7,8 @@
 use crate::audio::{AudioGuard, AudioGuardHandle, AudioHealth};
 use crate::battery_service::{BatteryInput, BatteryService};
 use crate::bluetooth::aacp::{
-    AACPEvent, AACPManager, AirPodsLEKeys, ControlCommandIdentifiers, EarDetectionStatus,
-    ProximityKeyType,
+    AACPEvent, AACPManager, AirPodsLEKeys, AudioSource, AudioSourceType, ControlCommandIdentifiers,
+    EarDetectionStatus, ProximityKeyType,
 };
 use crate::bluetooth::managers::DeviceManagers;
 use crate::core::models::ModelInfo;
@@ -519,8 +519,65 @@ async fn handle_event(
                     if let Err(e) = aacp.send_add_tipi_device(&local, &peer).await {
                         debug!("send_add_tipi_device failed: {}", e);
                     }
+                    // Tell it we are playing, so it doesn't take the AirPods for a ding.
+                    let ours = aacp
+                        .state
+                        .lock()
+                        .await
+                        .audio_source
+                        .as_ref()
+                        .and_then(|s| route_owner(s, &local));
+                    if ours == Some(true) && !MediaController::playing_players().await.is_empty() {
+                        if let Err(e) = aacp.send_media_information(&local, &peer, true).await {
+                            debug!("send_media_information failed: {}", e);
+                        }
+                    }
                 });
             }
+        }
+        AACPEvent::AudioSource(source) => {
+            // The AirPods say whose audio they are playing. An iPhone that takes them often
+            // never sends OwnsConnection = 0, so this is the reliable signal.
+            let had = owns_audio(&ctx.hub, &mac_s);
+            match route_owner(source, &ctx.local_mac) {
+                // Nobody is playing. If another device just let go while something here is
+                // still playing (a notification took the AirPods for a moment), take them
+                // back now instead of waiting for the AirPods to drift back.
+                None if had == Some(false) => {
+                    let worn = aacp
+                        .state
+                        .lock()
+                        .await
+                        .ear_detection_status
+                        .contains(&EarDetectionStatus::InEar);
+                    if worn && !MediaController::playing_players().await.is_empty() {
+                        info!(
+                            "The other device let go and media is playing here; taking the AirPods back"
+                        );
+                        let _ = command_tx
+                            .send((ControlCommandIdentifiers::OwnsConnection, vec![0x01]));
+                    }
+                }
+                None => {}
+                Some(true) => {
+                    ctx.hub
+                        .update_device(&mac_s, name, |d| d.owns_audio = Some(true));
+                    if had == Some(false) {
+                        route_regained(audio);
+                    }
+                }
+                Some(false) => {
+                    ctx.hub
+                        .update_device(&mac_s, name, |d| d.owns_audio = Some(false));
+                    if had != Some(false) {
+                        route_lost(source, aacp, ctx, &mac_s, media).await;
+                    }
+                }
+            }
+        }
+        AACPEvent::PeerStreaming(true) if owns_audio(&ctx.hub, &mac_s) == Some(false) => {
+            info!("The other device started playing media; pausing local media");
+            media.lock().await.pause_all_media().await;
         }
         AACPEvent::OwnershipToFalseRequest => {
             info!("AirPods asked us to release ownership; pausing local media");
@@ -544,6 +601,52 @@ async fn handle_event(
     let _ = ctx
         .ui_tx
         .send(BluetoothUIMessage::AACPUIEvent(mac_s, event));
+}
+
+/// Another device has the AirPods now. When it is playing media (YouTube on the iPhone),
+/// pause here right away, like an iPhone does, so the next press of play is a fresh start
+/// that takes them straight back. A notification only borrows them for a few seconds, so
+/// then keep playing and pause only if they stay away.
+async fn route_lost(
+    source: &AudioSource,
+    aacp: &AACPManager,
+    ctx: &DeviceContext,
+    mac_s: &str,
+    media: &Arc<Mutex<MediaController>>,
+) {
+    if aacp.state.lock().await.peer_streaming {
+        info!(
+            "{} is playing media on the AirPods; pausing local media",
+            source.mac
+        );
+        media.lock().await.pause_all_media().await;
+        return;
+    }
+    info!(
+        "{} borrowed the AirPods; keeping local media playing for now",
+        source.mac
+    );
+    let (hub, mac, media) = (ctx.hub.clone(), mac_s.to_string(), media.clone());
+    tokio::spawn(async move {
+        sleep(BORROW_GRACE).await;
+        if owns_audio(&hub, &mac) == Some(false) {
+            info!("The AirPods stayed on the other device; pausing local media");
+            media.lock().await.pause_all_media().await;
+        }
+    });
+}
+
+/// How long a device may borrow the AirPods without media (a notification) before local
+/// playback is paused.
+const BORROW_GRACE: Duration = Duration::from_secs(6);
+
+/// Who has the audio route according to an Audio Source report: `Some(true)` for this PC,
+/// `Some(false)` for another device, `None` when nothing is playing.
+fn route_owner(source: &AudioSource, local_mac: &str) -> Option<bool> {
+    if source.r#type == AudioSourceType::None || source.mac == "00:00:00:00:00:00" {
+        return None;
+    }
+    Some(source.mac.eq_ignore_ascii_case(local_mac))
 }
 
 /// Mirror the audio guard's health into the hub as a short human-readable status.
@@ -631,4 +734,38 @@ pub struct AirPodsInformation {
     pub right_serial_number: String,
     pub version3: String,
     pub le_keys: AirPodsLEKeys,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn source(mac: &str, r#type: AudioSourceType) -> AudioSource {
+        AudioSource {
+            mac: mac.to_string(),
+            r#type,
+        }
+    }
+
+    #[test]
+    fn audio_source_tells_who_has_the_route() {
+        let local = "E8:65:38:93:3D:9E";
+        let phone = "10:A2:D3:BF:3D:76";
+        assert_eq!(
+            route_owner(&source(phone, AudioSourceType::Media), local),
+            Some(false)
+        );
+        assert_eq!(
+            route_owner(&source(phone, AudioSourceType::Call), local),
+            Some(false)
+        );
+        let ours = source("e8:65:38:93:3d:9e", AudioSourceType::Media);
+        assert_eq!(route_owner(&ours, local), Some(true));
+        let idle = source("00:00:00:00:00:00", AudioSourceType::Media);
+        assert_eq!(route_owner(&idle, local), None);
+        assert_eq!(
+            route_owner(&source(phone, AudioSourceType::None), local),
+            None
+        );
+    }
 }

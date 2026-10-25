@@ -115,6 +115,9 @@ impl MediaController {
             return;
         }
         state.playback_listener_running = true;
+        // A fresh watcher reports what is playing now; compare against "nothing" so a
+        // player that kept playing across a reconnect still counts as a start.
+        state.is_playing = false;
         let (stop_tx, stop_rx) = watch::channel(false);
         state.listener_stop = Some(stop_tx);
         drop(state);
@@ -169,6 +172,10 @@ impl MediaController {
             state.is_playing = is_playing;
             drop(state);
 
+            if was_playing && !is_playing {
+                // Let the other devices know this PC stopped, so they may take the AirPods.
+                self.announce_streaming(&aacp_manager, false).await;
+            }
             if !was_playing && is_playing {
                 // Copy what we need and release the lock before any await: send_packet
                 // takes the same (non-reentrant) mutex, so holding it here deadlocks.
@@ -196,6 +203,26 @@ impl MediaController {
         let mut state = self.state.lock().await;
         state.playback_listener_running = false;
         state.listener_stop = None;
+    }
+
+    /// Tells every other device on the AirPods whether this PC is streaming media. Apple
+    /// devices use it to decide whether they may take the audio route.
+    async fn announce_streaming(&self, aacp: &AACPManager, streaming: bool) {
+        let local = self.state.lock().await.local_mac.clone();
+        let peers: Vec<String> = aacp
+            .state
+            .lock()
+            .await
+            .connected_devices
+            .iter()
+            .filter(|d| !d.mac.eq_ignore_ascii_case(&local))
+            .map(|d| d.mac.clone())
+            .collect();
+        for peer in peers {
+            if let Err(e) = aacp.send_media_information(&local, &peer, streaming).await {
+                debug!("Could not tell {} the streaming state: {}", peer, e);
+            }
+        }
     }
 
     pub async fn handle_ear_detection(
