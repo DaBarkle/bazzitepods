@@ -21,7 +21,7 @@ fn sink(index: u32, card: Option<u32>, mac: Option<&str>) -> SinkInfo {
         card,
         mac: mac.map(str::to_string),
         state: SinkState::Idle,
-        codec: None,
+        ..Default::default()
     }
 }
 
@@ -31,6 +31,7 @@ fn input(index: u32, sink: u32, corked: bool, app: Option<&str>) -> SinkInputInf
         sink,
         corked,
         app: app.map(str::to_string),
+        ..Default::default()
     }
 }
 
