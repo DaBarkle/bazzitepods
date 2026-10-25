@@ -1,0 +1,109 @@
+//! Owns one `BatteryTracker` per AirPods and publishes merged battery state to the hub.
+//!
+//! Inputs come from two places: AACP battery packets (device tasks, only while the control
+//! channel is up) and BLE proximity adverts (le.rs, any time the AirPods are nearby, even when
+//! not connected to this PC). Keeping a single owner means the two sources can never race.
+
+use crate::bluetooth::aacp::BatteryInfo;
+use crate::core::battery::{BatteryTracker, BleBatteryReading};
+use crate::core::models::{self, ModelKind};
+use crate::hub::{Hub, LinkState};
+use bluer::Address;
+use log::debug;
+use std::collections::HashMap;
+use std::time::Instant;
+use tokio::sync::mpsc;
+
+#[derive(Debug)]
+pub enum BatteryInput {
+    Aacp(Address, Vec<BatteryInfo>),
+    AacpLink(Address, bool),
+    Ble(Address, BleBatteryReading),
+}
+
+#[derive(Clone)]
+pub struct BatteryService {
+    tx: mpsc::UnboundedSender<BatteryInput>,
+}
+
+impl BatteryService {
+    pub fn spawn(hub: Hub) -> Self {
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(run(hub, rx));
+        Self { tx }
+    }
+
+    pub fn send(&self, input: BatteryInput) {
+        let _ = self.tx.send(input);
+    }
+}
+
+async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
+    let mut trackers: HashMap<Address, BatteryTracker> = HashMap::new();
+    // Periodic tick so staleness (e.g. AACP silent for 60 s) is re-evaluated without new input.
+    let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
+    loop {
+        let touched = tokio::select! {
+            input = rx.recv() => {
+                let Some(input) = input else { return };
+                let now = Instant::now();
+                match input {
+                    BatteryInput::Aacp(mac, info) => {
+                        trackers.entry(mac).or_default().apply_aacp(&info, now);
+                        vec![mac]
+                    }
+                    BatteryInput::AacpLink(mac, up) => {
+                        trackers.entry(mac).or_default().set_aacp_connected(up);
+                        vec![mac]
+                    }
+                    BatteryInput::Ble(mac, reading) => {
+                        let product = reading.product_id;
+                        trackers.entry(mac).or_default().apply_ble(&reading, now);
+                        if let Some(kind) = product.and_then(models::from_ble_product_id).map(|m| m.kind) {
+                            set_model_if_unknown(&hub, mac, kind);
+                        }
+                        vec![mac]
+                    }
+                }
+            }
+            _ = tick.tick() => trackers.keys().copied().collect(),
+        };
+        for mac in touched {
+            let Some(tracker) = trackers.get(&mac) else { continue };
+            let snapshot = tracker.snapshot();
+            let mac_s = mac.to_string();
+            // BLE adverts from AirPods we have never connected to are ignored: le.rs only resolves
+            // addresses for devices whose keys we stored, so every MAC here is a known device.
+            hub.update_device(&mac_s, &known_name(&mac_s), |d| {
+                if d.battery != snapshot {
+                    debug!("battery {} -> {:?}", mac_s, snapshot);
+                    d.battery = snapshot;
+                }
+                // Keep "last seen" roughly current for nearby-but-disconnected AirPods without
+                // waking every subscriber on each 1 s advert.
+                let now = std::time::SystemTime::now();
+                let old = d
+                    .last_seen
+                    .and_then(|t| now.duration_since(t).ok())
+                    .is_none_or(|age| age.as_secs() >= 30);
+                if d.link == LinkState::Disconnected && old {
+                    d.last_seen = Some(now);
+                }
+            });
+        }
+    }
+}
+
+fn set_model_if_unknown(hub: &Hub, mac: Address, kind: ModelKind) {
+    let mac_s = mac.to_string();
+    hub.update_device(&mac_s, &known_name(&mac_s), |d| {
+        if d.model == ModelKind::Unknown {
+            d.model = kind;
+        }
+    });
+}
+
+/// Name saved in devices.json, used only when the hub hasn't seen this device yet.
+fn known_name(mac: &str) -> String {
+    crate::devices::airpods::saved_device_name(mac).unwrap_or_else(|| "AirPods".to_string())
+}

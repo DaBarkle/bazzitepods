@@ -1,400 +1,402 @@
-use crate::bluetooth::aacp::ControlCommandIdentifiers;
-use crate::bluetooth::aacp::{AACPEvent, AACPManager, AirPodsLEKeys, ProximityKeyType};
+//! Per-AirPods device task.
+//!
+//! The supervisor in main.rs spawns `run` when BlueZ reports the AirPods connected and cancels it
+//! when they disconnect. Inside, the AACP control channel is (re)opened with backoff for as long as
+//! the Bluetooth link is up, so walking out of range and back never needs user action.
+
+use crate::battery_service::{BatteryInput, BatteryService};
+use crate::bluetooth::aacp::{
+    AACPEvent, AACPManager, AirPodsLEKeys, ControlCommandIdentifiers, EarDetectionStatus,
+    ProximityKeyType,
+};
+use crate::bluetooth::managers::DeviceManagers;
+use crate::core::models;
+use crate::devices::enums::{DeviceData, DeviceInformation};
+use crate::hub::{Hub, LinkState};
 use crate::media_controller::MediaController;
 use crate::ui::messages::BluetoothUIMessage;
-use crate::ui::tray::MyTray;
+use crate::utils::{get_app_settings_path, get_devices_path};
 use bluer::Address;
-use ksni::Handle;
-use log::{debug, error, info};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock, mpsc};
+use tokio::task::JoinSet;
 use tokio::time::{Duration, sleep};
-use crate::utils::get_app_settings_path;
+use tokio_util::sync::CancellationToken;
 
-pub struct AirPodsDevice {
-    pub mac_address: Address,
-    pub aacp_manager: AACPManager,
-    // pub att_manager: ATTManager,
-    pub media_controller: Arc<Mutex<MediaController>>,
-    // pub command_tx: Option<tokio::sync::mpsc::UnboundedSender<(ControlCommandIdentifiers, Vec<u8>)>>,
+pub type CommandSender = mpsc::UnboundedSender<(ControlCommandIdentifiers, Vec<u8>)>;
+
+/// Everything a device task needs from the rest of the app.
+#[derive(Clone)]
+pub struct DeviceContext {
+    pub hub: Hub,
+    pub battery: BatteryService,
+    pub ui_tx: mpsc::UnboundedSender<BluetoothUIMessage>,
+    pub device_managers: Arc<RwLock<HashMap<String, DeviceManagers>>>,
+    /// The tray/overlay route control commands (listening mode etc.) through this.
+    pub active_commands: Arc<Mutex<Option<CommandSender>>>,
+    pub local_mac: String,
 }
 
-impl AirPodsDevice {
-    pub async fn new(
-        mac_address: Address,
-        tray_handle: Option<Handle<MyTray>>,
-        ui_tx: tokio::sync::mpsc::UnboundedSender<BluetoothUIMessage>,
-    ) -> Self {
-        info!("Creating new AirPodsDevice for {}", mac_address);
-        let mut aacp_manager = AACPManager::new();
-        aacp_manager.connect(mac_address).await;
+/// Backoff between control-channel attempts while the Bluetooth link stays up.
+const RETRY_DELAYS: [u64; 6] = [1, 2, 3, 5, 8, 13];
+/// How often we check that the control channel is still alive.
+const HEALTH_INTERVAL: Duration = Duration::from_secs(2);
 
-        // let mut att_manager = ATTManager::new();
-        // att_manager.connect(mac_address).await.expect("Failed to connect ATT");
+pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: CancellationToken) {
+    let mac_s = mac.to_string();
+    info!("Device task started for {} ({})", name, mac_s);
+    ctx.hub.update_device(&mac_s, &name, |d| {
+        d.name = name.clone();
+        d.link = LinkState::Connecting;
+        d.last_seen = Some(std::time::SystemTime::now());
+    });
 
-        if let Some(handle) = &tray_handle {
-            handle
-                .update(|tray: &mut MyTray| {
-                    tray.connected = true;
-                    tray.battery_headphone = None;
-                    tray.battery_headphone_status = None;
-                    tray.battery_l = None;
-                    tray.battery_l_status = None;
-                    tray.battery_r = None;
-                    tray.battery_r_status = None;
-                    tray.battery_c = None;
-                    tray.battery_c_status = None;
-                })
-                .await;
+    let media = Arc::new(Mutex::new(MediaController::new(
+        mac_s.clone(),
+        ctx.local_mac.clone(),
+    )));
+
+    let mut attempt: u32 = 0;
+    loop {
+        if cancel.is_cancelled() {
+            break;
         }
-
-        info!("Sending handshake");
-        if let Err(e) = aacp_manager.send_handshake().await {
-            error!("Failed to send handshake to AirPods device: {}", e);
-        }
-
-        sleep(Duration::from_millis(300)).await;
-
-        info!("Setting feature flags");
-        if let Err(e) = aacp_manager.send_set_feature_flags_packet().await {
-            error!("Failed to set feature flags: {}", e);
-        }
-
-        sleep(Duration::from_millis(300)).await;
-
-        info!("Requesting notifications");
-        if let Err(e) = aacp_manager.send_notification_request().await {
-            error!("Failed to request notifications: {}", e);
-        }
-
-        info!("sending some packet");
-        if let Err(e) = aacp_manager.send_some_packet().await {
-            error!("Failed to send some packet: {}", e);
-        }
-
-        info!("Requesting Proximity Keys: IRK and ENC_KEY");
-        if let Err(e) = aacp_manager
-            .send_proximity_keys_request(vec![ProximityKeyType::Irk, ProximityKeyType::EncKey])
-            .await
-        {
-            error!("Failed to request proximity keys: {}", e);
-        }
-
-        let app_settings_path = get_app_settings_path();
-        let settings = std::fs::read_to_string(&app_settings_path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-        let stem_control = settings
-            .clone()
-            .and_then(|v| v.get("stem_control").cloned())
-            .and_then(|s| serde_json::from_value(s).ok())
-            .unwrap_or(false);
-
-        if stem_control {
-            // Enable stem press detection (double and triple tap)
-            // StemConfig bitmask for the control command: single=0x01, double=0x02, triple=0x04, long=0x08
-            // We want double and triple: 0x02 | 0x04 = 0x06
-            // Note: these bitmask values differ from the StemPressType event enum values (0x05–0x08)
-            info!("Enabling stem press detection for double and triple tap");
-            if let Err(e) = aacp_manager
-                .send_control_command(ControlCommandIdentifiers::StemConfig, &[0x06])
-                .await
-            {
-                error!("Failed to enable stem press detection: {}", e);
+        let aacp = connect_aacp(mac).await;
+        let Some(aacp) = aacp else {
+            let delay = RETRY_DELAYS[(attempt as usize).min(RETRY_DELAYS.len() - 1)];
+            attempt += 1;
+            // After a few failures the link is probably audio-only (e.g. another host owns the
+            // control channel). Keep retrying slowly but tell the UI we're in a limited state.
+            let link = if attempt > 3 {
+                LinkState::Limited
+            } else {
+                LinkState::Reconnecting { attempt }
+            };
+            ctx.hub.set_link(&mac_s, link);
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                _ = sleep(Duration::from_secs(delay)) => continue,
             }
+        };
+        attempt = 0;
+
+        session(mac, &name, &aacp, &ctx, &media, &cancel).await;
+
+        aacp.shutdown().await;
+        ctx.battery.send(BatteryInput::AacpLink(mac, false));
+        ctx.device_managers.write().await.remove(&mac_s);
+        *ctx.active_commands.lock().await = None;
+        if cancel.is_cancelled() {
+            break;
         }
-
-        let session = bluer::Session::new()
-            .await
-            .expect("Failed to get bluer session");
-        let adapter = session
-            .default_adapter()
-            .await
-            .expect("Failed to get default adapter");
-        let local_mac = adapter
-            .address()
-            .await
-            .expect("Failed to get adapter address")
-            .to_string();
-
-        let media_controller = Arc::new(Mutex::new(MediaController::new(
-            mac_address.to_string(),
-            local_mac.clone(),
-        )));
-        let mc_clone = media_controller.clone();
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        let (command_tx, mut command_rx) = tokio::sync::mpsc::unbounded_channel();
-
-        aacp_manager.set_event_channel(tx).await;
-        if let Some(handle) = &tray_handle {
-            handle
-                .update(|tray: &mut MyTray| tray.command_tx = Some(command_tx.clone()))
-                .await;
-        }
-
-        let aacp_manager_clone = aacp_manager.clone();
-        tokio::spawn(async move {
-            while let Some((id, value)) = command_rx.recv().await {
-                if let Err(e) = aacp_manager_clone.send_control_command(id, &value).await {
-                    log::error!("Failed to send control command: {}", e);
-                }
-            }
-        });
-
-        let mc_listener = media_controller.lock().await;
-        let aacp_manager_clone_listener = aacp_manager.clone();
-        mc_listener
-            .start_playback_listener(aacp_manager_clone_listener, command_tx.clone())
-            .await;
-        drop(mc_listener);
-
-        let (listening_mode_tx, mut listening_mode_rx) = tokio::sync::mpsc::unbounded_channel();
-        aacp_manager
-            .subscribe_to_control_command(
-                ControlCommandIdentifiers::ListeningMode,
-                listening_mode_tx,
-            )
-            .await;
-        let tray_handle_clone = tray_handle.clone();
-        tokio::spawn(async move {
-            while let Some(value) = listening_mode_rx.recv().await {
-                if let Some(handle) = &tray_handle_clone {
-                    handle
-                        .update(|tray: &mut MyTray| {
-                            tray.listening_mode = Some(value[0]);
-                        })
-                        .await;
-                }
-            }
-        });
-
-        let (allow_off_tx, mut allow_off_rx) = tokio::sync::mpsc::unbounded_channel();
-        aacp_manager
-            .subscribe_to_control_command(ControlCommandIdentifiers::AllowOffOption, allow_off_tx)
-            .await;
-        let tray_handle_clone = tray_handle.clone();
-        tokio::spawn(async move {
-            while let Some(value) = allow_off_rx.recv().await {
-                if let Some(handle) = &tray_handle_clone {
-                    handle
-                        .update(|tray: &mut MyTray| {
-                            tray.allow_off_option = Some(value[0]);
-                        })
-                        .await;
-                }
-            }
-        });
-
-        let (conversation_detect_tx, mut conversation_detect_rx) =
-            tokio::sync::mpsc::unbounded_channel();
-        aacp_manager
-            .subscribe_to_control_command(
-                ControlCommandIdentifiers::ConversationDetectConfig,
-                conversation_detect_tx,
-            )
-            .await;
-        let tray_handle_clone = tray_handle.clone();
-        tokio::spawn(async move {
-            while let Some(value) = conversation_detect_rx.recv().await {
-                if let Some(handle) = &tray_handle_clone {
-                    handle
-                        .update(|tray: &mut MyTray| {
-                            tray.conversation_detect_enabled = Some(value[0] == 0x01);
-                        })
-                        .await;
-                }
-            }
-        });
-
-        let (owns_connection_tx, mut owns_connection_rx) = tokio::sync::mpsc::unbounded_channel();
-        aacp_manager
-            .subscribe_to_control_command(
-                ControlCommandIdentifiers::OwnsConnection,
-                owns_connection_tx,
-            )
-            .await;
-        let mc_clone_owns = media_controller.clone();
-        tokio::spawn(async move {
-            while let Some(value) = owns_connection_rx.recv().await {
-                let owns = value.first().copied().unwrap_or(0) != 0;
-                if !owns {
-                    info!("Lost ownership, pausing media and disconnecting audio");
-                    let controller = mc_clone_owns.lock().await;
-                    controller.pause_all_media().await;
-                    controller.deactivate_a2dp_profile().await;
-                }
-            }
-        });
-
-        let aacp_manager_clone_events = aacp_manager.clone();
-        let local_mac_events = local_mac.clone();
-        let ui_tx_clone = ui_tx.clone();
-        let command_tx_clone = command_tx.clone();
-        tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                let event_clone = event.clone();
-                match event {
-                    AACPEvent::EarDetection(old_status, new_status) => {
-                        debug!(
-                            "Received EarDetection event: old_status={:?}, new_status={:?}",
-                            old_status, new_status
-                        );
-                        let controller = mc_clone.lock().await;
-                        debug!(
-                            "Calling handle_ear_detection with old_status: {:?}, new_status: {:?}",
-                            old_status, new_status
-                        );
-                        controller
-                            .handle_ear_detection(old_status, new_status)
-                            .await;
-                    }
-                    AACPEvent::BatteryInfo(battery_info) => {
-                        debug!("Received BatteryInfo event: {:?}", battery_info);
-                        if let Some(handle) = &tray_handle {
-                            handle
-                                .update(|tray: &mut MyTray| {
-                                    for b in &battery_info {
-                                        match b.component as u8 {
-                                            0x01 => {
-                                                tray.battery_headphone = Some(b.level);
-                                                tray.battery_headphone_status = Some(b.status);
-                                            }
-                                            0x02 => {
-                                                tray.battery_r = Some(b.level);
-                                                tray.battery_r_status = Some(b.status);
-                                            }
-                                            0x04 => {
-                                                tray.battery_l = Some(b.level);
-                                                tray.battery_l_status = Some(b.status);
-                                            }
-                                            0x08 => {
-                                                tray.battery_c = Some(b.level);
-                                                tray.battery_c_status = Some(b.status);
-                                            }
-                                            _ => {}
-                                        }
-                                    }
-                                })
-                                .await;
-                        }
-                        debug!("Updated tray with new battery info");
-
-                        let _ = ui_tx_clone.send(BluetoothUIMessage::AACPUIEvent(
-                            mac_address.to_string(),
-                            event_clone,
-                        ));
-                        debug!("Sent BatteryInfo event to UI");
-                    }
-                    AACPEvent::ControlCommand(status) => {
-                        debug!("Received ControlCommand event: {:?}", status);
-                        let _ = ui_tx_clone.send(BluetoothUIMessage::AACPUIEvent(
-                            mac_address.to_string(),
-                            event_clone,
-                        ));
-                        debug!("Sent ControlCommand event to UI");
-                    }
-                    AACPEvent::ConversationalAwareness(status) => {
-                        debug!("Received ConversationalAwareness event: {}", status);
-                        let controller = mc_clone.lock().await;
-                        controller.handle_conversational_awareness(status).await;
-                    }
-                    AACPEvent::ConnectedDevices(old_devices, new_devices) => {
-                        let local_mac = local_mac_events.clone();
-                        let new_devices_filtered = new_devices.iter().filter(|new_device| {
-                            let not_in_old = old_devices
-                                .iter()
-                                .all(|old_device| old_device.mac != new_device.mac);
-                            let not_local = new_device.mac != local_mac;
-                            not_in_old && not_local
-                        });
-
-                        for device in new_devices_filtered {
-                            info!(
-                                "New connected device: {}, info1: {}, info2: {}",
-                                device.mac, device.info1, device.info2
-                            );
-                            info!(
-                                "Sending new Tipi packet for device {}, and sending media info to the device",
-                                device.mac
-                            );
-                            let aacp_manager_clone = aacp_manager_clone_events.clone();
-                            let local_mac_clone = local_mac.clone();
-                            let device_mac_clone = device.mac.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = aacp_manager_clone
-                                    .send_media_information_new_device(
-                                        &local_mac_clone,
-                                        &device_mac_clone,
-                                    )
-                                    .await
-                                {
-                                    error!("Failed to send media info new device: {}", e);
-                                }
-                                if let Err(e) = aacp_manager_clone
-                                    .send_add_tipi_device(&local_mac_clone, &device_mac_clone)
-                                    .await
-                                {
-                                    error!("Failed to send add tipi device: {}", e);
-                                }
-                            });
-                        }
-                    }
-                    AACPEvent::OwnershipToFalseRequest => {
-                        info!(
-                            "Received ownership to false request. Setting ownership to false and pausing media."
-                        );
-                        let _ = command_tx_clone
-                            .send((ControlCommandIdentifiers::OwnsConnection, vec![0x00]));
-                        let controller = mc_clone.lock().await;
-                        controller.pause_all_media().await;
-                        controller.deactivate_a2dp_profile().await;
-                    }
-                    AACPEvent::StemPress(press_type, bud_type) => {
-                        use crate::bluetooth::aacp::StemPressType;
-                        info!(
-                            "Received Stem Press: {:?} on {:?}",
-                            press_type, bud_type
-                        );
-                        if stem_control {
-                            let controller = mc_clone.lock().await;
-                            match press_type {
-                                StemPressType::DoublePress => {
-                                    info!("Double press detected, skipping to next track");
-                                    controller.next_track().await;
-                                }
-                                StemPressType::TriplePress => {
-                                    info!("Triple press detected, going to previous track");
-                                    controller.previous_track().await;
-                                }
-                                _ => {
-                                    debug!("Unhandled stem press type: {:?}", press_type);
-                                }
-                            }
-                        } else {
-                            debug!("Stem control disabled, ignoring stem press event");
-                        }
-                    }
-                    _ => {
-                        debug!("Received unhandled AACP event: {:?}", event);
-                        let _ = ui_tx_clone.send(BluetoothUIMessage::AACPUIEvent(
-                            mac_address.to_string(),
-                            event_clone,
-                        ));
-                        debug!("Sent unhandled AACP event to UI");
-                    }
-                }
-            }
-        });
-
-        AirPodsDevice {
-            mac_address,
-            aacp_manager,
-            // att_manager,
-            media_controller,
-            // command_tx: Some(command_tx.clone()),
+        info!("Control channel to {} dropped while link is up; reconnecting", mac_s);
+        ctx.hub.set_link(&mac_s, LinkState::Reconnecting { attempt: 1 });
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = sleep(Duration::from_secs(1)) => {}
         }
     }
+
+    ctx.hub.update_device(&mac_s, &name, |d| {
+        d.link = LinkState::Disconnected;
+        d.in_ear = (None, None);
+        d.audio = None;
+        d.last_seen = Some(std::time::SystemTime::now());
+    });
+    let _ = ctx
+        .ui_tx
+        .send(BluetoothUIMessage::DeviceDisconnected(mac_s.clone()));
+    info!("Device task finished for {}", mac_s);
+}
+
+async fn connect_aacp(mac: Address) -> Option<AACPManager> {
+    let mut aacp = AACPManager::new();
+    aacp.connect(mac).await;
+    if aacp.is_connected().await {
+        Some(aacp)
+    } else {
+        aacp.shutdown().await;
+        None
+    }
+}
+
+/// One control-channel session. Returns when the channel drops or the task is cancelled.
+async fn session(
+    mac: Address,
+    name: &str,
+    aacp: &AACPManager,
+    ctx: &DeviceContext,
+    media: &Arc<Mutex<MediaController>>,
+    cancel: &CancellationToken,
+) {
+    let mac_s = mac.to_string();
+    let mut tasks = JoinSet::new();
+
+    let (event_tx, mut event_rx) = mpsc::unbounded_channel();
+    aacp.set_event_channel(event_tx).await;
+
+    if let Err(e) = handshake(aacp).await {
+        warn!("Handshake with {} failed: {}", mac_s, e);
+        return;
+    }
+
+    ctx.device_managers
+        .write()
+        .await
+        .entry(mac_s.clone())
+        .or_insert_with(|| DeviceManagers::with_aacp(aacp.clone()))
+        .set_aacp(aacp.clone());
+
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    *ctx.active_commands.lock().await = Some(command_tx.clone());
+    {
+        let aacp = aacp.clone();
+        tasks.spawn(async move {
+            while let Some((id, value)) = command_rx.recv().await {
+                if let Err(e) = aacp.send_control_command(id, &value).await {
+                    warn!("Failed to send control command {:?}: {}", id, e);
+                }
+            }
+        });
+    }
+
+    subscribe_controls(aacp, ctx, &mac_s, name, media, &mut tasks).await;
+
+    {
+        let controller = media.lock().await;
+        controller
+            .start_playback_listener(aacp.clone(), command_tx.clone())
+            .await;
+    }
+
+    ctx.battery.send(BatteryInput::AacpLink(mac, true));
+    ctx.hub.set_link(&mac_s, LinkState::Connected);
+    let _ = ctx
+        .ui_tx
+        .send(BluetoothUIMessage::DeviceConnected(mac_s.clone()));
+
+    let stem_control = setting_bool("stem_control");
+    let mut health = tokio::time::interval(HEALTH_INTERVAL);
+    let mut model_known = false;
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break,
+            _ = health.tick() => {
+                if !aacp.is_connected().await {
+                    break;
+                }
+                if !model_known {
+                    model_known = refresh_model(aacp, ctx, &mac_s, name).await;
+                }
+            }
+            event = event_rx.recv() => {
+                let Some(event) = event else { break };
+                handle_event(event, mac, name, aacp, ctx, media, &command_tx, stem_control).await;
+            }
+        }
+    }
+    tasks.abort_all();
+}
+
+async fn handshake(aacp: &AACPManager) -> bluer::Result<()> {
+    aacp.send_handshake().await?;
+    sleep(Duration::from_millis(300)).await;
+    aacp.send_set_feature_flags_packet().await?;
+    sleep(Duration::from_millis(300)).await;
+    aacp.send_notification_request().await?;
+    if let Err(e) = aacp.send_some_packet().await {
+        debug!("Optional init packet failed: {}", e);
+    }
+    if let Err(e) = aacp
+        .send_proximity_keys_request(vec![ProximityKeyType::Irk, ProximityKeyType::EncKey])
+        .await
+    {
+        warn!("Failed to request proximity keys: {}", e);
+    }
+    if setting_bool("stem_control") {
+        // StemConfig bitmask: single=0x01, double=0x02, triple=0x04, long=0x08.
+        if let Err(e) = aacp
+            .send_control_command(ControlCommandIdentifiers::StemConfig, &[0x06])
+            .await
+        {
+            warn!("Failed to enable stem press detection: {}", e);
+        }
+    }
+    Ok(())
+}
+
+/// Mirror control-command state (listening mode, etc.) into the hub, and react to ownership changes.
+async fn subscribe_controls(
+    aacp: &AACPManager,
+    ctx: &DeviceContext,
+    mac_s: &str,
+    name: &str,
+    media: &Arc<Mutex<MediaController>>,
+    tasks: &mut JoinSet<()>,
+) {
+    let watch = [
+        ControlCommandIdentifiers::ListeningMode,
+        ControlCommandIdentifiers::AllowOffOption,
+        ControlCommandIdentifiers::ConversationDetectConfig,
+    ];
+    for id in watch {
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        aacp.subscribe_to_control_command(id, tx).await;
+        let hub = ctx.hub.clone();
+        let mac = mac_s.to_string();
+        let name = name.to_string();
+        tasks.spawn(async move {
+            while let Some(value) = rx.recv().await {
+                let Some(&byte) = value.first() else { continue };
+                hub.update_device(&mac, &name, |d| match id {
+                    ControlCommandIdentifiers::ListeningMode => d.listening_mode = Some(byte),
+                    ControlCommandIdentifiers::AllowOffOption => d.allow_off_mode = Some(byte == 0x01),
+                    ControlCommandIdentifiers::ConversationDetectConfig => {
+                        d.conversation_awareness = Some(byte == 0x01)
+                    }
+                    _ => {}
+                });
+            }
+        });
+    }
+
+    // Another Apple device took the AirPods. Pause what we were playing, but never touch the
+    // audio profile: setting it "off" is what used to leave audio dead after reconnecting.
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    aacp.subscribe_to_control_command(ControlCommandIdentifiers::OwnsConnection, tx)
+        .await;
+    let media = media.clone();
+    tasks.spawn(async move {
+        let mut owned = false;
+        while let Some(value) = rx.recv().await {
+            let owns = value.first().copied().unwrap_or(0) != 0;
+            if owned && !owns {
+                info!("Another device took the AirPods; pausing local media");
+                media.lock().await.pause_all_media().await;
+            }
+            owned = owns;
+        }
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_event(
+    event: AACPEvent,
+    mac: Address,
+    name: &str,
+    aacp: &AACPManager,
+    ctx: &DeviceContext,
+    media: &Arc<Mutex<MediaController>>,
+    command_tx: &CommandSender,
+    stem_control: bool,
+) {
+    let mac_s = mac.to_string();
+    match &event {
+        AACPEvent::BatteryInfo(info) => {
+            ctx.battery.send(BatteryInput::Aacp(mac, info.clone()));
+        }
+        AACPEvent::EarDetection(old, new) => {
+            let in_ear = |i: usize| new.get(i).map(|s| *s == EarDetectionStatus::InEar);
+            // AACP reports primary/secondary; the UI only needs "is anything in an ear", and
+            // left/right placement is refined by BLE. Store as (primary, secondary).
+            ctx.hub
+                .update_device(&mac_s, name, |d| d.in_ear = (in_ear(0), in_ear(1)));
+            media
+                .lock()
+                .await
+                .handle_ear_detection(old.clone(), new.clone())
+                .await;
+        }
+        AACPEvent::ConversationalAwareness(status) => {
+            media
+                .lock()
+                .await
+                .handle_conversational_awareness(*status)
+                .await;
+        }
+        AACPEvent::ConnectedDevices(old_devices, new_devices) => {
+            let local = ctx.local_mac.clone();
+            for device in new_devices
+                .iter()
+                .filter(|n| n.mac != local && old_devices.iter().all(|o| o.mac != n.mac))
+            {
+                info!("New device on AirPods: {}", device.mac);
+                let aacp = aacp.clone();
+                let local = local.clone();
+                let peer = device.mac.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = aacp.send_media_information_new_device(&local, &peer).await {
+                        debug!("send_media_information_new_device failed: {}", e);
+                    }
+                    if let Err(e) = aacp.send_add_tipi_device(&local, &peer).await {
+                        debug!("send_add_tipi_device failed: {}", e);
+                    }
+                });
+            }
+        }
+        AACPEvent::OwnershipToFalseRequest => {
+            info!("AirPods asked us to release ownership; pausing local media");
+            let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x00]));
+            media.lock().await.pause_all_media().await;
+        }
+        AACPEvent::StemPress(press, _bud) => {
+            use crate::bluetooth::aacp::StemPressType;
+            if stem_control {
+                let controller = media.lock().await;
+                match press {
+                    StemPressType::DoublePress => controller.next_track().await,
+                    StemPressType::TriplePress => controller.previous_track().await,
+                    _ => {}
+                }
+            }
+        }
+        _ => {}
+    }
+    // The legacy window still consumes raw events; it ignores the ones it doesn't know.
+    let _ = ctx
+        .ui_tx
+        .send(BluetoothUIMessage::AACPUIEvent(mac_s, event));
+}
+
+/// Fill the model once the AirPods have sent their INFORMATION packet. Returns true when known.
+async fn refresh_model(aacp: &AACPManager, ctx: &DeviceContext, mac_s: &str, name: &str) -> bool {
+    let info = {
+        let state = aacp.state.lock().await;
+        match state.devices.get(mac_s).and_then(|d| d.information.clone()) {
+            Some(DeviceInformation::AirPods(info)) => Some(info),
+            _ => None,
+        }
+    };
+    let Some(info) = info else { return false };
+    let kind = models::from_model_number(&info.model_number).map(|m| m.kind);
+    ctx.hub.update_device(mac_s, name, |d| {
+        d.model_number = Some(info.model_number.clone()).filter(|s| !s.is_empty());
+        if let Some(kind) = kind {
+            d.model = kind;
+        }
+        if !info.name.is_empty() {
+            d.name = info.name.clone();
+        }
+    });
+    true
+}
+
+fn setting_bool(key: &str) -> bool {
+    std::fs::read_to_string(get_app_settings_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get(key).and_then(|b| b.as_bool()))
+        .unwrap_or(false)
+}
+
+/// Name stored in devices.json for a MAC, if any.
+pub fn saved_device_name(mac: &str) -> Option<String> {
+    let json = std::fs::read_to_string(get_devices_path()).ok()?;
+    let devices: HashMap<String, DeviceData> = serde_json::from_str(&json).ok()?;
+    devices.get(mac).map(|d| d.name.clone()).filter(|n| !n.is_empty())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

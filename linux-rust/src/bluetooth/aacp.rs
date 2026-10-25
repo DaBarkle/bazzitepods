@@ -1254,3 +1254,20 @@ async fn send_thread(mut rx: mpsc::Receiver<Vec<u8>>, sp: Arc<SeqPacket>) {
     }
     info!("Send thread finished.");
 }
+
+// Lifecycle helpers used by the device supervisor.
+impl AACPManager {
+    /// True while the L2CAP control channel is up.
+    pub async fn is_connected(&self) -> bool {
+        self.state.lock().await.sender.is_some()
+    }
+
+    /// Tear down the control channel and its I/O tasks. Safe to call more than once.
+    pub async fn shutdown(&self) {
+        self.tasks.lock().await.abort_all();
+        let mut state = self.state.lock().await;
+        state.sender = None;
+        state.event_tx = None;
+        state.control_command_subscribers.clear();
+    }
+}
