@@ -456,7 +456,8 @@ impl AACPManager {
                 ))
             })
         } else {
-            error!("Cannot send packet, sender is not available.");
+            // Expected right after a disconnect; the caller gets the error and decides.
+            debug!("Cannot send packet, sender is not available.");
             Err(Error::from(std::io::Error::new(
                 std::io::ErrorKind::NotConnected,
                 "L2CAP stream not connected",

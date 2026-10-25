@@ -556,7 +556,9 @@ async fn handle_event(
                         .await
                         .ear_detection_status
                         .contains(&EarDetectionStatus::InEar);
-                    if worn && !MediaController::playing_players().await.is_empty() {
+                    let playing = route.lock().local_playing
+                        || !MediaController::playing_players().await.is_empty();
+                    if worn && playing {
                         info!(
                             "The other device let go and media is playing here; taking the AirPods back"
                         );
@@ -651,6 +653,47 @@ struct RouteState {
     borrowed_until: Option<Instant>,
     /// The streaming state last announced to the other devices.
     announced: Option<bool>,
+    /// Audio streams seen playing, to catch players without MPRIS (the Plex app).
+    streams: StreamTracker,
+    /// Whether something plays here, as of the last tick.
+    local_playing: bool,
+}
+
+/// Follows playing audio streams between ticks. A stream counts once it has played for
+/// two ticks in a row, so a notification sound doesn't. Streams already playing when
+/// tracking starts are background noise (idle voice chat and the like) until they stop.
+#[derive(Default)]
+struct StreamTracker {
+    started: bool,
+    /// Stream index -> (ticks seen playing, capped at 2; was playing when tracking began).
+    seen: HashMap<u32, (u8, bool)>,
+}
+
+impl StreamTracker {
+    /// Feeds the streams playing now. Returns (a real stream is playing, one just started).
+    fn update(&mut self, playing: &[u32]) -> (bool, bool) {
+        let baseline = !std::mem::replace(&mut self.started, true);
+        let mut seen = HashMap::with_capacity(playing.len());
+        let (mut active, mut started) = (false, false);
+        for &index in playing {
+            let (count, background) = match self.seen.get(&index) {
+                _ if baseline => (2, true),
+                Some(&(count, background)) => ((count + 1).min(2), background),
+                None => (1, false),
+            };
+            if !background && count == 2 {
+                active = true;
+                started |= self.seen.get(&index).is_some_and(|&(c, _)| c == 1);
+            }
+            seen.insert(index, (count, background));
+        }
+        self.seen = seen;
+        (active, started)
+    }
+
+    fn reset(&mut self) {
+        *self = Self::default();
+    }
 }
 
 #[derive(Clone, Default)]
@@ -663,7 +706,7 @@ impl RouteWatch {
 }
 
 /// How often to compare local playback with who has the AirPods.
-const ROUTE_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+const ROUTE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
 /// Runs only while another device shares the AirPods. It reads local playback directly
 /// instead of relying on catching each play press, which a quick pause/play can hide.
@@ -689,10 +732,22 @@ async fn watch_route(
         .map(|d| d.mac.clone())
         .collect();
     if peers.is_empty() {
-        route.lock().announced = None;
+        let mut state = route.lock();
+        state.announced = None;
+        state.streams.reset();
         return;
     }
-    let playing = !MediaController::playing_players().await.is_empty();
+    let mpris = !MediaController::playing_players().await.is_empty();
+    let streams = tokio::task::spawn_blocking(|| {
+        crate::audio::pulse::snapshot_sync(crate::audio::pulse::DEFAULT_DEADLINE)
+            .map(|s| s.playing_streams())
+            .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
+    let (stream_playing, stream_started) = route.lock().streams.update(&streams);
+    let playing = mpris || stream_playing;
+    route.lock().local_playing = playing;
     match owns_audio(&ctx.hub, mac_s) {
         Some(true) => {
             if route.lock().announced == Some(playing) {
@@ -709,7 +764,10 @@ async fn watch_route(
                 }
             }
         }
-        Some(false) if playing => {
+        // MPRIS players were paused when the other device took over, so one playing now
+        // was started here. A player without MPRIS can't be paused, so only a stream
+        // that just started counts for those.
+        Some(false) if mpris || stream_started => {
             route.lock().announced = None;
             let borrowed = route
                 .lock()
@@ -841,6 +899,29 @@ mod tests {
             mac: mac.to_string(),
             r#type,
         }
+    }
+
+    #[test]
+    fn stream_tracker_ignores_background_and_short_sounds() {
+        let mut t = StreamTracker::default();
+        // Idle voice chat streams already playing: background.
+        assert_eq!(t.update(&[1, 2]), (false, false));
+        assert_eq!(t.update(&[1, 2]), (false, false));
+        // A notification sound for a single tick doesn't count.
+        assert_eq!(t.update(&[1, 2, 3]), (false, false));
+        assert_eq!(t.update(&[1, 2]), (false, false));
+        // Plex starts playing: counts on its second tick, once.
+        assert_eq!(t.update(&[1, 2, 4]), (false, false));
+        assert_eq!(t.update(&[1, 2, 4]), (true, true));
+        assert_eq!(t.update(&[1, 2, 4]), (true, false));
+        // Paused (corked) and resumed: a fresh start.
+        assert_eq!(t.update(&[1, 2]), (false, false));
+        assert_eq!(t.update(&[1, 2, 4]), (false, false));
+        assert_eq!(t.update(&[1, 2, 4]), (true, true));
+        // A background stream that stops and starts again is real playback.
+        assert_eq!(t.update(&[2, 4]), (true, false));
+        assert_eq!(t.update(&[1, 2, 4]), (true, false));
+        assert_eq!(t.update(&[1, 2, 4]), (true, true));
     }
 
     #[test]

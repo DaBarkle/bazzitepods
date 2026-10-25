@@ -64,6 +64,8 @@ pub struct SinkInputInfo {
     pub index: u32,
     pub sink: u32,
     pub corked: bool,
+    /// `application.name` of the stream's client, if published.
+    pub app: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +129,17 @@ impl PulseSnapshot {
             .iter()
             .filter(|i| i.sink == sink_index && !i.corked)
             .count()
+    }
+
+    /// Streams that are playing right now, leaving out background streams that never stop
+    /// (EasyEffects re-plays every app through its own stream; Discord keeps idle WebRTC
+    /// voice streams open) so only real players count.
+    pub fn playing_streams(&self) -> Vec<u32> {
+        self.sink_inputs
+            .iter()
+            .filter(|i| !i.corked && !i.app.as_deref().is_some_and(is_background_app))
+            .map(|i| i.index)
+            .collect()
     }
 
     /// Whether something is recording from a (non-monitor) source of this card.
@@ -215,6 +228,13 @@ impl PulseApi for LibPulse {
 
 /// Parses `AA:BB:CC:DD:EE:FF` / `aa_bb_cc_dd_ee_ff` (optionally embedded at the start
 /// of a longer string) into upper-case colon form.
+fn is_background_app(app: &str) -> bool {
+    let app = app.to_ascii_lowercase();
+    ["easyeffects", "pulseeffects", "webrtc"]
+        .iter()
+        .any(|a| app.contains(a))
+}
+
 pub fn normalize_mac(s: &str) -> Option<String> {
     let candidate: String = s.chars().take(17).collect();
     if candidate.len() != 17 {
@@ -452,6 +472,7 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 index: item.index,
                 sink: item.sink,
                 corked: item.corked,
+                app: item.proplist.get_str("application.name"),
             });
         }
     });
