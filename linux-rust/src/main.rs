@@ -1,4 +1,5 @@
 mod bluetooth;
+mod core;
 mod devices;
 mod media_controller;
 mod ui;
@@ -153,11 +154,17 @@ async fn async_main(
     let adapter = session.default_adapter().await?;
     adapter.set_powered(true).await?;
 
-    let le_tray_clone = tray_handle.clone();
+    let (ble_tx, mut ble_rx) = unbounded_channel();
     tokio::spawn(async move {
         info!("Starting LE monitor...");
-        if let Err(e) = start_le_monitor(le_tray_clone).await {
+        if let Err(e) = start_le_monitor(ble_tx).await {
             log::error!("LE monitor error: {}", e);
+        }
+    });
+    tokio::spawn(async move {
+        // TODO(lifecycle): feed readings into the device's core::battery::BatteryTracker.
+        while let Some((mac, reading)) = ble_rx.recv().await {
+            debug!("BLE battery reading for {}: {:?}", mac, reading);
         }
     });
 
