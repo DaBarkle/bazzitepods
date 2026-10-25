@@ -418,36 +418,37 @@ fn bolt(cx: f32, cy: f32, h: f32) -> impl Fn(f32, f32) -> f32 {
     ])
 }
 
-/// Rotated ellipse (`rot` in radians, clockwise); approximate distance, fine for AA.
-fn ellipse(cx: f32, cy: f32, rx: f32, ry: f32, rot: f32) -> impl Fn(f32, f32) -> f32 {
-    let (sn, cs) = rot.sin_cos();
+/// Rounded box centered at (cx, cy) with half-size (hx, hy) and corner radius r.
+fn rounded_box(cx: f32, cy: f32, hx: f32, hy: f32, r: f32) -> impl Fn(f32, f32) -> f32 {
     move |x, y| {
-        let (dx, dy) = (x - cx, y - cy);
-        let (lx, ly) = (dx * cs + dy * sn, -dx * sn + dy * cs);
-        (((lx / rx).powi(2) + (ly / ry).powi(2)).sqrt() - 1.0) * rx.min(ry)
+        let qx = (x - cx).abs() - (hx - r);
+        let qy = (y - cy).abs() - (hy - r);
+        (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt() + qx.max(qy).min(0.0) - r
     }
 }
 
-/// The pair of earbuds, same geometry as the overlay glyph and `assets/icons/` (a 32-unit
-/// box, right bud first, left mirrored). `grow` fattens every shape (for the halo).
-fn earbuds(c: &mut Canvas, color: Rgba, grow: f32, grille: Option<Rgba>) {
-    let k = 0.6 / 32.0;
-    for side in [1.0f32, -1.0] {
-        let p = |x: f32, y: f32| (0.5 + side * (x - 16.0) * k, 0.5 + (y - 16.8) * k);
-        let rot = side * -20f32.to_radians();
-        let (sx0, sy0) = p(25.0, 10.5);
-        let (sx1, sy1) = p(25.7, 28.0);
-        c.paint(color, capsule(sx0, sy0, sx1, sy1, 3.6 * k + grow * 2.0));
-        let (hx, hy) = p(22.6, 8.6);
-        c.paint(color, ellipse(hx, hy, 5.0 * k + grow, 4.6 * k + grow, rot));
-        if let Some(g) = grille {
-            let (gx, gy) = p(19.4, 9.6);
-            c.paint(g, ellipse(gx, gy, 1.25 * k, 1.9 * k, rot));
+/// The app's mark, an AirPods case: same 32-unit geometry as the overlay glyph and
+/// `assets/icons/`. The lid seam and status light are cut out. `grow` fattens it (halo).
+fn case_mark(c: &mut Canvas, color: Rgba, grow: f32) {
+    let k = 0.62 / 32.0;
+    let p = |x: f32, y: f32| (0.5 + (x - 16.0) * k, 0.5 + (y - 16.0) * k);
+    let (cx, cy) = p(16.0, 16.0);
+    let shell = rounded_box(cx, cy, 12.0 * k + grow, 10.0 * k + grow, 7.0 * k + grow);
+    let (_, seam_y) = p(0.0, 13.2);
+    let (lx, ly) = p(16.0, 19.6);
+    let cut = grow <= 0.0;
+    c.paint(color, move |x, y| {
+        let d = shell(x, y);
+        if !cut {
+            return d;
         }
-    }
+        let seam = (y - seam_y).abs() - 0.9 * k;
+        let led = ((x - lx).powi(2) + (y - ly).powi(2)).sqrt() - 1.7 * k;
+        d.max(-seam.min(led))
+    });
 }
 
-/// Full fallback icon: battery ring around two earbuds.
+/// Full fallback icon: battery ring around the case mark.
 pub fn render_full(key: IconKey, size: u32) -> Icon {
     let mut c = Canvas::new(size);
     let glyph = if key.connected {
@@ -468,8 +469,8 @@ pub fn render_full(key: IconKey, size: u32) -> Icon {
             arc(0.5, 0.5, r, w, b as f32 / 100.0),
         );
     }
-    earbuds(&mut c, halo, 0.025, None);
-    earbuds(&mut c, glyph, 0.0, Some(hex(0x16181C, 0.55)));
+    case_mark(&mut c, halo, 0.025);
+    case_mark(&mut c, glyph, 0.0);
     if key.charging {
         c.paint(halo, circle(0.78, 0.78, 0.2));
         c.paint(tone_color(Tone::Normal, true), bolt(0.78, 0.78, 0.3));

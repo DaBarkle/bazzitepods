@@ -100,9 +100,16 @@ impl AudioGuardHandle {
         self.send(Cmd::Wearing(any_in_ear));
     }
 
-    /// The system resumed from sleep (or anything else that may have broken audio).
+    /// Anything that may have broken audio: resume from sleep, or the audio route coming
+    /// back from another device. Re-runs the full setup after the usual debounce.
     pub fn resume_hint(&self) {
         self.send(Cmd::Resume);
+    }
+
+    /// The audio route just came back from another Apple device. Its A2DP transport was
+    /// often broken while away, so re-check at once and repair a stall within a second.
+    pub fn route_back(&self) {
+        self.send(Cmd::RouteBack);
     }
 
     pub fn health(&self) -> watch::Receiver<AudioHealth> {

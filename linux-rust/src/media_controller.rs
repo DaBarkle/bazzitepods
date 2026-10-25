@@ -67,6 +67,38 @@ impl MediaController {
         }
     }
 
+    /// Local MPRIS players that are playing right now (phone players via KDE Connect are
+    /// never included).
+    pub async fn playing_players() -> Vec<String> {
+        tokio::task::spawn_blocking(|| {
+            mpris::with_players(|conn, players| {
+                players
+                    .into_iter()
+                    .filter(|s| mpris::playback_status(conn, s).as_deref() == Some("Playing"))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Presses play on those of `players` that are paused now.
+    pub async fn resume_if_paused(players: Vec<String>) {
+        let _ = tokio::task::spawn_blocking(move || {
+            mpris::with_bus(|conn| {
+                for service in players {
+                    if mpris::playback_status(conn, &service).as_deref() == Some("Paused")
+                        && mpris::call(conn, &service, "Play")
+                    {
+                        info!("Resumed {} after the audio output was rebuilt", service);
+                    }
+                }
+            })
+        })
+        .await;
+    }
+
     /// Starts watching MPRIS playback (signal based, no polling). Stops when
     /// [`MediaController::stop_playback_listener`] is called or `control_tx` closes.
     pub async fn start_playback_listener(
@@ -83,6 +115,9 @@ impl MediaController {
             return;
         }
         state.playback_listener_running = true;
+        // A fresh watcher reports what is playing now; compare against "nothing" so a
+        // player that kept playing across a reconnect still counts as a start.
+        state.is_playing = false;
         let (stop_tx, stop_rx) = watch::channel(false);
         state.listener_stop = Some(stop_tx);
         drop(state);
@@ -137,6 +172,10 @@ impl MediaController {
             state.is_playing = is_playing;
             drop(state);
 
+            if was_playing && !is_playing {
+                // Let the other devices know this PC stopped, so they may take the AirPods.
+                self.announce_streaming(&aacp_manager, false).await;
+            }
             if !was_playing && is_playing {
                 // Copy what we need and release the lock before any await: send_packet
                 // takes the same (non-reentrant) mutex, so holding it here deadlocks.
@@ -164,6 +203,26 @@ impl MediaController {
         let mut state = self.state.lock().await;
         state.playback_listener_running = false;
         state.listener_stop = None;
+    }
+
+    /// Tells every other device on the AirPods whether this PC is streaming media. Apple
+    /// devices use it to decide whether they may take the audio route.
+    async fn announce_streaming(&self, aacp: &AACPManager, streaming: bool) {
+        let local = self.state.lock().await.local_mac.clone();
+        let peers: Vec<String> = aacp
+            .state
+            .lock()
+            .await
+            .connected_devices
+            .iter()
+            .filter(|d| !d.mac.eq_ignore_ascii_case(&local))
+            .map(|d| d.mac.clone())
+            .collect();
+        for peer in peers {
+            if let Err(e) = aacp.send_media_information(&local, &peer, streaming).await {
+                debug!("Could not tell {} the streaming state: {}", peer, e);
+            }
+        }
     }
 
     pub async fn handle_ear_detection(

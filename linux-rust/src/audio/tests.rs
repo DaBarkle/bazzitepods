@@ -498,6 +498,24 @@ async fn recovery_is_rate_limited() {
 }
 
 #[tokio::test]
+async fn route_back_repairs_without_waiting_for_the_cooldown() {
+    // One recovery has just run (and the 30 s cooldown would block another), then the
+    // user takes the audio back from the iPhone: the guard repairs again at once.
+    let (world, handle) = start(stalled_world(), fast());
+    handle.link_up();
+    wait_health(&handle, "failed", |h| {
+        matches!(h, AudioHealth::Failed { .. })
+    })
+    .await;
+    settle(100).await;
+    assert_eq!(lock(&world).count("profile:off"), 1);
+
+    handle.route_back();
+    settle(1500).await;
+    assert_eq!(lock(&world).count("profile:off"), 2);
+}
+
+#[tokio::test]
 async fn recovery_ladders_per_link_are_bounded() {
     let mut cfg = fast();
     cfg.ladder_cooldown = Duration::from_millis(30);
@@ -570,6 +588,36 @@ async fn default_sink_and_streams_restored_after_range_loss() {
     );
     assert_eq!(w.snap.sink_inputs[0].sink, BT_SINK);
     assert_eq!(w.count(&format!("move:100->{BT_SINK}")), 1);
+}
+
+#[tokio::test]
+async fn audio_restored_when_route_returns_from_another_device() {
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    w.snap.default_sink = Some(bt_sink_name());
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(60).await;
+
+    // The iPhone takes the AirPods: the link stays up, but A2DP to this PC is dropped
+    // and WirePlumber falls back to the speakers.
+    {
+        let mut w = lock(&world);
+        w.remove_card();
+        w.connect_creates_card = true;
+    }
+
+    // The audio comes back to this PC.
+    handle.resume_hint();
+    wait_health(&handle, "negotiating", |h| *h == AudioHealth::Negotiating).await;
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink")).await;
+    let w = lock(&world);
+    assert!(w.count("connect") >= 1, "A2DP was reconnected");
+    assert_eq!(
+        w.snap.default_sink.as_deref(),
+        Some(bt_sink_name().as_str())
+    );
 }
 
 #[tokio::test]

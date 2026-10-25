@@ -79,12 +79,18 @@ pub(crate) enum Cmd {
     LinkDown,
     Wearing(bool),
     Resume,
+    RouteBack,
     Shutdown,
 }
 
 // ---------------------------------------------------------------------------
 // Pure decision helpers
 // ---------------------------------------------------------------------------
+
+/// How long after a take-back stalls are acted on quickly.
+const FAST_WINDOW: Duration = Duration::from_secs(10);
+/// Stall threshold inside that window.
+const FAST_STALL: Duration = Duration::from_millis(800);
 
 const PREFERRED_A2DP: [&str; 4] = [
     "a2dp-sink-aac",
@@ -268,6 +274,9 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     ladders_this_link: u8,
     we_were_default: bool,
     wearing: bool,
+    /// Until then, a stall is acted on almost at once: the audio route just came back
+    /// from another device, and its transport was probably broken while it was away.
+    fast_until: Option<Instant>,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -300,6 +309,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             ladders_this_link: 0,
             we_were_default: was_default(&mac.to_string().to_uppercase()),
             wearing: false,
+            fast_until: None,
         }
     }
 
@@ -385,6 +395,22 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                     self.set_health(AudioHealth::Negotiating);
                 }
             }
+            Cmd::RouteBack => {
+                if self.linked {
+                    // An explicit take-back: check right away, act on a stall within about
+                    // a second, and don't let earlier recoveries rate-limit this one.
+                    self.fast_until = Some(now + FAST_WINDOW);
+                    self.last_ladder = None;
+                    self.ladders_this_link = 0;
+                    self.stall_since = None;
+                    if self.ready {
+                        self.next_monitor = Some(now);
+                    } else if self.ensure_at.is_none() && !self.busy {
+                        self.ensure_attempts = 0;
+                        self.ensure_at = Some(now + self.cfg.poll);
+                    }
+                }
+            }
             Cmd::Shutdown => self.shutdown = true,
         }
     }
@@ -456,7 +482,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 self.ready = true;
                 self.stall_since = None;
                 self.set_health(health);
-                self.next_monitor = Some(Instant::now() + self.cfg.monitor_interval);
+                let now = Instant::now();
+                self.next_monitor = Some(if self.fast_until.is_some_and(|t| now < t) {
+                    now + self.cfg.poll
+                } else {
+                    now + self.cfg.monitor_interval
+                });
             }
             Err(Abort::Interrupted) => {
                 debug!("[audio {}] setup interrupted", self.mac_str);
@@ -766,7 +797,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             return;
         }
         let now = Instant::now();
-        self.next_monitor = Some(now + self.cfg.monitor_interval);
+        let every = if self.fast_until.is_some_and(|t| now < t) {
+            self.cfg.poll
+        } else {
+            self.cfg.monitor_interval
+        };
+        self.next_monitor = Some(now + every);
         let Ok(snap) = self.pulse.snapshot().await else {
             return;
         };
@@ -825,7 +861,13 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             states,
             now - since
         );
-        if now - since >= self.cfg.stall_threshold {
+        let fast = self.fast_until.is_some_and(|t| now < t);
+        let threshold = if fast {
+            FAST_STALL.min(self.cfg.stall_threshold)
+        } else {
+            self.cfg.stall_threshold
+        };
+        if now - since >= threshold {
             self.maybe_run_ladder().await;
         } else {
             // Look again soon so detection is close to the threshold.

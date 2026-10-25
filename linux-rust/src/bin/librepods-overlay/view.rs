@@ -253,7 +253,7 @@ impl Pill {
             draw_headphone_glyph(frame, Point::new(18.0, cy), 0.9, glyph);
             vec![(Label::Headphone, Some(hp))]
         } else {
-            draw_buds_glyph(frame, Point::new(19.0, cy), 1.2, glyph);
+            draw_app_glyph(frame, Point::new(19.0, cy), 1.2, glyph);
             vec![
                 (Label::Letter("L"), self.state.left.as_ref()),
                 (Label::Letter("R"), self.state.right.as_ref()),
@@ -335,7 +335,7 @@ impl Pill {
                 white(0.9 * alpha),
             );
         } else {
-            draw_buds_glyph(
+            draw_app_glyph(
                 frame,
                 Point::new(INSET + 10.0, header_y),
                 1.45,
@@ -620,49 +620,55 @@ fn draw_case_glyph(frame: &mut Frame, c: Point, color: Color) {
     frame.fill(&Path::circle(Point::new(c.x, c.y + 1.4), 0.9), color);
 }
 
-/// The pair of earbuds, centered at `c`, about 16 px tall at scale 1. The geometry is
-/// shared with the app and tray icons (see `assets/icons/`): it is laid out in a 32-unit
-/// box, right bud first, the left one mirrored.
-fn draw_buds_glyph(frame: &mut Frame, c: Point, s: f32, color: Color) {
+/// The app's mark: an AirPods case (lid, seam, status light) in a 32-unit box centered at
+/// `c`, the same geometry as `assets/icons/` and the tray icon.
+fn draw_app_glyph(frame: &mut Frame, c: Point, s: f32, color: Color) {
     let u = s * 0.5;
     let a = color.a;
     let at = |x: f32, y: f32| Point::new(c.x + (x - 16.0) * u, c.y + (y - 16.0) * u);
-    let fill = gradient::Linear::new(at(0.0, 3.0), at(0.0, 30.0))
+    let shade = gradient::Linear::new(at(0.0, 6.0), at(0.0, 26.0))
         .add_stop(0.0, Color::from_rgba(1.0, 1.0, 1.0, a))
         .add_stop(1.0, Color::from_rgba(0.85, 0.87, 0.9, a));
-    for side in [1.0_f32, -1.0] {
-        // Mirror around the box's vertical axis for the left bud.
-        let x = |v: f32| 16.0 + side * (v - 16.0);
-        // Stem: a rounded bar leaning slightly outwards towards the bottom.
-        frame.with_save(|f| {
-            let top = at(x(25.0), 9.5);
-            f.translate(Vector::new(top.x, top.y));
-            f.rotate(side * -4.0_f32.to_radians());
-            let stem = Path::rounded_rectangle(
-                Point::new(-1.8 * u, 0.0),
-                Size::new(3.6 * u, 19.5 * u),
-                Radius::from(1.8 * u),
-            );
-            f.fill(&stem, fill);
-        });
-        let ellipse = |cx: f32, cy: f32, rx: f32, ry: f32| {
-            Path::new(|b| {
-                b.ellipse(canvas::path::arc::Elliptical {
-                    center: at(x(cx), cy),
-                    radii: Vector::new(rx * u, ry * u),
-                    rotation: (side * -20.0_f32.to_radians()).into(),
-                    start_angle: 0.0.into(),
-                    end_angle: (2.0 * PI).into(),
-                })
-            })
-        };
-        frame.fill(&ellipse(22.6, 8.6, 5.0, 4.6), fill);
-        // Speaker grille, facing the other bud.
+    let (lid, body) = case_paths(at, u);
+    for path in [&lid, &body] {
         frame.fill(
-            &ellipse(19.4, 9.6, 1.25, 1.9),
-            Color::from_rgba(0.1, 0.11, 0.14, 0.5 * a),
+            path,
+            canvas::Fill {
+                style: canvas::Style::Gradient(shade.into()),
+                rule: canvas::fill::Rule::EvenOdd,
+            },
         );
     }
+}
+
+/// Lid and body of the case; the body carries the status light as an even-odd hole.
+fn case_paths(at: impl Fn(f32, f32) -> Point, u: f32) -> (Path, Path) {
+    let lid = Path::new(|b| {
+        b.rounded_rectangle(
+            at(4.0, 6.0),
+            Size::new(24.0 * u, 6.3 * u),
+            Radius {
+                top_left: 6.3 * u,
+                top_right: 6.3 * u,
+                bottom_right: 0.0,
+                bottom_left: 0.0,
+            },
+        )
+    });
+    let body = Path::new(|b| {
+        b.rounded_rectangle(
+            at(4.0, 14.1),
+            Size::new(24.0 * u, 11.9 * u),
+            Radius {
+                top_left: 0.0,
+                top_right: 0.0,
+                bottom_right: 7.0 * u,
+                bottom_left: 7.0 * u,
+            },
+        );
+        b.circle(at(16.0, 19.6), 1.7 * u);
+    });
+    (lid, body)
 }
 
 /// Over-ear headphones: band + two cups, centered at `c`.

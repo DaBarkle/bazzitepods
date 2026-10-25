@@ -97,7 +97,7 @@ track control.
 
 ### Tray
 
-The tray icon is a battery ring around your AirPods. It turns amber and then red as the
+The tray icon is a battery ring around a little AirPods case. It turns amber and then red as the
 battery runs low, shows a bolt while charging, and greys out when disconnected.
 
 <p align="center">
