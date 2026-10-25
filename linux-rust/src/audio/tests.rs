@@ -537,6 +537,33 @@ async fn repair_rebuilds_an_idle_output_without_a_stall() {
 }
 
 #[tokio::test]
+async fn no_stall_recovery_while_another_device_plays() {
+    // The iPhone is playing on the AirPods. An app here that can't be paused keeps writing
+    // into the dead output; rebuilding it would take the AirPods back, so leave it alone.
+    let mut w = World::new();
+    w.playing = true;
+    w.add_card("a2dp-sink-aac");
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    handle.route_away();
+    lock(&world).transports = vec!["idle".into()];
+    settle(1500).await;
+    assert_eq!(
+        lock(&world).count("profile:off"),
+        0,
+        "log: {:?}",
+        lock(&world).log
+    );
+
+    // Once the audio is back here, a stall is a real fault again.
+    handle.route_back();
+    settle(1500).await;
+    let w = lock(&world);
+    assert!(w.count("profile:off") >= 1, "log: {:?}", w.log);
+}
+
+#[tokio::test]
 async fn recovery_ladders_per_link_are_bounded() {
     let mut cfg = fast();
     cfg.ladder_cooldown = Duration::from_millis(30);

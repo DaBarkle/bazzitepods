@@ -607,7 +607,7 @@ async fn handle_event(
                         d.elsewhere_name = peer;
                     });
                     if had != Some(false) {
-                        route_lost(source, aacp, ctx, &mac_s, media, route).await;
+                        route_lost(source, aacp, ctx, &mac_s, media, route, audio).await;
                     }
                 }
             }
@@ -618,6 +618,9 @@ async fn handle_event(
             route.lock().peer_stopped = !streaming;
             if *streaming && owns_audio(&ctx.hub, &mac_s) == Some(false) {
                 info!("The other device started playing media; pausing local media");
+                if let Some(audio) = audio {
+                    audio.route_away();
+                }
                 media.lock().await.pause_all_media().await;
             }
         }
@@ -627,6 +630,9 @@ async fn handle_event(
         AACPEvent::OwnershipToFalseRequest => {
             info!("AirPods asked us to release ownership; pausing local media");
             route.lost(false);
+            if let Some(audio) = audio {
+                audio.route_away();
+            }
             let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x00]));
             media.lock().await.pause_all_media().await;
         }
@@ -660,10 +666,14 @@ async fn route_lost(
     mac_s: &str,
     media: &Arc<Mutex<MediaController>>,
     route: &RouteWatch,
+    audio: Option<&AudioGuardHandle>,
 ) {
     let borrowed =
         source.r#type != AudioSourceType::Call && !aacp.state.lock().await.peer_streaming;
     route.lost(borrowed);
+    if !borrowed && let Some(audio) = audio {
+        audio.route_away();
+    }
     if source.r#type == AudioSourceType::Call {
         info!(
             "{} has a call on the AirPods; pausing local media",

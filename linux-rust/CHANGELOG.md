@@ -16,6 +16,12 @@ All notable changes to BazzitePods are documented here. The format follows
 - A phone call on the iPhone pauses the PC right away, and the PC never takes the AirPods
   back during a call. ([#6])
 - Notification sounds on the PC no longer count as playback. ([#6])
+- Sound now plays straight away when the AirPods come back from the iPhone. Before, the
+  AirPods could connect with no sound until the output was changed by hand. Voice calls
+  in apps like Discord move back to the AirPods with it. ([#6])
+- While the iPhone plays, it keeps the AirPods. The PC no longer takes them back when an
+  app here keeps its audio open after pausing (Plex does this), or when its own sound
+  check sees the AirPods' output go quiet. ([#6])
 - Switching back from an iPhone now works with media apps that do not publish an MPRIS
   player, such as the Plex desktop app. The AirPods return to the PC about a second after
   playback starts. ([#5])

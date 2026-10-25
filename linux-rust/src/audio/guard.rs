@@ -84,6 +84,9 @@ pub(crate) enum Cmd {
     /// AirPods broke this PC's transport, so rebuild the output now instead of waiting
     /// for playback to stall on it.
     Repair,
+    /// Another device is playing on the AirPods. This PC's output is dead until they come
+    /// back, and that is expected: rebuilding it then would take the AirPods back.
+    Away,
     Shutdown,
 }
 
@@ -286,6 +289,8 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     /// Rebuild the output at the next monitor pass, stall or not.
     repair_pending: bool,
     last_repair: Option<Instant>,
+    /// Another device has the AirPods: leave the dead output alone until they come back.
+    away: bool,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -321,6 +326,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             fast_until: None,
             repair_pending: false,
             last_repair: None,
+            away: false,
         }
     }
 
@@ -365,6 +371,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         debug!("[audio {}] command {:?}", self.mac_str, cmd);
         match cmd {
             Cmd::LinkUp => {
+                self.away = false;
                 self.linked = true;
                 self.restart = self.busy;
                 self.ready = false;
@@ -376,6 +383,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 self.set_health(AudioHealth::Negotiating);
             }
             Cmd::LinkDown => {
+                self.away = false;
                 self.linked = false;
                 self.ready = false;
                 self.ensure_at = None;
@@ -407,6 +415,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 }
             }
             Cmd::RouteBack => {
+                self.away = false;
                 if self.linked {
                     // An explicit take-back: check right away, act on a stall within about
                     // a second, and don't let earlier recoveries rate-limit this one.
@@ -432,6 +441,17 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                         self.repair_pending = true;
                     }
                 }
+            }
+            Cmd::Away => {
+                if !self.away {
+                    info!(
+                        "[audio {}] another device is playing on the AirPods; pausing stall checks",
+                        self.mac_str
+                    );
+                }
+                self.away = true;
+                self.stall_since = None;
+                self.repair_pending = false;
             }
             Cmd::Shutdown => self.shutdown = true,
         }
@@ -864,7 +884,8 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             profile: active.clone(),
         };
 
-        if !is_a2dp(&active)
+        if self.away
+            || !is_a2dp(&active)
             || sink.state != SinkState::Running
             || snap.uncorked_inputs_on(sink.index) == 0
         {
