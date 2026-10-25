@@ -6,7 +6,7 @@
 
 use crate::bluetooth::aacp::BatteryInfo;
 use crate::core::battery::{BatteryTracker, BleBatteryReading};
-use crate::core::models::{self, ModelKind};
+use crate::core::models::{ModelInfo, ModelKind};
 use crate::hub::{Hub, LinkState};
 use bluer::Address;
 use log::debug;
@@ -59,14 +59,21 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
                     BatteryInput::Ble(mac, reading) => {
                         let product = reading.product_id;
                         trackers.entry(mac).or_default().apply_ble(&reading, now);
-                        if let Some(kind) = product.and_then(models::from_ble_product_id).map(|m| m.kind) {
+                        if let Some(kind) = product
+                            .map(|id| ModelInfo::from_ble_product_id(id).kind)
+                            .filter(|k| *k != ModelKind::Unknown)
+                        {
                             set_model_if_unknown(&hub, mac, kind);
                         }
                         vec![mac]
                     }
                 }
             }
-            _ = tick.tick() => trackers.keys().copied().collect(),
+            _ = tick.tick() => {
+                let now = Instant::now();
+                trackers.values_mut().for_each(|t| t.expire(now));
+                trackers.keys().copied().collect()
+            }
         };
         for mac in touched {
             let Some(tracker) = trackers.get(&mac) else { continue };

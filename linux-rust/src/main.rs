@@ -118,10 +118,21 @@ async fn async_main(
         tokio::spawn(run_tray(hub.clone(), ui_tx.clone(), active_commands.clone()));
     }
 
-    // TODO(integration): BLE battery adverts feed `battery` once le.rs emits BleBatteryReading.
-
     let (kick_tx, kick_rx) = unbounded_channel::<Kick>();
     sleep_monitor::spawn(kick_tx.clone());
+
+    let (ble_tx, mut ble_rx) = unbounded_channel();
+    tokio::spawn(async move {
+        if let Err(e) = bluetooth::le::start_le_monitor(ble_tx).await {
+            warn!("LE monitor stopped: {}", e);
+        }
+    });
+    let battery_ble = battery.clone();
+    tokio::spawn(async move {
+        while let Some((mac, reading)) = ble_rx.recv().await {
+            battery_ble.send(battery_service::BatteryInput::Ble(mac, reading));
+        }
+    });
 
     supervise(SupervisorCtx {
         hub,

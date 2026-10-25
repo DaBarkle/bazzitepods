@@ -10,7 +10,7 @@ use crate::bluetooth::aacp::{
     ProximityKeyType,
 };
 use crate::bluetooth::managers::DeviceManagers;
-use crate::core::models;
+use crate::core::models::ModelInfo;
 use crate::devices::enums::{DeviceData, DeviceInformation};
 use crate::hub::{Hub, LinkState};
 use crate::media_controller::MediaController;
@@ -371,7 +371,8 @@ async fn refresh_model(aacp: &AACPManager, ctx: &DeviceContext, mac_s: &str, nam
         }
     };
     let Some(info) = info else { return false };
-    let kind = models::from_model_number(&info.model_number).map(|m| m.kind);
+    let kind = Some(ModelInfo::from_model_number(&info.model_number).kind)
+        .filter(|k| *k != crate::core::models::ModelKind::Unknown);
     ctx.hub.update_device(mac_s, name, |d| {
         d.model_number = Some(info.model_number.clone()).filter(|s| !s.is_empty());
         if let Some(kind) = kind {

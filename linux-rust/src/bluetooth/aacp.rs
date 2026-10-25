@@ -249,6 +249,8 @@ pub enum BatteryComponent {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatteryStatus {
+    /// Status byte 0x00: component known but state not reported.
+    Unknown = 0,
     Charging = 1,
     NotCharging = 2,
     Disconnected = 4,
@@ -473,25 +475,19 @@ impl AACPManager {
         tx: mpsc::UnboundedSender<Vec<u8>>,
     ) {
         let mut state = self.state.lock().await;
-        state
-            .control_command_subscribers
-            .entry(identifier)
-            .or_default()
-            .push(tx);
         // send initial value if available
         if let Some(status) = state
             .control_command_status_list
             .iter()
             .find(|s| s.identifier == identifier)
         {
-            let _ = state
-                .control_command_subscribers
-                .get(&identifier)
-                .unwrap()
-                .last()
-                .unwrap()
-                .send(status.value.clone());
+            let _ = tx.send(status.value.clone());
         }
+        state
+            .control_command_subscribers
+            .entry(identifier)
+            .or_default()
+            .push(tx);
     }
 
     pub async fn receive_packet(&self, packet: &[u8]) {
@@ -512,50 +508,20 @@ impl AACPManager {
 
         match opcode {
             opcodes::BATTERY_INFO => {
-                if payload.len() < 3 {
-                    error!("Battery Info packet too short: {}", hex::encode(payload));
+                let Some(batteries) = parse_battery_info(payload) else {
+                    error!("Invalid Battery Info packet: {}", hex::encode(payload));
                     return;
-                }
-                let count = payload[2] as usize;
-                if payload.len() < 3 + count * 5 {
-                    error!(
-                        "Battery Info packet length mismatch: {}",
-                        hex::encode(payload)
-                    );
-                    return;
-                }
-                let mut batteries = Vec::with_capacity(count);
-                for i in 0..count {
-                    let base_index = 3 + i * 5;
-                    batteries.push(BatteryInfo {
-                        component: match payload[base_index] {
-                            0x01 => BatteryComponent::Headphone,
-                            0x02 => BatteryComponent::Right,
-                            0x04 => BatteryComponent::Left,
-                            0x08 => BatteryComponent::Case,
-                            _ => {
-                                error!("Unknown battery component: {:#04x}", payload[base_index]);
-                                continue;
-                            }
-                        },
-                        level: payload[base_index + 2],
-                        status: match payload[base_index + 3] {
-                            0x01 => BatteryStatus::Charging,
-                            0x02 => BatteryStatus::NotCharging,
-                            0x04 => BatteryStatus::Disconnected,
-                            _ => {
-                                error!("Unknown battery status: {:#04x}", payload[base_index + 3]);
-                                continue;
-                            }
-                        },
-                    });
-                }
+                };
                 let mut state = self.state.lock().await;
-                state.battery_info = batteries.clone();
+                merge_battery_info(&mut state.battery_info, &batteries);
+                let merged = state.battery_info.clone();
                 if let Some(ref tx) = state.event_tx {
-                    let _ = tx.send(AACPEvent::BatteryInfo(batteries));
+                    let _ = tx.send(AACPEvent::BatteryInfo(merged));
                 }
-                info!("Received Battery Info: {:?}", state.battery_info);
+                info!(
+                    "Received Battery Info: {:?} (merged: {:?})",
+                    batteries, state.battery_info
+                );
             }
             opcodes::CONTROL_COMMAND => {
                 if payload.len() < 7 {
@@ -610,29 +576,11 @@ impl AACPManager {
                 }
             }
             opcodes::EAR_DETECTION => {
-                let primary_status = packet[6];
-                let secondary_status = packet[7];
-                let mut statuses = Vec::new();
-                statuses.push(match primary_status {
-                    0x00 => EarDetectionStatus::InEar,
-                    0x01 => EarDetectionStatus::OutOfEar,
-                    0x02 => EarDetectionStatus::InCase,
-                    0x03 => EarDetectionStatus::Disconnected,
-                    _ => {
-                        error!("Unknown ear detection status: {:#04x}", primary_status);
-                        EarDetectionStatus::OutOfEar
-                    }
-                });
-                statuses.push(match secondary_status {
-                    0x00 => EarDetectionStatus::InEar,
-                    0x01 => EarDetectionStatus::OutOfEar,
-                    0x02 => EarDetectionStatus::InCase,
-                    0x03 => EarDetectionStatus::Disconnected,
-                    _ => {
-                        error!("Unknown ear detection status: {:#04x}", secondary_status);
-                        EarDetectionStatus::OutOfEar
-                    }
-                });
+                let Some((primary, secondary)) = parse_ear_detection(packet) else {
+                    error!("Ear Detection packet too short: {}", hex::encode(packet));
+                    return;
+                };
+                let statuses = vec![primary, secondary];
                 let mut state = self.state.lock().await;
                 state.old_ear_detection_status = state.ear_detection_status.clone();
                 state.ear_detection_status = statuses.clone();
@@ -669,153 +617,68 @@ impl AACPManager {
                 }
             }
             opcodes::INFORMATION => {
-                if payload.len() < 6 {
-                    error!("Information packet too short: {}", hex::encode(payload));
+                let Some(info) = parse_information(payload) else {
+                    error!("Invalid Information packet: {}", hex::encode(payload));
                     return;
-                }
-                let data = &payload[4..];
-                let mut index = 0;
-                while index < data.len() && data[index] != 0x00 {
-                    index += 1;
-                }
-                let mut strings = Vec::new();
-                while index < data.len() {
-                    while index < data.len() && data[index] == 0x00 {
-                        index += 1;
-                    }
-                    if index >= data.len() {
-                        break;
-                    }
-                    let start = index;
-                    while index < data.len() && data[index] != 0x00 {
-                        index += 1;
-                    }
-                    let str_bytes = &data[start..index];
-                    if let Ok(s) = std::str::from_utf8(str_bytes) {
-                        strings.push(s.to_string());
-                    }
-                }
-                strings.remove(0);
-                let info = AirPodsInformation {
-                    name: strings.first().cloned().unwrap_or_default(),
-                    model_number: strings.get(1).cloned().unwrap_or_default(),
-                    manufacturer: strings.get(2).cloned().unwrap_or_default(),
-                    serial_number: strings.get(3).cloned().unwrap_or_default(),
-                    version1: strings.get(4).cloned().unwrap_or_default(),
-                    version2: strings.get(5).cloned().unwrap_or_default(),
-                    hardware_revision: strings.get(6).cloned().unwrap_or_default(),
-                    updater_identifier: strings.get(7).cloned().unwrap_or_default(),
-                    left_serial_number: strings.get(8).cloned().unwrap_or_default(),
-                    right_serial_number: strings.get(9).cloned().unwrap_or_default(),
-                    version3: strings.get(10).cloned().unwrap_or_default(),
-                    le_keys: AirPodsLEKeys {
-                        irk: "".to_string(),
-                        enc_key: "".to_string(),
-                    },
                 };
-                let mut state = self.state.lock().await;
-                if let Some(mac) = state.airpods_mac
-                    && let Some(device_data) = state.devices.get_mut(&mac.to_string())
-                {
-                    device_data.name = info.name.clone();
-                    device_data.information = Some(DeviceInformation::AirPods(info.clone()));
-                }
-                let json = serde_json::to_string(&state.devices).unwrap();
-                if let Some(parent) = get_devices_path().parent()
-                    && let Err(e) = tokio::fs::create_dir_all(&parent).await
-                {
-                    error!("Failed to create directory for devices: {}", e);
-                    return;
-                }
-                if let Err(e) = tokio::fs::write(&get_devices_path(), json).await {
-                    error!("Failed to save devices: {}", e);
-                }
                 info!("Received Information: {:?}", info);
+                let mac = self.state.lock().await.airpods_mac;
+                let Some(mac) = mac else {
+                    error!("Received Information before AirPods MAC was known; not persisting.");
+                    return;
+                };
+                let mac_str = mac.to_string();
+                let result = update_devices_file(|devices| {
+                    merge_information(devices, &mac_str, info);
+                })
+                .await;
+                match result {
+                    Ok(devices) => self.state.lock().await.devices = devices,
+                    Err(e) => error!("Failed to save devices: {}", e),
+                }
             }
 
             opcodes::PROXIMITY_KEYS_RSP => {
-                if payload.len() < 4 {
+                let Some(keys) = parse_proximity_keys(payload) else {
                     error!(
-                        "Proximity Keys Response packet too short: {}",
+                        "Invalid Proximity Keys Response packet: {}",
                         hex::encode(payload)
                     );
                     return;
-                }
-                let key_count = payload[2] as usize;
-                debug!("Proximity Keys Response contains {} keys.", key_count);
-                let mut offset = 3;
-                let mut keys = Vec::new();
-                for _ in 0..key_count {
-                    if offset + 3 >= payload.len() {
-                        error!(
-                            "Proximity Keys Response packet too short while parsing keys: {}",
-                            hex::encode(payload)
-                        );
-                        return;
-                    }
-                    let key_type = payload[offset];
-                    let key_length = payload[offset + 2] as usize;
-                    offset += 4;
-                    if offset + key_length > payload.len() {
-                        error!(
-                            "Proximity Keys Response packet too short for key data: {}",
-                            hex::encode(payload)
-                        );
-                        return;
-                    }
-                    let key_data = payload[offset..offset + key_length].to_vec();
-                    keys.push((key_type, key_data));
-                    offset += key_length;
-                }
+                };
+                // Keys are secrets: log only their types and lengths.
                 info!(
                     "Received Proximity Keys Response: {:?}",
-                    keys.iter()
-                        .map(|(kt, kd)| (kt, hex::encode(kd)))
-                        .collect::<Vec<_>>()
+                    keys.iter().map(|(kt, kd)| (kt, kd.len())).collect::<Vec<_>>()
                 );
-                let mut state = self.state.lock().await;
+                let mut irk = None;
+                let mut enc_key = None;
                 for (key_type, key_data) in &keys {
-                    if let Some(kt) = ProximityKeyType::from_u8(*key_type)
-                        && let Some(mac) = state.airpods_mac
-                    {
-                        let mac_str = mac.to_string();
-                        let device_data =
-                            state.devices.entry(mac_str.clone()).or_insert(DeviceData {
-                                name: mac_str.clone(),
-                                type_: DeviceType::AirPods,
-                                information: None,
-                            });
-                        match kt {
-                            ProximityKeyType::Irk => match device_data.information.as_mut() {
-                                Some(DeviceInformation::AirPods(info)) => {
-                                    info.le_keys.irk = hex::encode(key_data);
-                                }
-                                _ => {
-                                    error!("Device information is not AirPods for adding LE IRK.");
-                                }
-                            },
-                            ProximityKeyType::EncKey => match device_data.information.as_mut() {
-                                Some(DeviceInformation::AirPods(info)) => {
-                                    info.le_keys.enc_key = hex::encode(key_data);
-                                }
-                                _ => {
-                                    error!(
-                                        "Device information is not AirPods for adding LE encryption key."
-                                    );
-                                }
-                            },
-                        }
+                    match ProximityKeyType::from_u8(*key_type) {
+                        Some(ProximityKeyType::Irk) => irk = Some(hex::encode(key_data)),
+                        Some(ProximityKeyType::EncKey) => enc_key = Some(hex::encode(key_data)),
+                        None => debug!("Ignoring unknown proximity key type {:#04x}", key_type),
                     }
                 }
-                let json = serde_json::to_string(&state.devices).unwrap();
-                if let Some(parent) = get_devices_path().parent()
-                    && let Err(e) = tokio::fs::create_dir_all(&parent).await
-                {
-                    error!("Failed to create directory for devices: {}", e);
+                let mac = self.state.lock().await.airpods_mac;
+                let Some(mac) = mac else {
+                    error!("Received Proximity Keys before AirPods MAC was known; not persisting.");
+                    return;
+                };
+                if irk.is_none() && enc_key.is_none() {
                     return;
                 }
-                if let Err(e) = tokio::fs::write(&get_devices_path(), json).await {
-                    error!("Failed to save devices: {}", e);
+                let mac_str = mac.to_string();
+                let result = update_devices_file(|devices| {
+                    merge_le_keys(devices, &mac_str, irk.as_deref(), enc_key.as_deref());
+                })
+                .await;
+                match result {
+                    Ok(devices) => self.state.lock().await.devices = devices,
+                    Err(e) => error!("Failed to save devices: {}", e),
+                }
+                if let Some(ref tx) = self.state.lock().await.event_tx {
+                    let _ = tx.send(AACPEvent::ProximityKeys(keys));
                 }
             }
             opcodes::STEM_PRESS => {
@@ -865,7 +728,7 @@ impl AACPManager {
                     return;
                 }
                 let count = payload[2] as usize;
-                if payload.len() < 3 + count * 8 {
+                if payload.len() < 5 + count * 8 {
                     error!(
                         "Connected Devices packet length mismatch: {}",
                         hex::encode(payload)
@@ -905,7 +768,7 @@ impl AACPManager {
                 info!("Received Connected Devices: {:?}", state.connected_devices);
             }
             opcodes::SMART_ROUTING_RESP => {
-                let packet_string = String::from_utf8_lossy(&payload[2..]);
+                let packet_string = String::from_utf8_lossy(payload.get(2..).unwrap_or(&[]));
                 info!("Received Smart Routing Response: {}", packet_string);
                 if packet_string.contains("SetOwnershipToFalse") {
                     info!("Received OwnershipToFalse request");
@@ -990,11 +853,7 @@ impl AACPManager {
     ) -> Result<()> {
         let opcode = [opcodes::SMART_ROUTING, 0x00];
         let mut buffer = Vec::with_capacity(112);
-        let target_mac_bytes: Vec<u8> = target_mac_address
-            .split(':')
-            .map(|s| u8::from_str_radix(s, 16).unwrap())
-            .collect();
-        buffer.extend_from_slice(&target_mac_bytes.iter().rev().cloned().collect::<Vec<u8>>());
+        buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
 
         buffer.extend_from_slice(&[0x68, 0x00]);
         buffer.extend_from_slice(&[0x01, 0xE5, 0x4A]);
@@ -1025,11 +884,7 @@ impl AACPManager {
     pub async fn send_hijack_request(&self, target_mac_address: &str) -> Result<()> {
         let opcode = [opcodes::SMART_ROUTING, 0x00];
         let mut buffer = Vec::with_capacity(106);
-        let target_mac_bytes: Vec<u8> = target_mac_address
-            .split(':')
-            .map(|s| u8::from_str_radix(s, 16).unwrap())
-            .collect();
-        buffer.extend_from_slice(&target_mac_bytes.iter().rev().cloned().collect::<Vec<u8>>());
+        buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
         buffer.extend_from_slice(&[0x62, 0x00]);
         buffer.extend_from_slice(&[0x01, 0xE5]);
         buffer.push(0x4A);
@@ -1064,11 +919,7 @@ impl AACPManager {
     ) -> Result<()> {
         let opcode = [opcodes::SMART_ROUTING, 0x00];
         let mut buffer = Vec::with_capacity(138);
-        let target_mac_bytes: Vec<u8> = target_mac_address
-            .split(':')
-            .map(|s| u8::from_str_radix(s, 16).unwrap())
-            .collect();
-        buffer.extend_from_slice(&target_mac_bytes.iter().rev().cloned().collect::<Vec<u8>>());
+        buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
         buffer.extend_from_slice(&[0x82, 0x00]);
         buffer.extend_from_slice(&[0x01, 0xE5, 0x4A]);
         buffer.extend_from_slice(b"PlayingApp");
@@ -1100,11 +951,7 @@ impl AACPManager {
     pub async fn send_smart_routing_show_ui(&self, target_mac_address: &str) -> Result<()> {
         let opcode = [opcodes::SMART_ROUTING, 0x00];
         let mut buffer = Vec::with_capacity(134);
-        let target_mac_bytes: Vec<u8> = target_mac_address
-            .split(':')
-            .map(|s| u8::from_str_radix(s, 16).unwrap())
-            .collect();
-        buffer.extend_from_slice(&target_mac_bytes.iter().rev().cloned().collect::<Vec<u8>>());
+        buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
         buffer.extend_from_slice(&[0x7E, 0x00]);
         buffer.extend_from_slice(&[0x01, 0xE6, 0x5B]);
         buffer.extend_from_slice(b"SmartRoutingKeyShowNearbyUI");
@@ -1136,11 +983,7 @@ impl AACPManager {
     pub async fn send_hijack_reversed(&self, target_mac_address: &str) -> Result<()> {
         let opcode = [opcodes::SMART_ROUTING, 0x00];
         let mut buffer = Vec::with_capacity(97);
-        let target_mac_bytes: Vec<u8> = target_mac_address
-            .split(':')
-            .map(|s| u8::from_str_radix(s, 16).unwrap())
-            .collect();
-        buffer.extend_from_slice(&target_mac_bytes.iter().rev().cloned().collect::<Vec<u8>>());
+        buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
         buffer.extend_from_slice(&[0x59, 0x00]);
         buffer.extend_from_slice(&[0x01, 0xE3]);
         buffer.push(0x5F);
@@ -1169,11 +1012,7 @@ impl AACPManager {
     ) -> Result<()> {
         let opcode = [opcodes::SMART_ROUTING, 0x00];
         let mut buffer = Vec::with_capacity(86);
-        let target_mac_bytes: Vec<u8> = target_mac_address
-            .split(':')
-            .map(|s| u8::from_str_radix(s, 16).unwrap())
-            .collect();
-        buffer.extend_from_slice(&target_mac_bytes.iter().rev().cloned().collect::<Vec<u8>>());
+        buffer.extend_from_slice(&mac_to_reversed_bytes(target_mac_address)?);
         buffer.extend_from_slice(&[0x4E, 0x00]);
         buffer.extend_from_slice(&[0x01, 0xE5]);
         buffer.extend_from_slice(&[0x48, 0x69]);
@@ -1200,6 +1039,334 @@ impl AACPManager {
         self.send_data_packet(&[0x29, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
             .await
     }
+}
+
+// ---------------------------------------------------------------------------
+// Pure, bounds-checked parsers. None of these may panic on any input.
+// ---------------------------------------------------------------------------
+
+const MAX_BATTERY_RECORDS: usize = 4;
+const BATTERY_RECORD_LEN: usize = 5;
+
+fn battery_component_from_u8(v: u8) -> Option<BatteryComponent> {
+    match v {
+        0x01 => Some(BatteryComponent::Headphone),
+        0x02 => Some(BatteryComponent::Right),
+        0x04 => Some(BatteryComponent::Left),
+        0x08 => Some(BatteryComponent::Case),
+        _ => None,
+    }
+}
+
+fn battery_status_from_u8(v: u8) -> Option<BatteryStatus> {
+    match v {
+        0x00 => Some(BatteryStatus::Unknown),
+        0x01 => Some(BatteryStatus::Charging),
+        0x02 => Some(BatteryStatus::NotCharging),
+        0x04 => Some(BatteryStatus::Disconnected),
+        _ => None,
+    }
+}
+
+/// Parse a BATTERY_INFO payload (starting at the opcode byte, i.e. packet minus the
+/// 4-byte header): `04 00 <count> { <component> 01 <level> <status> 01 }*count`.
+///
+/// Returns `None` when the count is implausible, the packet is shorter than the
+/// count implies, or a record's spacer bytes are wrong (the whole packet is then
+/// untrustworthy). Records with an unknown component or status byte are skipped.
+pub fn parse_battery_info(payload: &[u8]) -> Option<Vec<BatteryInfo>> {
+    if payload.len() < 3 || payload[0] != opcodes::BATTERY_INFO {
+        return None;
+    }
+    let count = payload[2] as usize;
+    if count == 0 || count > MAX_BATTERY_RECORDS {
+        return None;
+    }
+    let records = payload.get(3..3 + count * BATTERY_RECORD_LEN)?;
+    let mut out = Vec::with_capacity(count);
+    for rec in records.chunks_exact(BATTERY_RECORD_LEN) {
+        let [comp, spacer, level, status, end] = rec else {
+            return None;
+        };
+        if *spacer != 0x01 || *end != 0x01 {
+            return None;
+        }
+        let Some(component) = battery_component_from_u8(*comp) else {
+            debug!("Unknown battery component: {:#04x}", comp);
+            continue;
+        };
+        let Some(status) = battery_status_from_u8(*status) else {
+            debug!("Unknown battery status: {:#04x}", status);
+            continue;
+        };
+        out.push(BatteryInfo {
+            component,
+            level: *level,
+            status,
+        });
+    }
+    Some(out)
+}
+
+/// Merge freshly parsed records into the accumulated per-component list.
+/// Components absent from `new` are kept. A `Disconnected`/`Unknown` record with
+/// level 0, or any record with a level above 100, keeps the previously known level.
+pub fn merge_battery_info(existing: &mut Vec<BatteryInfo>, new: &[BatteryInfo]) {
+    for rec in new {
+        let no_data = matches!(
+            rec.status,
+            BatteryStatus::Disconnected | BatteryStatus::Unknown
+        ) && rec.level == 0;
+        let level_valid = rec.level <= 100 && !no_data;
+        if let Some(old) = existing.iter_mut().find(|b| b.component == rec.component) {
+            if level_valid {
+                old.level = rec.level;
+            }
+            old.status = rec.status;
+        } else {
+            existing.push(BatteryInfo {
+                level: if rec.level <= 100 { rec.level } else { 0 },
+                ..rec.clone()
+            });
+        }
+    }
+}
+
+fn ear_status_from_u8(v: u8) -> EarDetectionStatus {
+    match v {
+        0x00 => EarDetectionStatus::InEar,
+        0x01 => EarDetectionStatus::OutOfEar,
+        0x02 => EarDetectionStatus::InCase,
+        0x03 => EarDetectionStatus::Disconnected,
+        _ => {
+            debug!("Unknown ear detection status: {:#04x}", v);
+            EarDetectionStatus::OutOfEar
+        }
+    }
+}
+
+/// Parse an EAR_DETECTION packet (full packet including header). Returns
+/// (primary, secondary).
+pub fn parse_ear_detection(packet: &[u8]) -> Option<(EarDetectionStatus, EarDetectionStatus)> {
+    let primary = *packet.get(6)?;
+    let secondary = *packet.get(7)?;
+    Some((ear_status_from_u8(primary), ear_status_from_u8(secondary)))
+}
+
+fn empty_le_keys() -> AirPodsLEKeys {
+    AirPodsLEKeys {
+        irk: String::new(),
+        enc_key: String::new(),
+    }
+}
+
+fn empty_airpods_information() -> AirPodsInformation {
+    AirPodsInformation {
+        name: String::new(),
+        model_number: String::new(),
+        manufacturer: String::new(),
+        serial_number: String::new(),
+        version1: String::new(),
+        version2: String::new(),
+        hardware_revision: String::new(),
+        updater_identifier: String::new(),
+        left_serial_number: String::new(),
+        right_serial_number: String::new(),
+        version3: String::new(),
+        le_keys: empty_le_keys(),
+    }
+}
+
+/// Parse an INFORMATION payload (starting at the opcode). The data after the
+/// 4-byte sub-header is a binary prefix followed by NUL-separated tokens. Same
+/// token selection as the original parser (and the Android app): skip the
+/// prefix up to the first NUL, keep non-empty UTF-8 tokens, drop the first one
+/// (a binary field), then the rest are name, model number, ... LE keys are empty.
+pub fn parse_information(payload: &[u8]) -> Option<AirPodsInformation> {
+    let data = payload.get(4..)?;
+    if data.len() < 2 {
+        return None;
+    }
+    let first_nul = data.iter().position(|&b| b == 0)?;
+    let strings: Vec<String> = data[first_nul..]
+        .split(|&b| b == 0)
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| std::str::from_utf8(s).ok().map(str::to_owned))
+        .skip(1)
+        .collect();
+    let get = |i: usize| strings.get(i).cloned().unwrap_or_default();
+    Some(AirPodsInformation {
+        name: get(0),
+        model_number: get(1),
+        manufacturer: get(2),
+        serial_number: get(3),
+        version1: get(4),
+        version2: get(5),
+        hardware_revision: get(6),
+        updater_identifier: get(7),
+        left_serial_number: get(8),
+        right_serial_number: get(9),
+        version3: get(10),
+        le_keys: empty_le_keys(),
+    })
+}
+
+/// Parse a PROXIMITY_KEYS_RSP payload (starting at the opcode):
+/// `31 00 <count> { <type> 00 <len> 00 <key bytes...> }*count`.
+pub fn parse_proximity_keys(payload: &[u8]) -> Option<Vec<(u8, Vec<u8>)>> {
+    if payload.len() < 3 {
+        return None;
+    }
+    let key_count = payload[2] as usize;
+    let mut offset = 3usize;
+    let mut keys = Vec::with_capacity(key_count);
+    for _ in 0..key_count {
+        let header = payload.get(offset..offset + 4)?;
+        let key_type = header[0];
+        let key_length = header[2] as usize;
+        offset += 4;
+        let key_data = payload.get(offset..offset + key_length)?;
+        keys.push((key_type, key_data.to_vec()));
+        offset += key_length;
+    }
+    Some(keys)
+}
+
+/// Parse "AA:BB:CC:DD:EE:FF" into bytes in over-the-air (reversed) order.
+pub fn mac_to_reversed_bytes(mac: &str) -> Result<[u8; 6]> {
+    let addr: Address = mac.trim().parse().map_err(|_| {
+        Error::from(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid MAC address: {mac:?}"),
+        ))
+    })?;
+    let mut bytes = addr.0;
+    bytes.reverse();
+    Ok(bytes)
+}
+
+// ---------------------------------------------------------------------------
+// devices.json persistence
+// ---------------------------------------------------------------------------
+
+fn airpods_entry<'a>(
+    devices: &'a mut HashMap<String, DeviceData>,
+    mac: &str,
+) -> &'a mut DeviceData {
+    let entry = devices.entry(mac.to_string()).or_insert_with(|| DeviceData {
+        name: mac.to_string(),
+        type_: DeviceType::AirPods,
+        information: None,
+    });
+    if !matches!(entry.information, Some(DeviceInformation::AirPods(_))) {
+        entry.type_ = DeviceType::AirPods;
+        entry.information = Some(DeviceInformation::AirPods(empty_airpods_information()));
+    }
+    entry
+}
+
+/// Store device information, creating the entry if needed. Existing non-empty
+/// LE keys are never replaced by empty ones.
+pub fn merge_information(
+    devices: &mut HashMap<String, DeviceData>,
+    mac: &str,
+    mut info: AirPodsInformation,
+) {
+    let entry = airpods_entry(devices, mac);
+    if !info.name.is_empty() {
+        entry.name = info.name.clone();
+    }
+    if let Some(DeviceInformation::AirPods(old)) = &entry.information {
+        if info.le_keys.irk.is_empty() {
+            info.le_keys.irk = old.le_keys.irk.clone();
+        }
+        if info.le_keys.enc_key.is_empty() {
+            info.le_keys.enc_key = old.le_keys.enc_key.clone();
+        }
+    }
+    entry.information = Some(DeviceInformation::AirPods(info));
+}
+
+/// Store LE keys (hex), creating the entry if needed. `None`/empty values leave
+/// the stored key untouched.
+pub fn merge_le_keys(
+    devices: &mut HashMap<String, DeviceData>,
+    mac: &str,
+    irk: Option<&str>,
+    enc_key: Option<&str>,
+) {
+    let entry = airpods_entry(devices, mac);
+    if let Some(DeviceInformation::AirPods(info)) = entry.information.as_mut() {
+        if let Some(irk) = irk.filter(|k| !k.is_empty()) {
+            info.le_keys.irk = irk.to_string();
+        }
+        if let Some(enc) = enc_key.filter(|k| !k.is_empty()) {
+            info.le_keys.enc_key = enc.to_string();
+        }
+    }
+}
+
+/// Serialises read-modify-write cycles of devices.json within this process.
+static DEVICES_FILE_LOCK: Mutex<()> = Mutex::const_new(());
+
+/// Write `devices` to `path` atomically: write a temp file next to it, then rename.
+/// Creates the parent directory if needed.
+pub async fn save_devices_atomic(
+    path: &std::path::Path,
+    devices: &HashMap<String, DeviceData>,
+) -> std::io::Result<()> {
+    let json = serde_json::to_string_pretty(devices)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    if let Some(parent) = path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{}", std::process::id()));
+    let tmp = std::path::PathBuf::from(tmp);
+    tokio::fs::write(&tmp, json).await?;
+    if let Err(e) = tokio::fs::rename(&tmp, path).await {
+        let _ = tokio::fs::remove_file(&tmp).await;
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Re-read devices.json at `path`, apply `f`, and write it back atomically.
+/// Re-reading avoids clobbering entries written by other device tasks. A file
+/// that exists but cannot be parsed is moved aside to `<path>.bak` rather than lost.
+pub async fn update_devices_file_at<F>(
+    path: &std::path::Path,
+    f: F,
+) -> std::io::Result<HashMap<String, DeviceData>>
+where
+    F: FnOnce(&mut HashMap<String, DeviceData>),
+{
+    let _guard = DEVICES_FILE_LOCK.lock().await;
+    let mut devices: HashMap<String, DeviceData> = match tokio::fs::read_to_string(path).await {
+        Ok(s) if s.trim().is_empty() => HashMap::new(),
+        Ok(s) => match serde_json::from_str(&s) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("devices.json is corrupt ({}); moving it aside", e);
+                let mut bak = path.as_os_str().to_owned();
+                bak.push(".bak");
+                let _ = tokio::fs::rename(path, std::path::PathBuf::from(bak)).await;
+                HashMap::new()
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
+        Err(e) => return Err(e),
+    };
+    f(&mut devices);
+    save_devices_atomic(path, &devices).await?;
+    Ok(devices)
+}
+
+async fn update_devices_file<F>(f: F) -> std::io::Result<HashMap<String, DeviceData>>
+where
+    F: FnOnce(&mut HashMap<String, DeviceData>),
+{
+    update_devices_file_at(&get_devices_path(), f).await
 }
 
 async fn recv_thread(manager: AACPManager, sp: Arc<SeqPacket>) {
@@ -1269,5 +1436,274 @@ impl AACPManager {
         state.sender = None;
         state.event_tx = None;
         state.control_command_subscribers.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bi(component: BatteryComponent, level: u8, status: BatteryStatus) -> BatteryInfo {
+        BatteryInfo {
+            component,
+            level,
+            status,
+        }
+    }
+
+    /// Full packet as received (header + payload) -> payload slice like receive_packet.
+    fn payload(packet: &[u8]) -> &[u8] {
+        &packet[4..]
+    }
+
+    #[test]
+    fn battery_three_components() {
+        let pkt = [
+            0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x03, //
+            0x02, 0x01, 0x64, 0x02, 0x01, // right 100 not charging
+            0x04, 0x01, 0x63, 0x01, 0x01, // left 99 charging
+            0x08, 0x01, 0x11, 0x02, 0x01, // case 17
+        ];
+        let b = parse_battery_info(payload(&pkt)).unwrap();
+        assert_eq!(
+            b,
+            vec![
+                bi(BatteryComponent::Right, 100, BatteryStatus::NotCharging),
+                bi(BatteryComponent::Left, 99, BatteryStatus::Charging),
+                bi(BatteryComponent::Case, 17, BatteryStatus::NotCharging),
+            ]
+        );
+    }
+
+    #[test]
+    fn battery_unknown_status_kept_and_unknown_component_skipped() {
+        let pkt = [
+            0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x03, //
+            0x08, 0x01, 0x32, 0x00, 0x01, // case status 0x00 (Unknown)
+            0x10, 0x01, 0x32, 0x02, 0x01, // unknown component 0x10
+            0x04, 0x01, 0x00, 0x04, 0x01, // left disconnected
+        ];
+        let b = parse_battery_info(payload(&pkt)).unwrap();
+        assert_eq!(
+            b,
+            vec![
+                bi(BatteryComponent::Case, 50, BatteryStatus::Unknown),
+                bi(BatteryComponent::Left, 0, BatteryStatus::Disconnected),
+            ]
+        );
+    }
+
+    #[test]
+    fn battery_headphone() {
+        let pkt = [0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01, 0x01, 0x01, 0x40, 0x01, 0x01];
+        let b = parse_battery_info(payload(&pkt)).unwrap();
+        assert_eq!(b, vec![bi(BatteryComponent::Headphone, 64, BatteryStatus::Charging)]);
+    }
+
+    #[test]
+    fn battery_rejects_bad_packets() {
+        // count says 2 but only one record
+        let short = [0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x02, 0x02, 0x01, 0x64, 0x02, 0x01];
+        assert!(parse_battery_info(payload(&short)).is_none());
+        // bad spacer
+        let spacer = [0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01, 0x02, 0x00, 0x64, 0x02, 0x01];
+        assert!(parse_battery_info(payload(&spacer)).is_none());
+        // implausible count
+        let mut big = vec![0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x09];
+        big.extend(std::iter::repeat_n([0x02, 0x01, 0x10, 0x02, 0x01], 9).flatten());
+        assert!(parse_battery_info(payload(&big)).is_none());
+        // truncated / empty
+        assert!(parse_battery_info(&[]).is_none());
+        assert!(parse_battery_info(&[0x04, 0x00]).is_none());
+        // wrong opcode
+        assert!(parse_battery_info(&[0x05, 0x00, 0x00]).is_none());
+    }
+
+    #[test]
+    fn merge_keeps_components_and_levels() {
+        let mut acc = Vec::new();
+        merge_battery_info(
+            &mut acc,
+            &[
+                bi(BatteryComponent::Left, 80, BatteryStatus::NotCharging),
+                bi(BatteryComponent::Right, 70, BatteryStatus::NotCharging),
+                bi(BatteryComponent::Case, 50, BatteryStatus::Charging),
+            ],
+        );
+        merge_battery_info(
+            &mut acc,
+            &[
+                bi(BatteryComponent::Left, 0, BatteryStatus::Disconnected),
+                bi(BatteryComponent::Right, 69, BatteryStatus::NotCharging),
+            ],
+        );
+        assert_eq!(acc.len(), 3);
+        let get = |c| acc.iter().find(|b| b.component == c).unwrap().clone();
+        assert_eq!(
+            get(BatteryComponent::Left),
+            bi(BatteryComponent::Left, 80, BatteryStatus::Disconnected)
+        );
+        assert_eq!(get(BatteryComponent::Right).level, 69);
+        assert_eq!(get(BatteryComponent::Case).level, 50);
+    }
+
+    #[test]
+    fn ear_detection_bounds() {
+        assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00]).is_none());
+        assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00]).is_none());
+        let (p, s) =
+            parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x02]).unwrap();
+        assert_eq!(p, EarDetectionStatus::InEar);
+        assert_eq!(s, EarDetectionStatus::InCase);
+    }
+
+    fn info_payload(strings: &[&str]) -> Vec<u8> {
+        // sub-header, binary prefix, NUL, a leading token that is discarded
+        let mut v = vec![0x1D, 0x00, 0x00, 0x00, 0xAB, 0xCD, 0x00, 0x02, 0x00];
+        for s in strings {
+            v.extend_from_slice(s.as_bytes());
+            v.push(0x00);
+        }
+        v
+    }
+
+    #[test]
+    fn information_parse() {
+        let p = info_payload(&["David's AirPods", "A3056", "Apple Inc.", "SERIAL1"]);
+        let info = parse_information(&p).unwrap();
+        assert_eq!(info.name, "David's AirPods");
+        assert_eq!(info.model_number, "A3056");
+        assert_eq!(info.manufacturer, "Apple Inc.");
+        assert_eq!(info.serial_number, "SERIAL1");
+        assert_eq!(info.version3, "");
+        assert!(info.le_keys.irk.is_empty());
+    }
+
+    #[test]
+    fn information_no_panic_on_empty() {
+        // Previously `strings.remove(0)` panicked here.
+        assert!(parse_information(&[0x1D, 0x00, 0x00, 0x00, 0x00, 0x00]).is_some());
+        assert!(parse_information(&[0x1D, 0x00, 0x00, 0x00, 0xAA, 0xBB]).is_none());
+        assert!(parse_information(&[0x1D]).is_none());
+        let info = parse_information(&[0x1D, 0x00, 0x00, 0x00, 0x00, 0x00]).unwrap();
+        assert_eq!(info.name, "");
+    }
+
+    #[test]
+    fn proximity_keys_parse() {
+        let mut p = vec![0x31, 0x00, 0x02];
+        p.extend_from_slice(&[0x01, 0x00, 0x10, 0x00]);
+        p.extend_from_slice(&[0x11; 16]);
+        p.extend_from_slice(&[0x04, 0x00, 0x10, 0x00]);
+        p.extend_from_slice(&[0x22; 16]);
+        let keys = parse_proximity_keys(&p).unwrap();
+        assert_eq!(keys, vec![(0x01, vec![0x11; 16]), (0x04, vec![0x22; 16])]);
+        // truncated key data
+        assert!(parse_proximity_keys(&p[..p.len() - 1]).is_none());
+        assert!(parse_proximity_keys(&[0x31, 0x00, 0x01, 0x01, 0x00]).is_none());
+    }
+
+    #[test]
+    fn mac_parsing() {
+        assert_eq!(
+            mac_to_reversed_bytes("AA:BB:CC:DD:EE:FF").unwrap(),
+            [0xFF, 0xEE, 0xDD, 0xCC, 0xBB, 0xAA]
+        );
+        assert!(mac_to_reversed_bytes("").is_err());
+        assert!(mac_to_reversed_bytes("ZZ:BB:CC:DD:EE:FF").is_err());
+        assert!(mac_to_reversed_bytes("AA:BB").is_err());
+    }
+
+    fn le_keys_of(devices: &HashMap<String, DeviceData>, mac: &str) -> (String, String) {
+        match &devices[mac].information {
+            Some(DeviceInformation::AirPods(i)) => (i.le_keys.irk.clone(), i.le_keys.enc_key.clone()),
+            _ => panic!("no airpods info"),
+        }
+    }
+
+    #[test]
+    fn keys_then_information_keeps_keys() {
+        let mac = "AA:BB:CC:DD:EE:FF";
+        let mut devices = HashMap::new();
+        merge_le_keys(&mut devices, mac, Some("aa"), Some("bb"));
+        let info = parse_information(&info_payload(&["Pods", "A2698"])).unwrap();
+        merge_information(&mut devices, mac, info);
+        assert_eq!(le_keys_of(&devices, mac), ("aa".into(), "bb".into()));
+        assert_eq!(devices[mac].name, "Pods");
+        match &devices[mac].information {
+            Some(DeviceInformation::AirPods(i)) => assert_eq!(i.model_number, "A2698"),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn information_then_keys_and_no_clobber() {
+        let mac = "AA:BB:CC:DD:EE:FF";
+        let mut devices = HashMap::new();
+        let info = parse_information(&info_payload(&["Pods", "A2698"])).unwrap();
+        merge_information(&mut devices, mac, info.clone());
+        merge_le_keys(&mut devices, mac, Some("aa"), None);
+        merge_le_keys(&mut devices, mac, None, Some("bb"));
+        merge_le_keys(&mut devices, mac, Some(""), Some(""));
+        assert_eq!(le_keys_of(&devices, mac), ("aa".into(), "bb".into()));
+        // A later INFORMATION packet must not wipe keys.
+        merge_information(&mut devices, mac, info);
+        assert_eq!(le_keys_of(&devices, mac), ("aa".into(), "bb".into()));
+    }
+
+    #[tokio::test]
+    async fn devices_file_roundtrip_atomic() {
+        let dir = std::env::temp_dir().join(format!(
+            "librepods-test-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let path = dir.join("nested").join("devices.json");
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+        let mac = "AA:BB:CC:DD:EE:FF";
+        update_devices_file_at(&path, |d| merge_le_keys(d, mac, Some("aa"), Some("bb")))
+            .await
+            .unwrap();
+        let info = parse_information(&info_payload(&["Pods", "A2698"])).unwrap();
+        let devices = update_devices_file_at(&path, |d| merge_information(d, mac, info))
+            .await
+            .unwrap();
+        assert_eq!(le_keys_of(&devices, mac), ("aa".into(), "bb".into()));
+        let on_disk: HashMap<String, DeviceData> =
+            serde_json::from_str(&tokio::fs::read_to_string(&path).await.unwrap()).unwrap();
+        assert_eq!(le_keys_of(&on_disk, mac), ("aa".into(), "bb".into()));
+        // no temp file left behind
+        let mut entries = tokio::fs::read_dir(path.parent().unwrap()).await.unwrap();
+        let mut names = Vec::new();
+        while let Some(e) = entries.next_entry().await.unwrap() {
+            names.push(e.file_name());
+        }
+        assert_eq!(names, vec![std::ffi::OsString::from("devices.json")]);
+        let _ = tokio::fs::remove_dir_all(&dir).await;
+    }
+
+    #[tokio::test]
+    async fn receive_packet_never_panics_on_short_input() {
+        let m = AACPManager::new();
+        for op in [
+            opcodes::BATTERY_INFO,
+            opcodes::CONTROL_COMMAND,
+            opcodes::EAR_DETECTION,
+            opcodes::CONVERSATION_AWARENESS,
+            opcodes::STEM_PRESS,
+            opcodes::AUDIO_SOURCE,
+            opcodes::CONNECTED_DEVICES,
+            opcodes::SMART_ROUTING_RESP,
+            opcodes::EQ_DATA,
+        ] {
+            for extra in 0..12 {
+                let mut p = vec![0x04, 0x00, 0x04, 0x00, op];
+                p.extend(std::iter::repeat_n(0x05u8, extra));
+                m.receive_packet(&p).await;
+            }
+        }
+        // connected devices: count 1 but only 8 bytes after count (needs 10)
+        let p = [0x04, 0x00, 0x04, 0x00, 0x2E, 0x00, 0x01, 1, 2, 3, 4, 5, 6, 7, 8];
+        m.receive_packet(&p).await;
     }
 }
