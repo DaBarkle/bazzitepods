@@ -42,6 +42,7 @@ impl World {
             mac: None,
             state: SinkState::Idle,
             codec: None,
+            muted: false,
         });
         w.snap.default_sink = Some(SPEAKERS_NAME.into());
         w
@@ -110,6 +111,7 @@ impl World {
                 mac: Some(MAC.into()),
                 state,
                 codec,
+                muted: false,
             });
             if self.playing && !self.snap.sink_inputs.iter().any(|i| i.sink == BT_SINK) {
                 self.snap.sink_inputs.push(SinkInputInfo {
@@ -118,7 +120,6 @@ impl World {
                     corked: false,
                     app: None,
                     role: None,
-                    muted: false,
                 });
             }
         } else if have {
@@ -195,16 +196,11 @@ impl PulseApi for FakePulse {
         Ok(())
     }
 
-    async fn set_sink_input_mute(&self, input_index: u32, mute: bool) -> Result<(), PulseError> {
+    async fn set_sink_mute(&self, sink_index: u32, mute: bool) -> Result<(), PulseError> {
         let mut w = lock(&self.0);
-        w.log.push(format!("mute:{input_index}:{mute}"));
-        for i in w
-            .snap
-            .sink_inputs
-            .iter_mut()
-            .filter(|i| i.index == input_index)
-        {
-            i.muted = mute;
+        w.log.push(format!("mute:{sink_index}:{mute}"));
+        for s in w.snap.sinks.iter_mut().filter(|s| s.index == sink_index) {
+            s.muted = mute;
         }
         Ok(())
     }
@@ -463,8 +459,9 @@ async fn stall_recovered_by_toggle_stops_ladder() {
 }
 
 #[tokio::test]
-async fn streams_are_muted_while_the_output_is_rebuilt() {
-    // While the output is gone, streams fall back to the speakers: keep them silent.
+async fn speakers_are_muted_while_the_output_is_rebuilt() {
+    // While the output is gone, streams fall back to the speakers: keep those silent.
+    // Streams themselves are never muted: apps re-create them and the mute would stick.
     let mut w = stalled_world();
     w.transport_after_toggle = Some("active".into());
     let (world, handle) = start(w, fast());
@@ -477,11 +474,16 @@ async fn streams_are_muted_while_the_output_is_rebuilt() {
     settle(100).await;
     let w = lock(&world);
     let at = |entry: &str| w.log.iter().position(|l| l == entry);
-    let muted = at("mute:100:true").expect("stream muted");
+    let muted = at(&format!("mute:{SPEAKERS}:true")).expect("speakers muted");
     let off = at("profile:off").expect("toggled");
-    let unmuted = at("mute:100:false").expect("stream unmuted");
+    let unmuted = at(&format!("mute:{SPEAKERS}:false")).expect("speakers unmuted");
     assert!(muted < off && off < unmuted, "log: {:?}", w.log);
-    assert!(!w.snap.sink_inputs.iter().any(|i| i.muted));
+    assert!(!w.snap.sinks.iter().any(|s| s.muted));
+    assert!(
+        !w.log
+            .iter()
+            .any(|l| l.starts_with(&format!("mute:{BT_SINK}")))
+    );
 }
 
 #[tokio::test]
@@ -648,7 +650,6 @@ async fn default_sink_and_streams_restored_after_range_loss() {
         corked: true,
         app: None,
         role: None,
-        muted: false,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -721,7 +722,6 @@ async fn default_restored_by_a_new_guard_after_reconnect() {
         corked: true,
         app: None,
         role: None,
-        muted: false,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -896,6 +896,7 @@ fn codec_names() {
         mac: None,
         state: SinkState::Idle,
         codec: Some("aac".into()),
+        muted: false,
     };
     assert_eq!(codec_for("a2dp-sink", Some(&sink)).as_deref(), Some("aac"));
 }

@@ -291,7 +291,7 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     last_repair: Option<Instant>,
     /// Another device has the AirPods: leave the dead output alone until they come back.
     away: bool,
-    /// Streams muted while the output is rebuilt, so they don't play on the speakers.
+    /// Other outputs muted while ours is rebuilt, so nothing plays on the speakers.
     hushed: Vec<u32>,
 }
 
@@ -782,22 +782,22 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             .collect()
     }
 
-    /// Mutes the streams playing to this device for a rebuild: while the output is gone,
-    /// WirePlumber parks them on the speakers. Streams already muted are left alone.
-    async fn hush(&mut self, streams: &[u32]) {
+    /// Mutes the other hardware outputs (speakers, HDMI) for a rebuild: while ours is
+    /// gone, WirePlumber parks every stream on one of them. Outputs stay put while the
+    /// streams get re-created, so unmuting them afterwards is reliable, and no app's own
+    /// saved mute state is touched. Outputs already muted are left alone.
+    async fn hush(&mut self) {
         let Ok(snap) = self.pulse.snapshot().await else {
             return;
         };
-        for input in snap
-            .sink_inputs
-            .iter()
-            .filter(|i| streams.contains(&i.index) && !i.muted)
-        {
-            match self.pulse.set_sink_input_mute(input.index, true).await {
-                Ok(()) => self.hushed.push(input.index),
+        for sink in snap.sinks.iter().filter(|s| {
+            s.card.is_some() && s.mac.as_deref() != Some(self.mac_str.as_str()) && !s.muted
+        }) {
+            match self.pulse.set_sink_mute(sink.index, true).await {
+                Ok(()) => self.hushed.push(sink.index),
                 Err(e) => debug!(
-                    "[audio {}] mute stream {} failed: {}",
-                    self.mac_str, input.index, e
+                    "[audio {}] mute output {} failed: {}",
+                    self.mac_str, sink.name, e
                 ),
             }
         }
@@ -805,11 +805,11 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
 
     /// Unmutes what [`Self::hush`] muted.
     async fn unhush(&mut self) {
-        for input in std::mem::take(&mut self.hushed) {
-            if let Err(e) = self.pulse.set_sink_input_mute(input, false).await {
+        for sink in std::mem::take(&mut self.hushed) {
+            if let Err(e) = self.pulse.set_sink_mute(sink, false).await {
                 debug!(
-                    "[audio {}] unmute stream {} failed: {}",
-                    self.mac_str, input, e
+                    "[audio {}] unmute output {} failed: {}",
+                    self.mac_str, sink, e
                 );
             }
         }
@@ -1058,7 +1058,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             // Never toggle to "off" without a profile to come back to.
             return Err(Abort::Failed("the device offers no A2DP profile".into()));
         }
-        self.hush(&streams).await;
+        self.hush().await;
         if let Err(e) = self.pulse.set_card_profile(card.index, "off").await {
             warn!("[audio {}] toggle to off failed: {}", self.mac_str, e);
         }
