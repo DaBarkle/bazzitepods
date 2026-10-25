@@ -95,6 +95,8 @@ pub(crate) enum Cmd {
 const FAST_WINDOW: Duration = Duration::from_secs(10);
 /// Stall threshold inside that window.
 const FAST_STALL: Duration = Duration::from_millis(800);
+/// Minimum time between forced output rebuilds on take-back.
+const REPAIR_COOLDOWN: Duration = Duration::from_secs(20);
 
 const PREFERRED_A2DP: [&str; 4] = [
     "a2dp-sink-aac",
@@ -283,6 +285,7 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     fast_until: Option<Instant>,
     /// Rebuild the output at the next monitor pass, stall or not.
     repair_pending: bool,
+    last_repair: Option<Instant>,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -317,6 +320,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             wearing: false,
             fast_until: None,
             repair_pending: false,
+            last_repair: None,
         }
     }
 
@@ -421,7 +425,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             Cmd::Repair => {
                 if self.linked {
                     self.on_cmd(Cmd::RouteBack);
-                    self.repair_pending = true;
+                    // Rebuilding drops every stream for a moment. If the route keeps
+                    // bouncing, fall back to repairing only a real stall.
+                    if self.last_repair.is_none_or(|t| now - t >= REPAIR_COOLDOWN) {
+                        self.last_repair = Some(now);
+                        self.repair_pending = true;
+                    }
                 }
             }
             Cmd::Shutdown => self.shutdown = true,
@@ -980,8 +989,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         // Step 1: toggle off -> same A2DP profile. Done back-to-back without
         // interruption checks so we can never stop in between.
         self.set_health(AudioHealth::Recovering { step: 1 });
-        let mut order = vec![current.clone()];
-        order.extend(candidates.iter().filter(|c| **c != current).cloned());
+        // Best codec first (AAC), so a recovery never settles for SBC when AAC is offered
+        // just because an earlier attempt fell back to it.
+        let mut order = candidates.clone();
+        if !current.is_empty() && !order.contains(&current) {
+            order.push(current.clone());
+        }
         order.retain(|p| !p.is_empty());
         if order.is_empty() {
             // Never toggle to "off" without a profile to come back to.

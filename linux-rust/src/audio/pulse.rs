@@ -135,7 +135,7 @@ impl PulseSnapshot {
 
     /// Streams that are playing right now, leaving out system sounds and background
     /// streams that never stop (EasyEffects re-plays every app through its own stream;
-    /// Discord keeps idle WebRTC voice streams open), so only real players count.
+    /// Discord keeps WebRTC voice streams open), so only real players count.
     pub fn playing_streams(&self) -> Vec<u32> {
         self.sink_inputs
             .iter()
@@ -238,7 +238,7 @@ impl PulseApi for LibPulse {
 /// of a longer string) into upper-case colon form.
 fn is_background_app(app: &str) -> bool {
     let app = app.to_ascii_lowercase();
-    ["easyeffects", "pulseeffects", "webrtc"]
+    ["easyeffects", "pulseeffects", "webrtc", "discord"]
         .iter()
         .any(|a| app.contains(a))
 }

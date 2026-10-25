@@ -557,10 +557,12 @@ async fn handle_event(
             // never sends OwnsConnection = 0, so this is the reliable signal.
             let had = owns_audio(&ctx.hub, &mac_s);
             match route_owner(source, &ctx.local_mac) {
-                // Nobody is playing. If another device just let go while something here is
-                // still playing (a notification took the AirPods for a moment), take them
-                // back now instead of waiting for the AirPods to drift back.
-                None if had == Some(false) => {
+                // Nobody is playing. If another device let go while something here is still
+                // playing, take the AirPods back now instead of waiting for them to drift
+                // back. Only after a notification borrowed them or the other device stopped
+                // its media: the gap during a hand-over to an iPhone that starts playing
+                // looks the same, and taking them back then makes the two fight.
+                None if had == Some(false) && route.may_reclaim() => {
                     let worn = aacp
                         .state
                         .lock()
@@ -612,15 +614,19 @@ async fn handle_event(
             route.lock().call = source.r#type == AudioSourceType::Call
                 && route_owner(source, &ctx.local_mac) == Some(false);
         }
-        AACPEvent::PeerStreaming(true) if owns_audio(&ctx.hub, &mac_s) == Some(false) => {
-            info!("The other device started playing media; pausing local media");
-            media.lock().await.pause_all_media().await;
+        AACPEvent::PeerStreaming(streaming) => {
+            route.lock().peer_stopped = !streaming;
+            if *streaming && owns_audio(&ctx.hub, &mac_s) == Some(false) {
+                info!("The other device started playing media; pausing local media");
+                media.lock().await.pause_all_media().await;
+            }
         }
         AACPEvent::OwnershipToFalseRequest if route.just_claimed() => {
             debug!("Ignoring a release request right after taking the AirPods");
         }
         AACPEvent::OwnershipToFalseRequest => {
             info!("AirPods asked us to release ownership; pausing local media");
+            route.lost(false);
             let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x00]));
             media.lock().await.pause_all_media().await;
         }
@@ -655,6 +661,9 @@ async fn route_lost(
     media: &Arc<Mutex<MediaController>>,
     route: &RouteWatch,
 ) {
+    let borrowed =
+        source.r#type != AudioSourceType::Call && !aacp.state.lock().await.peer_streaming;
+    route.lost(borrowed);
     if source.r#type == AudioSourceType::Call {
         info!(
             "{} has a call on the AirPods; pausing local media",
@@ -701,6 +710,11 @@ struct RouteState {
     claimed_at: Option<Instant>,
     /// Another device has a phone call on the AirPods: never take them back mid-call.
     call: bool,
+    /// When this PC last lost the AirPods, and whether only to a notification.
+    lost_at: Option<Instant>,
+    lost_to_borrow: bool,
+    /// The other device said its media stopped.
+    peer_stopped: bool,
 }
 
 /// Follows playing audio streams between ticks. A stream counts once it has played for
@@ -748,6 +762,23 @@ impl RouteWatch {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// Records that another device took the AirPods; `borrowed` when it plays no media
+    /// (a notification).
+    fn lost(&self, borrowed: bool) {
+        let mut state = self.lock();
+        state.lost_at = Some(Instant::now());
+        state.lost_to_borrow = borrowed;
+        state.peer_stopped = false;
+    }
+
+    /// Whether "the other device let go" may be taken as a cue to take the AirPods back:
+    /// it only borrowed them or has stopped its media, and the hand-over gap is over.
+    fn may_reclaim(&self) -> bool {
+        let state = self.lock();
+        let settled = state.lost_at.is_none_or(|t| t.elapsed() >= HANDOVER_GAP);
+        settled && !state.call && (state.lost_to_borrow || state.peer_stopped)
+    }
+
     /// True for a moment after this PC took the AirPods, while reports from before the
     /// switch may still arrive.
     fn just_claimed(&self) -> bool {
@@ -759,6 +790,9 @@ impl RouteWatch {
 
 /// How long after taking the AirPods to ignore reports that say another device has them.
 const CLAIM_GRACE: Duration = Duration::from_secs(3);
+
+/// A hand-over to another device can pass through "nobody" for a moment; ignore that.
+const HANDOVER_GAP: Duration = Duration::from_secs(2);
 
 /// How often to compare local playback with who has the AirPods.
 const ROUTE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
@@ -955,6 +989,31 @@ mod tests {
             mac: mac.to_string(),
             r#type,
         }
+    }
+
+    #[test]
+    fn take_back_on_let_go_only_after_a_borrow_or_a_stop() {
+        let route = RouteWatch::default();
+        let settle = |route: &RouteWatch| {
+            route.lock().lost_at = Instant::now().checked_sub(HANDOVER_GAP * 2);
+        };
+        // The iPhone took the AirPods to play media: its hand-over gap and its media
+        // never count as letting go.
+        route.lost(false);
+        assert!(!route.may_reclaim());
+        settle(&route);
+        assert!(!route.may_reclaim());
+        // It stopped playing: letting go now means the PC may have them back.
+        route.lock().peer_stopped = true;
+        assert!(route.may_reclaim());
+        // A notification borrowed them: once the hand-over gap is over.
+        route.lost(true);
+        assert!(!route.may_reclaim());
+        settle(&route);
+        assert!(route.may_reclaim());
+        // Never during a call.
+        route.lock().call = true;
+        assert!(!route.may_reclaim());
     }
 
     #[test]
