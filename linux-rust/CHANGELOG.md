@@ -1,0 +1,54 @@
+# Changelog
+
+All notable changes to BazzitePods are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.2.2] - 2026-10-25
+
+### Fixed
+- Switching back from an iPhone now works with media apps that do not publish an MPRIS
+  player, such as the Plex desktop app. The AirPods return to the PC about a second after
+  playback starts. ([#5])
+
+### Changed
+- Playback is now also detected from the system's audio streams. Background streams that
+  never stop, such as Discord's idle voice connections and EasyEffects' processing stream,
+  are ignored. ([#5])
+- A failed send right after the AirPods disconnect is now logged at debug level instead of
+  as an error. ([#5])
+
+## [0.2.1] - 2026-10-25
+
+### Fixed
+- The PC takes the AirPods back about a second after playback starts, instead of 7 to 11
+  seconds. ([#4])
+- iPhone notifications no longer take the AirPods while the PC is playing. The message
+  that tells other Apple devices the PC is playing was malformed and has been corrected.
+  ([#3], [#4])
+- Short status messages from the iPhone no longer pause playback on the PC. ([#4])
+- If a notification does take the AirPods, the PC gets them back as soon as the iPhone
+  lets go. ([#3])
+
+## [0.2.0] - 2026-10-25
+
+First release of BazzitePods, a zero-config AirPods app for Bazzite and other Flatpak
+desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
+
+### Added
+- Battery levels for the left pod, right pod and case, with charging state.
+- Game overlay with Compact, Pop-up, Full and Off modes, a liquid-glass look and
+  translucency over fullscreen games. It uses no injection and no screen capture.
+- Switching between devices: **On another device** status and a **Use on this PC** button.
+- Noise control, ear detection, conversation awareness and renaming.
+- One-line installer, autostart at login and a tray icon.
+
+### Fixed
+- Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
+
+[0.2.2]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/DaBarkle/bazzitepods/releases/tag/v0.2.0
+[#3]: https://github.com/DaBarkle/bazzitepods/pull/3
+[#4]: https://github.com/DaBarkle/bazzitepods/pull/4
+[#5]: https://github.com/DaBarkle/bazzitepods/pull/5
