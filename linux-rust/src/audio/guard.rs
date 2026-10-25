@@ -99,6 +99,10 @@ const FAST_WINDOW: Duration = Duration::from_secs(10);
 /// Stall threshold inside that window.
 const FAST_STALL: Duration = Duration::from_millis(800);
 /// Minimum time between forced output rebuilds on take-back.
+/// After a rebuild, how long to keep the speakers muted while WirePlumber moves the
+/// streams back onto the AirPods.
+const UNHUSH_WAIT: Duration = Duration::from_secs(2);
+const UNHUSH_MARGIN: Duration = Duration::from_millis(250);
 const REPAIR_COOLDOWN: Duration = Duration::from_secs(20);
 
 const PREFERRED_A2DP: [&str; 4] = [
@@ -803,8 +807,32 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         }
     }
 
-    /// Unmutes what [`Self::hush`] muted.
+    /// Unmutes what [`Self::hush`] muted, once nothing plays on those outputs any more:
+    /// WirePlumber moves the streams back a moment after the new output appears, and
+    /// unmuting before that lets the tail end play on the speakers.
     async fn unhush(&mut self) {
+        if self.hushed.is_empty() {
+            return;
+        }
+        let deadline = Instant::now() + UNHUSH_WAIT;
+        loop {
+            let busy = match self.pulse.snapshot().await {
+                Ok(snap) => snap
+                    .sinks
+                    .iter()
+                    .any(|s| self.hushed.contains(&s.index) && s.state == SinkState::Running),
+                Err(_) => false,
+            };
+            if !busy {
+                // A little longer for the last buffered audio on its way out.
+                sleep(UNHUSH_MARGIN).await;
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            sleep(self.cfg.poll).await;
+        }
         for sink in std::mem::take(&mut self.hushed) {
             if let Err(e) = self.pulse.set_sink_mute(sink, false).await {
                 debug!(
