@@ -499,11 +499,14 @@ async fn handle_event(
             if let Some(audio) = audio {
                 audio.wearing_changed(new.contains(&EarDetectionStatus::InEar));
             }
-            media
-                .lock()
-                .await
-                .handle_ear_detection(old.clone(), new.clone())
-                .await;
+            // The AirPods repeat their status; only a change means something moved.
+            if old != new {
+                media
+                    .lock()
+                    .await
+                    .handle_ear_detection(old.clone(), new.clone())
+                    .await;
+            }
         }
         AACPEvent::ConversationalAwareness(status) => {
             media
@@ -869,7 +872,11 @@ async fn watch_route(
         // MPRIS players were paused when the other device took over, so one playing now
         // was started here. A player without MPRIS can't be paused, so only a stream
         // that just started counts for those.
-        Some(false) if mpris || stream_started => {
+        // Not right after pausing for the other device: that playback is the tail end of
+        // what was paused, not a fresh press of play.
+        Some(false)
+            if (mpris || stream_started) && !crate::media_controller::auto_paused_recently() =>
+        {
             route.lock().announced = None;
             let borrowed = route
                 .lock()
