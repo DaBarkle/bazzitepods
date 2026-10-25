@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- LibrePods symbolic (tray) icon. Recoloured by Plasma (ColorScheme-Text) and by GTK (-symbolic suffix). -->
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <style id="current-color-scheme" type="text/css">.ColorScheme-Text{color:#232629;}</style>
+  <g class="ColorScheme-Text" fill="currentColor">
+    <!-- battery ring, open at the bottom -->
+    <path d="M3.74 13.86A7.25 7.25 0 0 1 8 .75a7.25 7.25 0 0 1 4.26 13.11l-.88-1.21A5.75 5.75 0 0 0 8 2.25a5.75 5.75 0 0 0-3.38 10.4z"/>
+    <!-- left bud -->
+    <path d="M5.6 4.4C4.53 4.4 3.7 5.2 3.7 6.2S4.53 8 5.6 8l.2-.01v3.31a.7.7 0 0 0 1.4 0V6.1C7.12 5.15 6.46 4.4 5.6 4.4z"/>
+    <!-- right bud -->
+    <path d="M10.4 4.4c1.07 0 1.9.8 1.9 1.8S11.47 8 10.4 8l-.2-.01v3.31a.7.7 0 0 1-1.4 0V6.1c.08-.95.74-1.7 1.6-1.7z"/>
+  </g>
+</svg>

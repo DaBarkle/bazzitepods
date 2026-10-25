@@ -1,3 +1,4 @@
+mod autostart;
 mod bluetooth;
 mod devices;
 mod media_controller;
