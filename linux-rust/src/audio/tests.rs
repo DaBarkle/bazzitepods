@@ -118,6 +118,7 @@ impl World {
                     corked: false,
                     app: None,
                     role: None,
+                    muted: false,
                 });
             }
         } else if have {
@@ -190,6 +191,20 @@ impl PulseApi for FakePulse {
             .filter(|i| i.index == input_index)
         {
             i.sink = sink_index;
+        }
+        Ok(())
+    }
+
+    async fn set_sink_input_mute(&self, input_index: u32, mute: bool) -> Result<(), PulseError> {
+        let mut w = lock(&self.0);
+        w.log.push(format!("mute:{input_index}:{mute}"));
+        for i in w
+            .snap
+            .sink_inputs
+            .iter_mut()
+            .filter(|i| i.index == input_index)
+        {
+            i.muted = mute;
         }
         Ok(())
     }
@@ -448,6 +463,28 @@ async fn stall_recovered_by_toggle_stops_ladder() {
 }
 
 #[tokio::test]
+async fn streams_are_muted_while_the_output_is_rebuilt() {
+    // While the output is gone, streams fall back to the speakers: keep them silent.
+    let mut w = stalled_world();
+    w.transport_after_toggle = Some("active".into());
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "recovering", |h| {
+        matches!(h, AudioHealth::Recovering { .. })
+    })
+    .await;
+    wait_health(&handle, "ready again", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    let w = lock(&world);
+    let at = |entry: &str| w.log.iter().position(|l| l == entry);
+    let muted = at("mute:100:true").expect("stream muted");
+    let off = at("profile:off").expect("toggled");
+    let unmuted = at("mute:100:false").expect("stream unmuted");
+    assert!(muted < off && off < unmuted, "log: {:?}", w.log);
+    assert!(!w.snap.sink_inputs.iter().any(|i| i.muted));
+}
+
+#[tokio::test]
 async fn headset_with_active_recording_is_left_alone() {
     let mut w = World::new();
     w.add_card("headset-head-unit");
@@ -611,6 +648,7 @@ async fn default_sink_and_streams_restored_after_range_loss() {
         corked: true,
         app: None,
         role: None,
+        muted: false,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -683,6 +721,7 @@ async fn default_restored_by_a_new_guard_after_reconnect() {
         corked: true,
         app: None,
         role: None,
+        muted: false,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();

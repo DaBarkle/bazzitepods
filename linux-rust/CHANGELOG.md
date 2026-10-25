@@ -25,6 +25,9 @@ All notable changes to BazzitePods are documented here. The format follows
 - When the iPhone stops playing, the AirPods come back to the PC by themselves if media
   is still playing here, including media that was already playing before the iPhone
   connected or BazzitePods started. ([#6])
+- Audio no longer plays through the speakers for a moment while the AirPods' output is
+  rebuilt after a switch. Streams are muted for that second and unmuted on the AirPods.
+  ([#6])
 - Switching back from an iPhone now works with media apps that do not publish an MPRIS
   player, such as the Plex desktop app. The AirPods return to the PC about a second after
   playback starts. ([#5])

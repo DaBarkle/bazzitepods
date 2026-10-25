@@ -68,6 +68,7 @@ pub struct SinkInputInfo {
     pub app: Option<String>,
     /// `media.role`, e.g. "music", "event" (notification sounds), "phone".
     pub role: Option<String>,
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -196,6 +197,11 @@ pub trait PulseApi: Send + Sync + 'static {
         input_index: u32,
         sink_index: u32,
     ) -> impl Future<Output = Result<(), PulseError>> + Send;
+    fn set_sink_input_mute(
+        &self,
+        input_index: u32,
+        mute: bool,
+    ) -> impl Future<Output = Result<(), PulseError>> + Send;
 }
 
 /// Real backend.
@@ -227,6 +233,10 @@ impl PulseApi for LibPulse {
 
     async fn move_sink_input(&self, input_index: u32, sink_index: u32) -> Result<(), PulseError> {
         blocking(move || move_sink_input_sync(input_index, sink_index, DEFAULT_DEADLINE)).await
+    }
+
+    async fn set_sink_input_mute(&self, input_index: u32, mute: bool) -> Result<(), PulseError> {
+        blocking(move || set_sink_input_mute_sync(input_index, mute, DEFAULT_DEADLINE)).await
     }
 }
 
@@ -482,6 +492,7 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 corked: item.corked,
                 app: item.proplist.get_str("application.name"),
                 role: item.proplist.get_str("media.role"),
+                muted: item.mute,
             });
         }
     });
@@ -561,6 +572,18 @@ pub fn move_sink_input_sync(
     conn.wait_success("move sink input", &slot)
 }
 
+pub fn set_sink_input_mute_sync(
+    input_index: u32,
+    mute: bool,
+    timeout: Duration,
+) -> Result<(), PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let (slot, cb) = success_slot();
+    let mut introspect = conn.context.introspect();
+    let _op = introspect.set_sink_input_mute(input_index, mute, Some(cb));
+    conn.wait_success("mute sink input", &slot)
+}
+
 fn get_sink_volume(conn: &mut Conn, sink_name: &str) -> Result<ChannelVolumes, PulseError> {
     let introspect = conn.context.introspect();
     let volume: Rc<Cell<Option<ChannelVolumes>>> = Rc::default();
@@ -617,6 +640,7 @@ mod tests {
             corked,
             app: Some(app.into()),
             role: role.map(Into::into),
+            muted: false,
         };
         let snap = PulseSnapshot {
             sink_inputs: vec![

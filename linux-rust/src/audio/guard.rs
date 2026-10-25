@@ -291,6 +291,8 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     last_repair: Option<Instant>,
     /// Another device has the AirPods: leave the dead output alone until they come back.
     away: bool,
+    /// Streams muted while the output is rebuilt, so they don't play on the speakers.
+    hushed: Vec<u32>,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -327,6 +329,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             repair_pending: false,
             last_repair: None,
             away: false,
+            hushed: Vec::new(),
         }
     }
 
@@ -779,6 +782,39 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             .collect()
     }
 
+    /// Mutes the streams playing to this device for a rebuild: while the output is gone,
+    /// WirePlumber parks them on the speakers. Streams already muted are left alone.
+    async fn hush(&mut self, streams: &[u32]) {
+        let Ok(snap) = self.pulse.snapshot().await else {
+            return;
+        };
+        for input in snap
+            .sink_inputs
+            .iter()
+            .filter(|i| streams.contains(&i.index) && !i.muted)
+        {
+            match self.pulse.set_sink_input_mute(input.index, true).await {
+                Ok(()) => self.hushed.push(input.index),
+                Err(e) => debug!(
+                    "[audio {}] mute stream {} failed: {}",
+                    self.mac_str, input.index, e
+                ),
+            }
+        }
+    }
+
+    /// Unmutes what [`Self::hush`] muted.
+    async fn unhush(&mut self) {
+        for input in std::mem::take(&mut self.hushed) {
+            if let Err(e) = self.pulse.set_sink_input_mute(input, false).await {
+                debug!(
+                    "[audio {}] unmute stream {} failed: {}",
+                    self.mac_str, input, e
+                );
+            }
+        }
+    }
+
     /// A profile toggle recreates the sink and WirePlumber parks streams on the fallback
     /// (speakers). Move them back, and restore the default if it was ours.
     async fn restore_streams(&mut self, streams: &[u32]) {
@@ -966,6 +1002,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         );
         let result = self.run_ladder().await;
         self.ensure_not_off().await;
+        self.unhush().await;
         match result {
             Ok(Some(step)) => {
                 info!("[audio {}] recovered at step {}", self.mac_str, step);
@@ -1021,12 +1058,14 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             // Never toggle to "off" without a profile to come back to.
             return Err(Abort::Failed("the device offers no A2DP profile".into()));
         }
+        self.hush(&streams).await;
         if let Err(e) = self.pulse.set_card_profile(card.index, "off").await {
             warn!("[audio {}] toggle to off failed: {}", self.mac_str, e);
         }
         sleep(self.cfg.toggle_gap).await;
         let step1 = self.apply_profile(&order).await;
         self.restore_streams(&streams).await;
+        self.unhush().await;
         self.check_interrupt()?;
         if step1.is_ok() && self.stall_resolved().await {
             return Ok(Some(1));
