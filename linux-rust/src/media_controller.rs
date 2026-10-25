@@ -135,7 +135,6 @@ impl MediaController {
             let mut state = self.state.lock().await;
             let was_playing = state.is_playing;
             state.is_playing = is_playing;
-            let local_mac = state.local_mac.clone();
             drop(state);
 
             if !was_playing && is_playing {
