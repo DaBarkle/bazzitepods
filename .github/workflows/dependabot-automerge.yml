@@ -1,0 +1,94 @@
+# Merges Dependabot security updates for the BazzitePods app by itself, but only
+# when they are safe to take without a human look:
+#   * the PR was opened by Dependabot,
+#   * it updates a Rust crate (Cargo) under linux-rust/,
+#   * it is a patch or minor version bump (major bumps can break things), and
+#   * the Flatpak build for that exact commit passed.
+# Everything else (major bumps, non-Cargo updates, failed builds) is left open for
+# the daily Dependabot check and for David.
+#
+# Note: a Cargo.lock bump also needs flatpak/cargo-sources.json regenerated, or the
+# offline Flatpak build fails. When the daily check pushes that fix, this workflow
+# runs again on the new commit and merges once the rebuilt Flatpak passes.
+name: Dependabot auto-merge
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  automerge:
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Read Dependabot metadata
+        id: meta
+        uses: dependabot/fetch-metadata@v2
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Decide whether this update can merge by itself
+        id: eligible
+        env:
+          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
+          DIRECTORY: ${{ steps.meta.outputs.directory }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+        run: |
+          echo "ecosystem=$ECOSYSTEM directory=$DIRECTORY update-type=$UPDATE_TYPE"
+          if [ "$ECOSYSTEM" = "cargo" ] \
+             && [ "${DIRECTORY%/}" = "/linux-rust" ] \
+             && { [ "$UPDATE_TYPE" = "version-update:semver-patch" ] \
+                  || [ "$UPDATE_TYPE" = "version-update:semver-minor" ]; }; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not a patch/minor Cargo update for linux-rust; leaving it for review."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for the Flatpak build of this commit
+        id: build
+        if: steps.eligible.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Poll the "Build Flatpak bundle" check on the PR's head commit until it
+          # finishes (it can take a while on a cold cache).
+          for _ in $(seq 1 110); do
+            run="$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=Build%20Flatpak%20bundle" \
+              --jq '.check_runs | sort_by(.started_at) | last | "\(.status) \(.conclusion)"')"
+            echo "Flatpak build: ${run:-not started yet}"
+            case "$run" in
+              "completed success")
+                echo "passed=true" >> "$GITHUB_OUTPUT"
+                exit 0 ;;
+              completed*)
+                echo "Flatpak build did not pass; leaving the PR open."
+                echo "passed=false" >> "$GITHUB_OUTPUT"
+                exit 0 ;;
+            esac
+            sleep 60
+          done
+          echo "Timed out waiting for the Flatpak build; leaving the PR open."
+          echo "passed=false" >> "$GITHUB_OUTPUT"
+
+      - name: Merge
+        if: steps.build.outputs.passed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # --match-head-commit: only merge the exact commit that was built.
+          gh pr merge "$PR_URL" --squash --delete-branch --match-head-commit "$SHA"
