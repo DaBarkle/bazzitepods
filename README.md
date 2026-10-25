@@ -59,10 +59,13 @@ up within a few seconds.
 - **Controls.** Noise control (when your model has it), ear detection with media pause and
   resume, conversational awareness and renaming. Only the controls your model supports are
   shown.
-- **Multiple devices.** When your iPhone or Mac takes the AirPods, BazzitePods pauses
-  what's playing here and shows **On another device**, while the AirPods stay connected.
-  Press **Use on this PC** (or just start playing something) to bring the audio back. The
-  overlay pops up when the audio moves.
+- **Multiple devices.** The device you last pressed play on gets the AirPods, like
+  between an iPhone and a Mac. When your iPhone takes them, BazzitePods pauses what's
+  playing here and the overlay shows **Playing on iPhone**, while the AirPods stay
+  connected. Press play in any app on the PC (or **Use on this PC**) and they come back
+  within about a second, and the overlay says **Back on this PC**. A notification on the
+  phone doesn't take them away while the PC is playing, and a phone call is never
+  interrupted.
 - **Hands-off.** Survives Bluetooth restarts, adapter hot-plug and suspend/resume. It never
   turns Bluetooth on by itself. Launching it a second time just opens the window.
 

@@ -66,6 +66,8 @@ pub struct SinkInputInfo {
     pub corked: bool,
     /// `application.name` of the stream's client, if published.
     pub app: Option<String>,
+    /// `media.role`, e.g. "music", "event" (notification sounds), "phone".
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -131,13 +133,19 @@ impl PulseSnapshot {
             .count()
     }
 
-    /// Streams that are playing right now, leaving out background streams that never stop
-    /// (EasyEffects re-plays every app through its own stream; Discord keeps idle WebRTC
-    /// voice streams open) so only real players count.
+    /// Streams that are playing right now, leaving out system sounds and background
+    /// streams that never stop (EasyEffects re-plays every app through its own stream;
+    /// Discord keeps idle WebRTC voice streams open), so only real players count.
     pub fn playing_streams(&self) -> Vec<u32> {
         self.sink_inputs
             .iter()
             .filter(|i| !i.corked && !i.app.as_deref().is_some_and(is_background_app))
+            // Notification and other system sounds never mean "the user pressed play".
+            .filter(|i| {
+                !i.role
+                    .as_deref()
+                    .is_some_and(|r| r == "event" || r == "notification")
+            })
             .map(|i| i.index)
             .collect()
     }
@@ -473,6 +481,7 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 sink: item.sink,
                 corked: item.corked,
                 app: item.proplist.get_str("application.name"),
+                role: item.proplist.get_str("media.role"),
             });
         }
     });
@@ -599,6 +608,28 @@ pub fn set_sink_volume_percent_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playing_streams_skip_background_and_system_sounds() {
+        let input = |index, corked, app: &str, role: Option<&str>| SinkInputInfo {
+            index,
+            sink: 1,
+            corked,
+            app: Some(app.into()),
+            role: role.map(Into::into),
+        };
+        let snap = PulseSnapshot {
+            sink_inputs: vec![
+                input(1, false, "Plex", Some("video")),
+                input(2, true, "Brave", Some("music")),
+                input(3, false, "easyeffects", None),
+                input(4, false, "WEBRTC VoiceEngine", Some("phone")),
+                input(5, false, "plasmashell", Some("event")),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(snap.playing_streams(), vec![1]);
+    }
 
     #[test]
     fn normalize_mac_variants() {

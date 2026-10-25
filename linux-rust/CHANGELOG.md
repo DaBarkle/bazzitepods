@@ -6,7 +6,16 @@ All notable changes to BazzitePods are documented here. The format follows
 
 ## [0.2.2] - 2026-10-25
 
+### Added
+- The overlay names the device that took the AirPods ("Playing on iPhone") and says
+  "Back on this PC" when they return. The window's banner names the device too. ([#6])
+
 ### Fixed
+- Pressing play on the PC while the iPhone is still playing no longer pauses the PC
+  again: reports from before the switch are ignored for a moment. ([#6])
+- A phone call on the iPhone pauses the PC right away, and the PC never takes the AirPods
+  back during a call. ([#6])
+- Notification sounds on the PC no longer count as playback. ([#6])
 - Switching back from an iPhone now works with media apps that do not publish an MPRIS
   player, such as the Plex desktop app. The AirPods return to the PC about a second after
   playback starts. ([#5])
@@ -52,3 +61,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#3]: https://github.com/DaBarkle/bazzitepods/pull/3
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
+[#6]: https://github.com/DaBarkle/bazzitepods/pull/6

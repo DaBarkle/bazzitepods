@@ -97,10 +97,12 @@
   <releases>
     <release version="0.2.2" date="2026-10-25">
       <description>
-        <p>Switching back from an iPhone now works with any media app.</p>
+        <p>Reliable switching with an iPhone for every app, with overlay feedback.</p>
         <ul>
           <li>The AirPods return to the PC about a second after playback starts in apps that do not report playback to the system, such as the Plex desktop app</li>
-          <li>Idle voice-chat streams and audio effects no longer count as playback</li>
+          <li>Idle voice-chat streams, audio effects and notification sounds no longer count as playback</li>
+          <li>The overlay shows which device has the AirPods and when they are back on the PC</li>
+          <li>Phone calls on the iPhone are never interrupted</li>
         </ul>
       </description>
     </release>

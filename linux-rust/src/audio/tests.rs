@@ -117,6 +117,7 @@ impl World {
                     sink: BT_SINK,
                     corked: false,
                     app: None,
+                    role: None,
                 });
             }
         } else if have {
@@ -563,6 +564,7 @@ async fn default_sink_and_streams_restored_after_range_loss() {
         sink: BT_SINK,
         corked: true,
         app: None,
+        role: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -634,6 +636,7 @@ async fn default_restored_by_a_new_guard_after_reconnect() {
         sink: BT_SINK,
         corked: true,
         app: None,
+        role: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
