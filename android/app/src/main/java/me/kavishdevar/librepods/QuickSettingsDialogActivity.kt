@@ -1,20 +1,20 @@
 /*
-    LibrePods - AirPods liberated from Apple’s ecosystem
-    Copyright (C) 2025 LibrePods contributors
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
+ * LibrePods - AirPods liberated from Apple’s ecosystem
+ *
+ * Copyright (C) 2025 LibrePods contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
 
 @file:OptIn(ExperimentalEncodingApi::class)
 
@@ -85,15 +85,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
-import me.kavishdevar.librepods.presentation.components.AdaptiveRainbowBrush
-import me.kavishdevar.librepods.presentation.components.ControlCenterNoiseControlSegmentedButton
-import me.kavishdevar.librepods.presentation.components.IconAreaSize
-import me.kavishdevar.librepods.presentation.components.VerticalVolumeSlider
-import me.kavishdevar.librepods.data.AirPodsNotifications
-import me.kavishdevar.librepods.data.NoiseControlMode
+import me.kavishdevar.librepods.composables.AdaptiveRainbowBrush
+import me.kavishdevar.librepods.composables.ControlCenterNoiseControlSegmentedButton
+import me.kavishdevar.librepods.composables.IconAreaSize
+import me.kavishdevar.librepods.composables.VerticalVolumeSlider
+import me.kavishdevar.librepods.constants.AirPodsNotifications
+import me.kavishdevar.librepods.constants.NoiseControlMode
 import me.kavishdevar.librepods.services.AirPodsService
-import me.kavishdevar.librepods.presentation.theme.LibrePodsTheme
-import me.kavishdevar.librepods.bluetooth.AACPManager
+import me.kavishdevar.librepods.ui.theme.LibrePodsTheme
+import me.kavishdevar.librepods.utils.AACPManager
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.math.abs
 
@@ -371,7 +371,7 @@ fun NewControlCenterDialogContent(
                 initialMode = NoiseControlMode.TRANSPARENCY
             }
             currentAncMode = initialMode
-            isConvAwarenessEnabled = sharedPreferences.getBoolean("conversation_awareness", true)
+            isConvAwarenessEnabled = sharedPreferences.getBoolean("conversational_awareness", true)
             Log.d("QSActivity", "Initial ANC: $currentAncMode, ConvAware: $isConvAwarenessEnabled")
         }
 
@@ -588,7 +588,7 @@ fun NewControlCenterDialogContent(
                                 ) {
                                     Icon(
                                         painter = painterResource(id = R.drawable.airpods),
-                                        contentDescription = "Conversation Awareness",
+                                        contentDescription = "Conversational Awareness",
                                         tint = Color.White,
                                         modifier = Modifier.size(32.dp)
                                     )
@@ -597,7 +597,7 @@ fun NewControlCenterDialogContent(
                                 Spacer(modifier = Modifier.height(8.dp))
 
                                 Text(
-                                    text = "Conversation\nAwareness",
+                                    text = "Conversational\nAwareness",
                                     color = Color.White,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,

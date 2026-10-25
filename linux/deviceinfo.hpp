@@ -197,12 +197,7 @@ public:
         int leftLevel = getBattery()->getState(Battery::Component::Left).level;
         int rightLevel = getBattery()->getState(Battery::Component::Right).level;
         int caseLevel = getBattery()->getState(Battery::Component::Case).level;
-        if (getBattery()->getPrimaryPod() == Battery::Component::Headset) {
-            int headsetLevel = getBattery()->getState(Battery::Component::Headset).level;
-            setBatteryStatus(QString("Headset: %1%").arg(headsetLevel));
-        } else {
-            setBatteryStatus(QString("Left: %1%, Right: %2%, Case: %3%").arg(leftLevel).arg(rightLevel).arg(caseLevel));
-        }
+        setBatteryStatus(QString("Left: %1%, Right: %2%, Case: %3%").arg(leftLevel).arg(rightLevel).arg(caseLevel));
     }
 
 signals:

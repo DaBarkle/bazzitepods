@@ -1,0 +1,103 @@
+APP_NAME := "librepods"
+APP_ID := "io.github.dabarkle.BazzitePods"
+DESKTOP_FILE := "assets/io.github.dabarkle.BazzitePods.desktop"
+ICON_FILE := "assets/icons/io.github.dabarkle.BazzitePods.png"
+FLATPAK_MANIFEST := "flatpak/io.github.dabarkle.BazzitePods.yml"
+CARGO_GENERATOR_URL := "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py"
+
+default: build-appimage
+
+build:
+    cargo build --release
+
+prepare:
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    tmpdir="$(mktemp -d)"
+    echo "Building AppDir in: $tmpdir"
+
+    mkdir -p "$tmpdir/usr/bin"
+    mkdir -p "$tmpdir/usr/share/applications"
+    mkdir -p "$tmpdir/usr/share/icons/hicolor/256x256/apps"
+
+    cp target/release/{{APP_NAME}} "$tmpdir/usr/bin/"
+    if [ -f target/release/{{APP_NAME}}-overlay ]; then cp target/release/{{APP_NAME}}-overlay "$tmpdir/usr/bin/"; fi
+    cp {{ICON_FILE}} "$tmpdir/usr/share/icons/hicolor/256x256/apps/{{APP_ID}}.png"
+    cp {{DESKTOP_FILE}} "$tmpdir/{{APP_NAME}}.desktop"
+
+    printf '%s\n' \
+        '#!/bin/bash' \
+        'HERE="$(dirname "$(readlink -f "$0")")"' \
+        'exec "$HERE/usr/bin/librepods" "$@"' \
+        > "$tmpdir/AppRun"
+
+    chmod +x "$tmpdir/AppRun"
+    echo "$tmpdir" > .appdir_path
+
+bundle:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmpdir="$(cat .appdir_path)"
+
+    linuxdeploy \
+        --appdir "$tmpdir" \
+        --executable "$tmpdir/usr/bin/{{APP_NAME}}" \
+        --desktop-file "$tmpdir/{{APP_NAME}}.desktop" \
+        --icon-file "$tmpdir/usr/share/icons/hicolor/256x256/apps/{{APP_ID}}.png"
+
+build-appimage: build prepare bundle
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmpdir="$(cat .appdir_path)"
+    mkdir -p dist
+    appimagetool "$tmpdir" "dist/LibrePods-x86_64.AppImage"
+    rm -rf "$tmpdir" .appdir_path
+    echo "Done!"
+
+
+tarball version:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo vendor vendor
+    mkdir -p dist .cargo
+    cat > .cargo/config.toml <<'EOF'
+    [source.crates-io]
+    replace-with = "vendored-sources"
+    [source.vendored-sources]
+    directory = "vendor"
+    EOF
+    TAR="librepods-v{{version}}-source.tar.gz"
+    tar -czf "dist/${TAR}" \
+      --transform "s,^,librepods-v{{version}}/," \
+      Cargo.toml Cargo.lock src vendor .cargo assets flatpak
+    echo "Created: dist/${TAR}"
+
+# Regenerate flatpak/cargo-sources.json from Cargo.lock (run after every Cargo.lock change).
+# Needs python3 with aiohttp and tomlkit (pip install --user aiohttp tomlkit).
+flatpak-sources:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp="$(mktemp -d)"
+    trap 'rm -rf "$tmp"' EXIT
+    curl -fsSL -o "$tmp/flatpak-cargo-generator.py" "{{CARGO_GENERATOR_URL}}"
+    python3 -I "$tmp/flatpak-cargo-generator.py" Cargo.lock -o flatpak/cargo-sources.json
+    echo "Updated flatpak/cargo-sources.json"
+
+# Build and install the Flatpak for the current user.
+flatpak:
+    flatpak-builder --user --install --force-clean --install-deps-from=flathub \
+        build-dir {{FLATPAK_MANIFEST}}
+
+# Build a distributable single-file bundle: dist/BazzitePods.flatpak
+flatpak-bundle:
+    flatpak-builder --force-clean --install-deps-from=flathub --user \
+        --repo=repo build-dir {{FLATPAK_MANIFEST}}
+    mkdir -p dist
+    flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo dist/BazzitePods.flatpak {{APP_ID}}
+
+# Static checks for the packaging files.
+lint-packaging:
+    desktop-file-validate {{DESKTOP_FILE}}
+    appstreamcli validate --no-net flatpak/{{APP_ID}}.metainfo.xml
+    shellcheck packaging/install-bazzite.sh

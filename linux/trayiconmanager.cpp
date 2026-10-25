@@ -36,7 +36,7 @@ void TrayIconManager::showNotification(const QString &title, const QString &mess
 
 void TrayIconManager::TrayIconManager::updateBatteryStatus(const QString &status)
 {
-    trayIcon->setToolTip(tr("Battery Status: ") + status);
+    trayIcon->setToolTip("Battery Status: " + status);
     updateIconFromBattery(status);
 }
 
@@ -57,20 +57,20 @@ void TrayIconManager::updateConversationalAwareness(bool enabled)
 void TrayIconManager::setupMenuActions()
 {
     // Open action
-    QAction *openAction = new QAction(tr("Open"), trayMenu);
+    QAction *openAction = new QAction("Open", trayMenu);
     trayMenu->addAction(openAction);
     connect(openAction, &QAction::triggered, qApp, [this](){emit openApp();});
 
     // Settings Menu
 
-    QAction *settingsMenu = new QAction(tr("Settings"), trayMenu);
+    QAction *settingsMenu = new QAction("Settings", trayMenu);
     trayMenu->addAction(settingsMenu);
     connect(settingsMenu, &QAction::triggered, qApp, [this](){emit openSettings();});
 
     trayMenu->addSeparator();
 
     // Conversational Awareness Toggle
-    caToggleAction = new QAction(tr("Toggle Conversational Awareness"), trayMenu);
+    caToggleAction = new QAction("Toggle Conversational Awareness", trayMenu);
     caToggleAction->setCheckable(true);
     trayMenu->addAction(caToggleAction);
     connect(caToggleAction, &QAction::triggered, this, [this](bool checked)
@@ -81,10 +81,10 @@ void TrayIconManager::setupMenuActions()
     // Noise Control Options
     noiseControlGroup = new QActionGroup(trayMenu);
     const QPair<QString, NoiseControlMode> noiseOptions[] = {
-        {tr("Adaptive"), NoiseControlMode::Adaptive},
-        {tr("Transparency"), NoiseControlMode::Transparency},
-        {tr("Noise Cancellation"), NoiseControlMode::NoiseCancellation},
-        {tr("Off"), NoiseControlMode::Off}};
+        {"Adaptive", NoiseControlMode::Adaptive},
+        {"Transparency", NoiseControlMode::Transparency},
+        {"Noise Cancellation", NoiseControlMode::NoiseCancellation},
+        {"Off", NoiseControlMode::Off}};
 
     for (auto option : noiseOptions)
     {
@@ -100,7 +100,7 @@ void TrayIconManager::setupMenuActions()
     trayMenu->addSeparator();
 
     // Quit action
-    QAction *quitAction = new QAction(tr("Quit"), trayMenu);
+    QAction *quitAction = new QAction("Quit", trayMenu);
     trayMenu->addAction(quitAction);
     connect(quitAction, &QAction::triggered, qApp, &QApplication::quit);
 }
@@ -109,26 +109,25 @@ void TrayIconManager::updateIconFromBattery(const QString &status)
 {
     int leftLevel = 0;
     int rightLevel = 0;
-    int minLevel = 0;
 
     if (!status.isEmpty())
     {
         // Parse the battery status string
         QStringList parts = status.split(", ");
-        if (parts.size() >= 2) {
+        if (parts.size() >= 2)
+        {
             leftLevel = parts[0].split(": ")[1].replace("%", "").toInt();
             rightLevel = parts[1].split(": ")[1].replace("%", "").toInt();
-            minLevel = (leftLevel == 0) ? rightLevel : (rightLevel == 0) ? leftLevel
-                                                                    : qMin(leftLevel, rightLevel);
-        } else if (parts.size() == 1) {
-            minLevel = parts[0].split(": ")[1].replace("%", "").toInt();
         }
     }
+    
+    int minLevel = (leftLevel == 0) ? rightLevel : (rightLevel == 0) ? leftLevel
+                                                                     : qMin(leftLevel, rightLevel);
 
     QPixmap pixmap(32, 32);
     pixmap.fill(Qt::transparent);
     QPainter painter(&pixmap);
-    painter.setPen(Qt::white);
+    painter.setPen(QApplication::palette().color(QPalette::WindowText));
     painter.setFont(QFont("Arial", 12, QFont::Bold));
     painter.drawText(pixmap.rect(), Qt::AlignCenter, QString::number(minLevel) + "%");
     painter.end();
@@ -143,4 +142,3 @@ void TrayIconManager::onTrayIconActivated(QSystemTrayIcon::ActivationReason reas
         emit trayClicked();
     }
 }
-

@@ -1,20 +1,20 @@
 /*
-    LibrePods - AirPods liberated from Apple’s ecosystem
-    Copyright (C) 2025 LibrePods contributors
-
-    This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
-    the Free Software Foundation, either version 3 of the License, or
-    any later version.
-
-    This program is distributed in the hope that it will be useful,
-    but WITHOUT ANY WARRANTY; without even the implied warranty of
-    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
-
-    You should have received a copy of the GNU General Public License
-    along with this program.  If not, see <https://www.gnu.org/licenses/>.
-*/
+ * LibrePods - AirPods liberated from Apple’s ecosystem
+ *
+ * Copyright (C) 2025 LibrePods contributors
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as published
+ * by the Free Software Foundation, either version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
 
 @file:OptIn(ExperimentalEncodingApi::class)
 
@@ -58,8 +58,8 @@ object MediaController {
     }
 
     private var relativeVolume: Boolean = false
-    private var conversationAwarenessVolume: Int = 2
-    private var conversationAwarenessPauseMusic: Boolean = false
+    private var conversationalAwarenessVolume: Int = 2
+    private var conversationalAwarenessPauseMusic: Boolean = false
 
     var recentlyLostOwnership: Boolean = false
 
@@ -73,20 +73,20 @@ object MediaController {
         this.audioManager = audioManager
         this.sharedPreferences = sharedPreferences
         Log.d("MediaController", "Initializing MediaController")
-        relativeVolume = sharedPreferences.getBoolean("relative_conversation_awareness_volume", false)
-        conversationAwarenessVolume = sharedPreferences.getInt("conversation_awareness_volume", (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) / 0.4).toInt())
-        conversationAwarenessPauseMusic = sharedPreferences.getBoolean("conversation_awareness_pause_music", false)
+        relativeVolume = sharedPreferences.getBoolean("relative_conversational_awareness_volume", false)
+        conversationalAwarenessVolume = sharedPreferences.getInt("conversational_awareness_volume", (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) / 0.4).toInt())
+        conversationalAwarenessPauseMusic = sharedPreferences.getBoolean("conversational_awareness_pause_music", false)
 
         preferenceChangeListener = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
             when (key) {
-                "relative_conversation_awareness_volume" -> {
-                    relativeVolume = sharedPreferences.getBoolean("relative_conversation_awareness_volume", false)
+                "relative_conversational_awareness_volume" -> {
+                    relativeVolume = sharedPreferences.getBoolean("relative_conversational_awareness_volume", false)
                 }
-                "conversation_awareness_volume" -> {
-                    conversationAwarenessVolume = sharedPreferences.getInt("conversation_awareness_volume", (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * 0.4).toInt())
+                "conversational_awareness_volume" -> {
+                    conversationalAwarenessVolume = sharedPreferences.getInt("conversational_awareness_volume", (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * 0.4).toInt())
                 }
-                "conversation_awareness_pause_music" -> {
-                    conversationAwarenessPauseMusic = sharedPreferences.getBoolean("conversation_awareness_pause_music", false)
+                "conversational_awareness_pause_music" -> {
+                    conversationalAwarenessPauseMusic = sharedPreferences.getBoolean("conversational_awareness_pause_music", false)
                 }
             }
         }
@@ -171,10 +171,8 @@ object MediaController {
             }
 
             if (configs != null && !iPausedTheMedia) {
-                val localMac = ServiceManager.getService()?.localMac ?: return
-                if (localMac == "") return
                 ServiceManager.getService()?.aacpManager?.sendMediaInformataion(
-                    localMac,
+                    ServiceManager.getService()?.localMac ?: return,
                     isActive
                 )
                 Log.d("MediaController", "User changed media state themselves; will wait for ear detection pause before auto-play")
@@ -312,20 +310,20 @@ object MediaController {
 
     @Synchronized
     fun startSpeaking() {
-        Log.d("MediaController", "Starting speaking max vol: ${audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)}, current vol: ${audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)}, conversationAwarenessVolume: $conversationAwarenessVolume, relativeVolume: $relativeVolume")
+        Log.d("MediaController", "Starting speaking max vol: ${audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)}, current vol: ${audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)}, conversationalAwarenessVolume: $conversationalAwarenessVolume, relativeVolume: $relativeVolume")
 
         if (initialVolume == null) {
             initialVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
             Log.d("MediaController", "Initial Volume: $initialVolume")
             val targetVolume = if (relativeVolume) {
-                (initialVolume!! * conversationAwarenessVolume / 100)
-            } else if (initialVolume!! > (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * conversationAwarenessVolume / 100)) {
-                (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * conversationAwarenessVolume / 100)
+                (initialVolume!! * conversationalAwarenessVolume / 100)
+            } else if (initialVolume!! > (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * conversationalAwarenessVolume / 100)) {
+                (audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC) * conversationalAwarenessVolume / 100)
             } else {
                 initialVolume!!
             }
             smoothVolumeTransition(initialVolume!!, targetVolume)
-            if (conversationAwarenessPauseMusic) {
+            if (conversationalAwarenessPauseMusic) {
                 sendPause(force = true)
             }
         }
@@ -337,7 +335,7 @@ object MediaController {
         Log.d("MediaController", "Stopping speaking, initialVolume: $initialVolume")
         if (initialVolume != null) {
             smoothVolumeTransition(audioManager.getStreamVolume(AudioManager.STREAM_MUSIC), initialVolume!!)
-            if (conversationAwarenessPauseMusic) {
+            if (conversationalAwarenessPauseMusic) {
                 sendPlay()
             }
             initialVolume = null

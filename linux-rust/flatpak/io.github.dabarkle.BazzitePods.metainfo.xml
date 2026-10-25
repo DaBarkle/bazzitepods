@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 LibrePods contributors -->
+<component type="desktop-application">
+  <id>io.github.dabarkle.BazzitePods</id>
+
+  <name>BazzitePods</name>
+  <summary>AirPods battery, controls and overlay for Linux</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>AGPL-3.0-only</project_license>
+
+  <developer id="io.github.dabarkle">
+    <name>LibrePods contributors</name>
+  </developer>
+
+  <description>
+    <p>
+      BazzitePods is a zero-configuration companion for AirPods and Beats earbuds on Linux.
+      It finds your earbuds on its own, starts with your session and stays out of the way in the
+      system tray.
+    </p>
+    <ul>
+      <li>Accurate left, right and case battery levels, including charging state</li>
+      <li>A small on-screen overlay when your earbuds connect or their battery changes</li>
+      <li>Noise control mode switching: noise cancellation, transparency and adaptive</li>
+      <li>Ear detection: pauses and resumes your media when you take an earbud out</li>
+      <li>Conversational awareness: lowers the volume while you speak</li>
+      <li>Keeps audio working when the earbuds go out of range and come back</li>
+    </ul>
+    <p>
+      The overlay is a normal desktop surface and never touches game processes, so it is safe to
+      use with anti-cheat protected games.
+    </p>
+    <p>
+      BazzitePods is built on LibrePods (https://github.com/librepods-org/librepods) and shares
+      its AGPL-3.0 licence.
+    </p>
+    <p>
+      BazzitePods is not affiliated with or endorsed by Apple Inc. AirPods is a trademark of
+      Apple Inc.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.dabarkle.BazzitePods.desktop</launchable>
+  <provides>
+    <binary>librepods</binary>
+    <binary>librepods-overlay</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/DaBarkle/bazzitepods</url>
+  <url type="bugtracker">https://github.com/DaBarkle/bazzitepods/issues</url>
+  <url type="vcs-browser">https://github.com/DaBarkle/bazzitepods</url>
+
+  <categories>
+    <category>Utility</category>
+  </categories>
+
+  <keywords>
+    <keyword>airpods</keyword>
+    <keyword>bluetooth</keyword>
+    <keyword>battery</keyword>
+    <keyword>earbuds</keyword>
+    <keyword>headphones</keyword>
+  </keywords>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Battery levels for both earbuds and the case</caption>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/window-dark.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>The battery overlay shown when the earbuds connect</caption>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/overlay-full.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Quick controls from the system tray</caption>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/tray.png</image>
+    </screenshot>
+  </screenshots>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#93c5fd</color>
+    <color type="primary" scheme_preference="dark">#4c1d95</color>
+  </branding>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>touch</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.2.0" date="2026-10-25">
+      <description>
+        <p>First release of the Bazzite edition.</p>
+        <ul>
+          <li>New app id, icon and Flatpak with a minimal set of permissions</li>
+          <li>Starts automatically with your session, minimized to the tray</li>
+          <li>More accurate battery readings for each earbud and the case</li>
+          <li>On-screen battery overlay</li>
+          <li>Audio keeps working after the earbuds reconnect</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
+</component>
