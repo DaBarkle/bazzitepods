@@ -244,7 +244,7 @@ async fn session(
         });
     }
 
-    subscribe_controls(aacp, ctx, &mac_s, name, media, audio, &mut tasks).await;
+    subscribe_controls(aacp, ctx, &mac_s, name, media, audio, &route, &mut tasks).await;
 
     {
         let controller = media.lock().await;
@@ -402,6 +402,7 @@ async fn subscribe_controls(
     name: &str,
     media: &Arc<Mutex<MediaController>>,
     audio: Option<&AudioGuardHandle>,
+    route: &RouteWatch,
     tasks: &mut JoinSet<()>,
 ) {
     let watch = [
@@ -440,6 +441,8 @@ async fn subscribe_controls(
     let media = media.clone();
     let hub = ctx.hub.clone();
     let audio = audio.cloned();
+    let route = route.clone();
+    let aacp = aacp.clone();
     let (mac, name) = (mac_s.to_string(), name.to_string());
     tasks.spawn(async move {
         while let Some(value) = rx.recv().await {
@@ -448,6 +451,14 @@ async fn subscribe_controls(
             hub.update_device(&mac, &name, |d| d.owns_audio = Some(owns));
             if had == Some(true) && !owns {
                 info!("Another device took the AirPods; pausing local media");
+                // Picked in the iPhone's Control Center, this is the only sign of the
+                // switch, so record it like any other: the PC takes the AirPods back when
+                // the iPhone lets go, and leaves the dead output alone until then.
+                let streaming = aacp.state.lock().await.peer_streaming;
+                route.lost(!streaming);
+                if let Some(audio) = &audio {
+                    audio.route_away();
+                }
                 media.lock().await.pause_all_media().await;
             } else if had == Some(false) && owns {
                 route_regained(audio.as_ref(), true);
@@ -618,7 +629,14 @@ async fn handle_event(
                 && route_owner(source, &ctx.local_mac) == Some(false);
         }
         AACPEvent::PeerStreaming(streaming) => {
-            route.lock().peer_stopped = !streaming;
+            {
+                let mut state = route.lock();
+                state.peer_stopped = !streaming;
+                // Playing media is not a borrow, whatever the switch first looked like.
+                if *streaming {
+                    state.lost_to_borrow = false;
+                }
+            }
             if *streaming && owns_audio(&ctx.hub, &mac_s) == Some(false) {
                 info!("The other device started playing media; pausing local media");
                 if let Some(audio) = audio {
@@ -674,7 +692,7 @@ async fn route_lost(
     let borrowed =
         source.r#type != AudioSourceType::Call && !aacp.state.lock().await.peer_streaming;
     route.lost(borrowed);
-    if !borrowed && let Some(audio) = audio {
+    if let Some(audio) = audio {
         audio.route_away();
     }
     if source.r#type == AudioSourceType::Call {

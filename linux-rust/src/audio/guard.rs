@@ -1042,6 +1042,8 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         let result = self.run_ladder().await;
         self.ensure_not_off().await;
         self.unhush().await;
+        // A take-back reported right after this rebuild needs no second one.
+        self.last_repair = Some(Instant::now());
         match result {
             Ok(Some(step)) => {
                 info!("[audio {}] recovered at step {}", self.mac_str, step);

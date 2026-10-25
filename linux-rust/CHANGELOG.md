@@ -26,6 +26,8 @@ All notable changes to BazzitePods are documented here. The format follows
 - When the iPhone stops playing, the AirPods come back to the PC by themselves if media
   is still playing here, including media that was already playing before the iPhone
   connected or BazzitePods started. ([#6])
+- Choosing the AirPods in the iPhone's Control Center is handled like any other switch:
+  the PC takes them back about a second after the iPhone lets go. ([#6])
 - Audio no longer plays through the speakers for a moment while the AirPods' output is
   rebuilt after a switch. The speakers are muted for that second.
   ([#6])
