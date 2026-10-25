@@ -7,6 +7,9 @@ mod devices;
 mod hub;
 mod media_controller;
 mod sleep_monitor;
+mod overlay_client;
+mod overlay_feed;
+mod overlay_protocol;
 mod ui;
 mod utils;
 
@@ -114,6 +117,7 @@ async fn async_main(
     no_tray: bool,
 ) {
     let battery = BatteryService::spawn(hub.clone());
+    overlay_feed::spawn(hub.clone());
 
     // Zero-config: register for login autostart unless the user switched it off.
     tokio::spawn(async {
