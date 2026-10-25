@@ -28,10 +28,11 @@ All notable changes to BazzitePods are documented here. The format follows
   connected or BazzitePods started. ([#6])
 - Choosing the AirPods in the iPhone's Control Center is handled like any other switch:
   the PC takes them back about a second after the iPhone lets go. ([#6])
-- When an iPhone joins the AirPods and they drop the PC to make room, the PC reconnects
-  within about 20 seconds, so it can take them back when the iPhone lets go. AirPods that
-  drop the link by themselves (for example after walking out of range) are now also
-  reconnected when they come back; before, the drop often went unnoticed. ([#6])
+- The PC reconnects to the AirPods by itself after they drop it: within about 20 seconds
+  when they made room for an iPhone (so the PC can take them back when the iPhone lets
+  go), and when they come out of the case after being put away, as a Mac does. Before,
+  the drop often went unnoticed and the AirPods stayed off the PC until connected by
+  hand. ([#6])
 - Audio no longer plays through the speakers for a moment while the AirPods' output is
   rebuilt after a switch. The speakers are muted for that second.
   ([#6])

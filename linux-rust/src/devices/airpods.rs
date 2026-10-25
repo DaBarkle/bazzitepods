@@ -300,6 +300,28 @@ fn note_peer_joined(mac: &str) {
     }
 }
 
+/// Whether each AirPods' last ear report had them put away: in the case, none in an ear.
+static PUT_AWAY: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);
+
+fn note_ear_status(mac: &str, status: &[EarDetectionStatus]) {
+    let away = status.contains(&EarDetectionStatus::InCase)
+        && !status.contains(&EarDetectionStatus::InEar);
+    if let Ok(mut put_away) = PUT_AWAY.lock() {
+        put_away
+            .get_or_insert_with(HashMap::new)
+            .insert(mac.to_ascii_uppercase(), away);
+    }
+}
+
+/// Whether these AirPods were put in the case when they dropped this PC.
+pub fn dropped_in_case(mac: &str) -> bool {
+    PUT_AWAY
+        .lock()
+        .ok()
+        .and_then(|away| away.as_ref()?.get(&mac.to_ascii_uppercase()).copied())
+        .unwrap_or(false)
+}
+
 /// Whether another device joined these AirPods just before they dropped this PC: they
 /// keep a limited number of links and let go of this one to make room.
 pub fn dropped_for_peer(mac: &str) -> bool {
@@ -508,6 +530,7 @@ async fn handle_event(
             ctx.battery.send(BatteryInput::Aacp(mac, info.clone()));
         }
         AACPEvent::EarDetection(old, new) => {
+            note_ear_status(&mac_s, new);
             // A pod just went into the case. The first battery report then often says
             // "case unknown" (255) and the real level may never follow, so ask the AirPods
             // to resend their state a little later.

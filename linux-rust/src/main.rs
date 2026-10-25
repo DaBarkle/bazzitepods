@@ -259,17 +259,25 @@ struct AdapterState_ {
     lost_link: HashMap<Address, Instant>,
     /// Last time we asked BlueZ to reconnect a device.
     last_reconnect: HashMap<Address, Instant>,
-    /// AirPods that dropped this PC right after another device joined them, and when.
-    dropped_for_peer: HashMap<Address, Instant>,
+    /// AirPods worth reconnecting without waiting for their adverts: when they dropped
+    /// this PC, and for how long to keep trying.
+    eager: HashMap<Address, (Instant, Duration)>,
 }
 
 impl AdapterState_ {
     fn note_lost(&mut self, addr: Address) {
         let now = Instant::now();
         self.lost_link.entry(addr).or_insert(now);
-        if devices::airpods::dropped_for_peer(&addr.to_string()) {
+        let mac = addr.to_string();
+        if devices::airpods::dropped_for_peer(&mac) {
             info!("AirPods {} dropped this PC for another device", addr);
-            self.dropped_for_peer.entry(addr).or_insert(now);
+            self.eager.entry(addr).or_insert((now, PEER_DROP_WINDOW));
+        } else if devices::airpods::dropped_in_case(&mac) {
+            info!(
+                "AirPods {} went into the case; reconnecting when they come out",
+                addr
+            );
+            self.eager.entry(addr).or_insert((now, CASE_DROP_WINDOW));
         }
     }
 }
@@ -277,10 +285,18 @@ impl AdapterState_ {
 /// How long after losing the link we still reconnect automatically when the AirPods come back.
 const AUTO_RECONNECT_WINDOW: Duration = Duration::from_secs(4 * 60 * 60);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(20);
-/// For this long after the AirPods drop this PC to make room for an iPhone, try to
-/// reconnect even without seeing their adverts: without a link the PC can't hear the
-/// iPhone let go. Not after other drops, so disconnecting them here stays disconnected.
-const EAGER_RECONNECT_WINDOW: Duration = Duration::from_secs(3 * 60);
+/// Reconnecting without adverts. Out of the case, or busy with an iPhone, AirPods often
+/// advertise only Find My beacons this PC can't match to them, so after these drops keep
+/// asking BlueZ to connect: a failed attempt costs nothing, and connecting never takes
+/// the audio from an iPhone that is playing. Not after other drops, so disconnecting the
+/// AirPods here keeps them disconnected.
+/// - They dropped this PC to make room for an iPhone: it can't hear the iPhone let go.
+const PEER_DROP_WINDOW: Duration = Duration::from_secs(3 * 60);
+/// - They went into the case: come back when they come out, as on a Mac.
+const CASE_DROP_WINDOW: Duration = Duration::from_secs(30 * 60);
+/// Retry every RECONNECT_INTERVAL for this long, then every SLOW_RECONNECT_INTERVAL.
+const FAST_RECONNECT_PERIOD: Duration = Duration::from_secs(3 * 60);
+const SLOW_RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
 /// Upper bound on waiting for a cancelled device task to finish.
 const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -405,15 +421,21 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                 }
             }
             _ = sweep.tick() => {
-                st.dropped_for_peer
-                    .retain(|_, t| t.elapsed() < EAGER_RECONNECT_WINDOW);
-                let recent: Vec<Address> = st
-                    .dropped_for_peer
+                st.eager.retain(|_, (t, window)| t.elapsed() < *window);
+                let due: Vec<Address> = st
+                    .eager
                     .iter()
-                    .filter(|(_, t)| t.elapsed() < EAGER_RECONNECT_WINDOW)
+                    .filter(|(addr, (t, _))| {
+                        let every = if t.elapsed() < FAST_RECONNECT_PERIOD {
+                            RECONNECT_INTERVAL
+                        } else {
+                            SLOW_RECONNECT_INTERVAL
+                        };
+                        st.last_reconnect.get(addr).is_none_or(|l| l.elapsed() >= every)
+                    })
                     .map(|(addr, _)| *addr)
                     .collect();
-                for addr in recent {
+                for addr in due {
                     maybe_reconnect(adapter, addr, true, &mut st).await;
                 }
             }
@@ -592,7 +614,7 @@ async fn reconcile(
         let handle = if is_airpods {
             info!("AirPods connected: {} ({})", name, addr);
             st.lost_link.remove(&addr);
-            st.dropped_for_peer.remove(&addr);
+            st.eager.remove(&addr);
             let dctx = DeviceContext {
                 hub: ctx.hub.clone(),
                 battery: ctx.battery.clone(),
