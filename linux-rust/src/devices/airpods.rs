@@ -288,6 +288,28 @@ async fn session(
     while tasks.join_next().await.is_some() {}
 }
 
+/// When another device last joined each AirPods (by AirPods MAC).
+static PEER_JOINED: std::sync::Mutex<Option<HashMap<String, Instant>>> =
+    std::sync::Mutex::new(None);
+
+fn note_peer_joined(mac: &str) {
+    if let Ok(mut joined) = PEER_JOINED.lock() {
+        joined
+            .get_or_insert_with(HashMap::new)
+            .insert(mac.to_ascii_uppercase(), Instant::now());
+    }
+}
+
+/// Whether another device joined these AirPods just before they dropped this PC: they
+/// keep a limited number of links and let go of this one to make room.
+pub fn dropped_for_peer(mac: &str) -> bool {
+    PEER_JOINED
+        .lock()
+        .ok()
+        .and_then(|joined| joined.as_ref()?.get(&mac.to_ascii_uppercase()).copied())
+        .is_some_and(|t| t.elapsed() < Duration::from_secs(10))
+}
+
 fn owns_audio(hub: &crate::hub::Hub, mac: &str) -> Option<bool> {
     hub.snapshot().devices.get(mac).and_then(|d| d.owns_audio)
 }
@@ -539,6 +561,7 @@ async fn handle_event(
                 .filter(|n| n.mac != local && old_devices.iter().all(|o| o.mac != n.mac))
             {
                 info!("New device on AirPods: {}", device.mac);
+                note_peer_joined(&mac_s);
                 let aacp = aacp.clone();
                 let local = local.clone();
                 let peer = device.mac.clone();
