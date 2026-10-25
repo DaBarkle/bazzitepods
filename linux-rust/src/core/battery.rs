@@ -27,7 +27,7 @@ pub const AACP_FRESH_FOR: Duration = Duration::from_secs(60);
 /// With AACP down, a component not refreshed by BLE for this long is marked stale.
 pub const BLE_STALE_AFTER: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComponentBattery {
     pub level: Option<u8>,
     pub charging: bool,
@@ -35,6 +35,19 @@ pub struct ComponentBattery {
     pub stale: bool,
     pub last_seen: Option<SystemTime>,
 }
+
+/// `last_seen` is deliberately not compared: it ticks on every BLE advert, and treating that
+/// as a change would wake the tray, UI and overlay about once a second.
+impl PartialEq for ComponentBattery {
+    fn eq(&self, other: &Self) -> bool {
+        self.level == other.level
+            && self.charging == other.charging
+            && self.present == other.present
+            && self.stale == other.stale
+    }
+}
+
+impl Eq for ComponentBattery {}
 
 impl ComponentBattery {
     /// Level suitable for display: `None` if never seen.

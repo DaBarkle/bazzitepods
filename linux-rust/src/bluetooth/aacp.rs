@@ -720,14 +720,15 @@ impl AACPManager {
                 info!("Received Audio Source: {:?}", state.audio_source);
             }
             opcodes::CONNECTED_DEVICES => {
-                if payload.len() < 3 {
+                if payload.len() < 5 {
                     error!(
                         "Connected Devices packet too short: {}",
                         hex::encode(payload)
                     );
                     return;
                 }
-                let count = payload[2] as usize;
+                // Layout matches the Android client: count at byte 4, 8-byte entries from byte 5.
+                let count = payload[4] as usize;
                 if payload.len() < 5 + count * 8 {
                     error!(
                         "Connected Devices packet length mismatch: {}",

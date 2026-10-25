@@ -210,6 +210,27 @@ pub fn codec_for(profile: &str, sink: Option<&SinkInfo>) -> Option<String> {
 // State machine
 // ---------------------------------------------------------------------------
 
+/// "Was this device the default output?" survives the guard itself: every reconnect creates a
+/// new guard, and the answer from before the link dropped is exactly what we need afterwards.
+type DefaultMemory = std::sync::Mutex<std::collections::HashMap<String, bool>>;
+
+#[cfg(not(test))]
+fn with_default_memory<R>(f: impl FnOnce(&DefaultMemory) -> R) -> R {
+    static MEMORY: std::sync::LazyLock<DefaultMemory> = std::sync::LazyLock::new(Default::default);
+    f(&MEMORY)
+}
+
+// Tests run in parallel with the same fake MAC; keep their memories apart.
+#[cfg(test)]
+fn with_default_memory<R>(f: impl FnOnce(&DefaultMemory) -> R) -> R {
+    thread_local!(static MEMORY: DefaultMemory = Default::default());
+    MEMORY.with(f)
+}
+
+fn was_default(mac: &str) -> bool {
+    with_default_memory(|m| m.lock().map(|m| m.get(mac).copied().unwrap_or(false)).unwrap_or(false))
+}
+
 #[derive(Debug)]
 enum Abort {
     /// Link went down or shutdown was requested while working.
@@ -273,7 +294,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             stall_since: None,
             last_ladder: None,
             ladders_this_link: 0,
-            we_were_default: false,
+            we_were_default: was_default(&mac.to_string().to_uppercase()),
             wearing: false,
         }
     }
@@ -620,7 +641,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             self.pause(self.cfg.poll).await?;
         };
         let action = decide_sink(&snap, &sink, self.we_were_default);
-        self.we_were_default = snap.default_sink.as_deref() == Some(sink.name.as_str());
+        self.remember_default(snap.default_sink.as_deref() == Some(sink.name.as_str()));
         if let SinkAction::MakeDefault {
             sink_name,
             sink_index,
@@ -635,7 +656,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 move_inputs.len()
             );
             match self.pulse.set_default_sink(&sink_name).await {
-                Ok(()) => self.we_were_default = true,
+                Ok(()) => self.remember_default(true),
                 Err(e) => warn!("[audio {}] set default sink failed: {}", self.mac_str, e),
             }
             for input in move_inputs {
@@ -651,6 +672,61 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             profile: profile.to_string(),
             codec: codec_for(profile, Some(&sink)),
         })
+    }
+
+    fn remember_default(&mut self, value: bool) {
+        self.we_were_default = value;
+        let mac = self.mac_str.clone();
+        with_default_memory(|m| {
+            if let Ok(mut m) = m.lock() {
+                m.insert(mac, value);
+            }
+        });
+    }
+
+    /// Streams currently playing to this device's sink (to bring back after a profile toggle).
+    async fn our_streams(&self) -> Vec<u32> {
+        let Ok(snap) = self.pulse.snapshot().await else {
+            return Vec::new();
+        };
+        let Some(sink) = snap.card_for(&self.mac_str).and_then(|c| snap.sink_for_card(c)) else {
+            return Vec::new();
+        };
+        snap.sink_inputs
+            .iter()
+            .filter(|i| i.sink == sink.index)
+            .map(|i| i.index)
+            .collect()
+    }
+
+    /// A profile toggle recreates the sink and WirePlumber parks streams on the fallback
+    /// (speakers). Move them back, and restore the default if it was ours.
+    async fn restore_streams(&mut self, streams: &[u32]) {
+        let deadline = Instant::now() + self.cfg.verify_timeout;
+        let (snap, sink) = loop {
+            let Ok(snap) = self.pulse.snapshot().await else { return };
+            if let Some(sink) = snap.card_for(&self.mac_str).and_then(|c| snap.sink_for_card(c)).cloned() {
+                break (snap, sink);
+            }
+            if Instant::now() >= deadline {
+                return;
+            }
+            sleep(self.cfg.poll).await;
+        };
+        if self.we_were_default && snap.default_sink.as_deref() != Some(sink.name.as_str()) {
+            if let Err(e) = self.pulse.set_default_sink(&sink.name).await {
+                debug!("[audio {}] set default sink failed: {}", self.mac_str, e);
+            }
+        }
+        for input in snap
+            .sink_inputs
+            .iter()
+            .filter(|i| streams.contains(&i.index) && i.sink != sink.index)
+        {
+            if let Err(e) = self.pulse.move_sink_input(input.index, sink.index).await {
+                debug!("[audio {}] move stream {} failed: {}", self.mac_str, input.index, e);
+            }
+        }
     }
 
     /// Rule 6: whatever happened, never leave the card on `off`.
@@ -699,7 +775,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             self.stall_since = None;
             return;
         };
-        self.we_were_default = snap.default_sink.as_deref() == Some(sink.name.as_str());
+        self.remember_default(snap.default_sink.as_deref() == Some(sink.name.as_str()));
         // Healthy (also clears an earlier stall failure once audio flows again).
         let healthy = AudioHealth::Ready {
             codec: codec_for(&active, Some(&sink)),
@@ -820,6 +896,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             .filter(|p| is_a2dp(p))
             .unwrap_or_default();
         let candidates = a2dp_candidates(&card);
+        let streams = self.our_streams().await;
 
         // Step 1: toggle off -> same A2DP profile. Done back-to-back without
         // interruption checks so we can never stop in between.
@@ -836,6 +913,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         }
         sleep(self.cfg.toggle_gap).await;
         let step1 = self.apply_profile(&order).await;
+        self.restore_streams(&streams).await;
         self.check_interrupt()?;
         if step1.is_ok() && self.stall_resolved().await {
             return Ok(Some(1));
@@ -856,6 +934,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             .collect();
         if !alternates.is_empty() {
             let step2 = self.apply_profile(&alternates).await;
+            self.restore_streams(&streams).await;
             self.check_interrupt()?;
             if step2.is_ok() && self.stall_resolved().await {
                 return Ok(Some(2));
@@ -879,7 +958,10 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         self.check_interrupt()?;
         if let Some((_, card)) = self.wait_card(self.cfg.card_wait).await?
             && self.check_profile(&card).await.is_ok()
-            && self.stall_resolved().await
+            && {
+                self.restore_streams(&streams).await;
+                self.stall_resolved().await
+            }
         {
             return Ok(Some(3));
         }
