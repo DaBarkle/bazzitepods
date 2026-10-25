@@ -57,6 +57,25 @@ pub fn meaningful_change(prev: Option<&OverlayState>, next: &OverlayState) -> Op
     None
 }
 
+/// Shown by a preview before any battery data has arrived.
+fn placeholder() -> OverlayState {
+    let unknown = || {
+        Some(ComponentState {
+            present: false,
+            ..Default::default()
+        })
+    };
+    OverlayState {
+        name: "AirPods".into(),
+        kind: String::new(),
+        connected: true,
+        left: unknown(),
+        right: unknown(),
+        case: unknown(),
+        headphone: None,
+    }
+}
+
 /// What the iced side has to do with the layer surface after a tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceAction {
@@ -79,6 +98,9 @@ pub struct Controller {
     progress: f32,
     mapped: bool,
     last_tick: Option<Instant>,
+    /// `show` with reason "preview" (settings button): visible until this instant
+    /// whatever the mode or link state, with a placeholder when there is no data.
+    preview_until: Option<Instant>,
 }
 
 impl Default for Controller {
@@ -97,6 +119,7 @@ impl Controller {
             progress: 0.0,
             mapped: false,
             last_tick: None,
+            preview_until: None,
         }
     }
 
@@ -133,6 +156,11 @@ impl Controller {
                     self.trigger(now);
                 }
             }
+            OverlayCommand::Show { reason } if reason == "preview" => {
+                self.forced_hidden = false;
+                let secs = self.config.auto_hide_secs.clamp(2.0, 600.0);
+                self.preview_until = Some(now + Duration::from_secs_f32(secs));
+            }
             OverlayCommand::Show { .. } => self.trigger(now),
             OverlayCommand::Hide => {
                 self.hide_at = None;
@@ -142,7 +170,28 @@ impl Controller {
         }
     }
 
+    fn previewing(&self, now: Instant) -> bool {
+        self.preview_until.is_some_and(|t| now < t)
+    }
+
+    /// What to draw: the real state, or during a preview without data a placeholder
+    /// pill (dashes), so the user can always see where the overlay sits.
+    pub fn display_state(&self, now: Instant) -> Option<OverlayState> {
+        match &self.state {
+            Some(s) if s.connected || !self.previewing(now) => Some(s.clone()),
+            Some(s) => Some(OverlayState {
+                connected: true,
+                ..s.clone()
+            }),
+            None if self.previewing(now) || self.mapped => Some(placeholder()),
+            None => None,
+        }
+    }
+
     pub fn wants_visible(&self, now: Instant) -> bool {
+        if self.previewing(now) {
+            return true;
+        }
         if self.config.mode == OverlayMode::Off || self.forced_hidden {
             return false;
         }
@@ -161,6 +210,9 @@ impl Controller {
         let target = self.wants_visible(now);
         if !target && self.hide_at.is_some_and(|t| now >= t) {
             self.hide_at = None;
+        }
+        if self.preview_until.is_some_and(|t| now >= t) {
+            self.preview_until = None;
         }
         let dt = self
             .last_tick
@@ -206,7 +258,7 @@ impl Controller {
 
     /// True while a timer must run to notice the auto-hide deadline.
     pub fn has_deadline(&self) -> bool {
-        self.mapped && self.hide_at.is_some()
+        self.mapped && (self.hide_at.is_some() || self.preview_until.is_some())
     }
 
     /// Eased 0..1 value for drawing (opacity and slide).
@@ -465,5 +517,27 @@ mod tests {
         assert_eq!(c.tick(later), SurfaceAction::Map);
         c.tick(later + Duration::from_secs(1));
         assert!(c.visual() < 0.9);
+    }
+
+    #[test]
+    fn preview_shows_without_data_and_in_any_mode() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(OverlayConfig {
+            mode: OverlayMode::Off,
+            ..OverlayConfig::default()
+        });
+        assert!(c.display_state(t0).is_none());
+        c.apply(
+            OverlayCommand::Show {
+                reason: "preview".into(),
+            },
+            t0,
+        );
+        assert_eq!(c.tick(t0), SurfaceAction::Map);
+        assert!(c.display_state(t0).is_some_and(|s| s.left.is_some()));
+        assert!(c.has_deadline());
+        let (acts, t1) = run(&mut c, t0, 5000);
+        assert_eq!(acts, vec![SurfaceAction::Unmap]);
+        assert!(c.display_state(t1).is_none());
     }
 }

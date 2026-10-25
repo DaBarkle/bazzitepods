@@ -181,7 +181,7 @@ impl Overlay {
     fn sync(&mut self, now: Instant) -> Task<Message> {
         match self.ctl.tick(now) {
             SurfaceAction::Map => {
-                self.size = view::surface_size(self.ctl.state.as_ref());
+                self.size = view::surface_size(self.ctl.display_state(now).as_ref());
                 let id = Id::unique();
                 self.window = Some(id);
                 debug!("mapping layer surface {id:?}");
@@ -233,7 +233,7 @@ impl Overlay {
                             margin: margin_for(cfg),
                         }));
                     }
-                    let size = view::surface_size(self.ctl.state.as_ref());
+                    let size = view::surface_size(self.ctl.display_state(now).as_ref());
                     if size != self.size {
                         self.size = size;
                         tasks.push(Task::done(Message::SizeChange { id, size }));
@@ -271,7 +271,7 @@ impl Overlay {
     }
 
     fn view(&self, _id: Id) -> Element<'_, Message> {
-        let Some(state) = self.ctl.state.as_ref() else {
+        let Some(state) = self.ctl.display_state(Instant::now()) else {
             return iced::widget::Space::new().into();
         };
         canvas(view::Pill {

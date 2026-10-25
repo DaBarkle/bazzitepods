@@ -69,14 +69,14 @@ struct Segment<'a> {
     title: &'static str,
 }
 
-pub struct Pill<'a> {
-    pub state: &'a OverlayState,
+pub struct Pill {
+    pub state: OverlayState,
     /// Eased 0..1 appearance (opacity, slide, scale).
     pub visual: f32,
     pub position: OverlayPosition,
 }
 
-impl<Message> canvas::Program<Message> for Pill<'_> {
+impl<Message> canvas::Program<Message> for Pill {
     type State = ();
 
     fn draw(
@@ -93,7 +93,7 @@ impl<Message> canvas::Program<Message> for Pill<'_> {
     }
 }
 
-impl Pill<'_> {
+impl Pill {
     fn paint(&self, frame: &mut Frame, size: Size) {
         let v = self.visual.clamp(0.0, 1.0);
         if v <= 0.0 {
@@ -146,7 +146,7 @@ impl Pill<'_> {
 
         // Header: glyph + name.
         let header_y = 26.0;
-        if is_headphone(self.state) {
+        if is_headphone(&self.state) {
             draw_headphone_glyph(
                 frame,
                 Point::new(INSET + 10.0, header_y),
