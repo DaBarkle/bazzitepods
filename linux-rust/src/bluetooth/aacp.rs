@@ -1266,7 +1266,9 @@ fn media_information_packet(
 }
 
 /// Reads `hostStreamingState` (any casing) from a Smart Routing message another device
-/// sent: `Some(true)` for YES, `Some(false)` for NO, `None` when the message has no such key.
+/// sent: `Some(true)` when it streams media from an app, `Some(false)` for NO, `None` when
+/// the message has no such key. A YES for `playingApp` "Unknown" is ignored: an iPhone sends
+/// it in a quick YES/NO pair around system sounds and when its own playback stops.
 pub fn peer_streaming_state(packet: &str) -> Option<bool> {
     let lower = packet.to_ascii_lowercase();
     let key = "hoststreamingstate";
@@ -1274,7 +1276,8 @@ pub fn peer_streaming_state(packet: &str) -> Option<bool> {
     // The value follows the key after one OPACK type byte.
     let value: String = rest.chars().skip(1).take(3).collect();
     if value.starts_with("yes") {
-        Some(true)
+        // "playingApp" then a 7-character string tag ("G") and "Unknown".
+        (!lower.contains("playingappgunknown")).then_some(true)
     } else if value.starts_with("no") {
         Some(false)
     } else {
@@ -1498,8 +1501,10 @@ mod tests {
     fn reads_peer_streaming_state() {
         let yes = "v=\u{fffd}JplayingAppVcom.google.ios.youtubeRhostStreamingStateCYESIbtAddressQ10:A2:D3:BF:3D:76FbtNameFiPhone";
         let no = "JplayingAppGUnknownRhostStreamingStateBNOIbtAddressQ10:A2:D3:BF:3D:76";
+        let blip = "JplayingAppGUnknownRhostStreamingStateCYESIbtAddressQ10:A2:D3:BF:3D:76";
         assert_eq!(peer_streaming_state(yes), Some(true));
         assert_eq!(peer_streaming_state(no), Some(false));
+        assert_eq!(peer_streaming_state(blip), None);
         assert_eq!(
             peer_streaming_state("audioRoutingSetOwnershipToFalse"),
             None

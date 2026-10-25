@@ -759,6 +759,10 @@ mod mpris {
                 last_full = Instant::now();
                 let playing = any_playing(&conn);
                 if last != Some(playing) {
+                    info!(
+                        "Local playback {}",
+                        if playing { "started" } else { "stopped" }
+                    );
                     last = Some(playing);
                     if tx.send(playing).is_err() {
                         break;

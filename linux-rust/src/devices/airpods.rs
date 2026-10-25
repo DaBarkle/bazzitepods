@@ -24,7 +24,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock, mpsc};
 use tokio::task::JoinSet;
-use tokio::time::{Duration, sleep};
+use tokio::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
 
 pub type CommandSender = mpsc::UnboundedSender<(ControlCommandIdentifiers, Vec<u8>)>;
@@ -257,6 +257,8 @@ async fn session(
         .send(BluetoothUIMessage::DeviceConnected(mac_s.clone()));
 
     let stem_control = setting_bool("stem_control");
+    let route = RouteWatch::default();
+    let mut route_watch = tokio::time::interval(ROUTE_WATCH_INTERVAL);
     let mut health = tokio::time::interval(HEALTH_INTERVAL);
     let mut model_known = false;
     loop {
@@ -270,9 +272,12 @@ async fn session(
                     model_known = refresh_model(aacp, ctx, &mac_s, name).await;
                 }
             }
+            _ = route_watch.tick() => {
+                watch_route(aacp, ctx, &mac_s, &route, &command_tx).await;
+            }
             event = event_rx.recv() => {
                 let Some(event) = event else { break };
-                handle_event(event, mac, name, aacp, ctx, media, audio, &command_tx, stem_control).await;
+                handle_event(event, mac, name, aacp, ctx, media, audio, &command_tx, &route, stem_control).await;
             }
         }
     }
@@ -451,6 +456,7 @@ async fn handle_event(
     media: &Arc<Mutex<MediaController>>,
     audio: Option<&AudioGuardHandle>,
     command_tx: &CommandSender,
+    route: &RouteWatch,
     stem_control: bool,
 ) {
     let mac_s = mac.to_string();
@@ -570,7 +576,7 @@ async fn handle_event(
                     ctx.hub
                         .update_device(&mac_s, name, |d| d.owns_audio = Some(false));
                     if had != Some(false) {
-                        route_lost(source, aacp, ctx, &mac_s, media).await;
+                        route_lost(source, aacp, ctx, &mac_s, media, route).await;
                     }
                 }
             }
@@ -613,6 +619,7 @@ async fn route_lost(
     ctx: &DeviceContext,
     mac_s: &str,
     media: &Arc<Mutex<MediaController>>,
+    route: &RouteWatch,
 ) {
     if aacp.state.lock().await.peer_streaming {
         info!(
@@ -626,6 +633,7 @@ async fn route_lost(
         "{} borrowed the AirPods; keeping local media playing for now",
         source.mac
     );
+    route.lock().borrowed_until = Some(Instant::now() + BORROW_GRACE);
     let (hub, mac, media) = (ctx.hub.clone(), mac_s.to_string(), media.clone());
     tokio::spawn(async move {
         sleep(BORROW_GRACE).await;
@@ -634,6 +642,94 @@ async fn route_lost(
             media.lock().await.pause_all_media().await;
         }
     });
+}
+
+/// What the route watcher remembers between ticks.
+#[derive(Default)]
+struct RouteState {
+    /// Until when another device is only borrowing the AirPods (a notification), if it is.
+    borrowed_until: Option<Instant>,
+    /// The streaming state last announced to the other devices.
+    announced: Option<bool>,
+}
+
+#[derive(Clone, Default)]
+struct RouteWatch(Arc<std::sync::Mutex<RouteState>>);
+
+impl RouteWatch {
+    fn lock(&self) -> std::sync::MutexGuard<'_, RouteState> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// How often to compare local playback with who has the AirPods.
+const ROUTE_WATCH_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Runs only while another device shares the AirPods. It reads local playback directly
+/// instead of relying on catching each play press, which a quick pause/play can hide.
+/// - This PC has the AirPods: tell the other devices whenever playback starts or stops, so
+///   an iPhone doesn't take them for a notification while we play.
+/// - Another device has them and something here plays: the user pressed play here (we
+///   paused when it took over), so take them back. While a notification only borrows
+///   them, wait for it to let go instead.
+async fn watch_route(
+    aacp: &AACPManager,
+    ctx: &DeviceContext,
+    mac_s: &str,
+    route: &RouteWatch,
+    command_tx: &CommandSender,
+) {
+    let peers: Vec<String> = aacp
+        .state
+        .lock()
+        .await
+        .connected_devices
+        .iter()
+        .filter(|d| !d.mac.eq_ignore_ascii_case(&ctx.local_mac))
+        .map(|d| d.mac.clone())
+        .collect();
+    if peers.is_empty() {
+        route.lock().announced = None;
+        return;
+    }
+    let playing = !MediaController::playing_players().await.is_empty();
+    match owns_audio(&ctx.hub, mac_s) {
+        Some(true) => {
+            if route.lock().announced == Some(playing) {
+                return;
+            }
+            route.lock().announced = Some(playing);
+            debug!("Telling the other devices this PC is streaming: {playing}");
+            for peer in peers {
+                if let Err(e) = aacp
+                    .send_media_information(&ctx.local_mac, &peer, playing)
+                    .await
+                {
+                    debug!("Could not tell {peer} the streaming state: {e}");
+                }
+            }
+        }
+        Some(false) if playing => {
+            route.lock().announced = None;
+            let borrowed = route
+                .lock()
+                .borrowed_until
+                .is_some_and(|until| Instant::now() < until);
+            let worn = aacp
+                .state
+                .lock()
+                .await
+                .ear_detection_status
+                .contains(&EarDetectionStatus::InEar);
+            if worn && !borrowed {
+                info!(
+                    "Media is playing here while another device has the AirPods; taking them back"
+                );
+                let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x01]));
+            }
+        }
+        _ => route.lock().announced = None,
+    }
 }
 
 /// How long a device may borrow the AirPods without media (a notification) before local
