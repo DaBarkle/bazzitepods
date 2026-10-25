@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- LibrePods app icon. Original artwork, AGPL-3.0-only (same licence as the app). -->
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="64" y1="32" x2="448" y2="480" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+    <linearGradient id="bud" x1="0" y1="150" x2="0" y2="370" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dde4f2"/>
+    </linearGradient>
+    <linearGradient id="charge" x1="96" y1="420" x2="420" y2="96" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4ade80"/>
+      <stop offset="1" stop-color="#bef264"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#1e1b4b" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded-square tile with a soft top sheen -->
+  <rect x="32" y="32" width="448" height="448" rx="104" fill="url(#bg)"/>
+  <path d="M136 32h240a104 104 0 0 1 104 104v40C400 210 320 224 256 224S112 210 32 176v-40A104 104 0 0 1 136 32z" fill="#ffffff" opacity="0.07"/>
+
+  <!-- Battery ring: track + 75 % charge arc, open at the bottom -->
+  <g fill="none" stroke-width="28" stroke-linecap="round" transform="rotate(135 256 256)">
+    <circle cx="256" cy="256" r="176" stroke="#ffffff" stroke-opacity="0.22" stroke-dasharray="829.4 1105.8"/>
+    <circle cx="256" cy="256" r="176" stroke="url(#charge)" stroke-dasharray="622 1105.8"/>
+  </g>
+
+  <!-- A pair of earbuds -->
+  <g filter="url(#shadow)">
+    <g id="left">
+      <ellipse cx="186" cy="214" rx="60" ry="56" fill="url(#bud)"/>
+      <rect x="194" y="222" width="42" height="146" rx="21" fill="url(#bud)"/>
+      <circle cx="164" cy="206" r="13" fill="#6d28d9" fill-opacity="0.28"/>
+    </g>
+    <use xlink:href="#left" transform="translate(512 0) scale(-1 1)"/>
+  </g>
+</svg>

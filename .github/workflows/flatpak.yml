@@ -1,0 +1,68 @@
+name: Flatpak (LibrePods)
+
+on:
+  push:
+    branches:
+      - bazzite
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'linux-rust/**'
+      - '.github/workflows/flatpak.yml'
+  pull_request:
+    paths:
+      - 'linux-rust/**'
+      - '.github/workflows/flatpak.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: flatpak-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  flatpak:
+    name: Build Flatpak bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # attach the bundle to a GitHub Release on tags
+    container:
+      # Must match runtime-version in the manifest.
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate desktop file and metainfo
+        run: |
+          if command -v desktop-file-validate >/dev/null; then
+            desktop-file-validate linux-rust/assets/io.github.dabarkle.LibrePods.desktop
+          fi
+          if command -v appstreamcli >/dev/null; then
+            appstreamcli validate --no-net linux-rust/flatpak/io.github.dabarkle.LibrePods.metainfo.xml
+          fi
+
+      - name: Build
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: linux-rust/flatpak/io.github.dabarkle.LibrePods.yml
+          bundle: LibrePods.flatpak
+          cache-key: flatpak-builder-${{ hashFiles('linux-rust/Cargo.lock') }}
+          upload-artifact: false
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LibrePods.flatpak
+          path: LibrePods.flatpak
+          if-no-files-found: error
+
+      - name: Attach bundle to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: LibrePods.flatpak
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

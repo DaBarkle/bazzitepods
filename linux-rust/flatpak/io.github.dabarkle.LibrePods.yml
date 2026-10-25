@@ -1,0 +1,103 @@
+# LibrePods (Bazzite edition) Flatpak manifest.
+#
+# Builds from the local source tree (linux-rust/), fully offline: every crate is
+# listed in cargo-sources.json, generated from Cargo.lock by flatpak-builder-tools'
+# flatpak-cargo-generator.py. Regenerate it with `just flatpak-sources` whenever
+# Cargo.lock changes.
+#
+# Local build (from linux-rust/):
+#   flatpak-builder --user --install --force-clean \
+#     --install-deps-from=flathub build-dir flatpak/io.github.dabarkle.LibrePods.yml
+# or simply `just flatpak`.
+
+app-id: io.github.dabarkle.LibrePods
+runtime: org.freedesktop.Platform
+# Freedesktop SDK 26.08 is the current stable branch (released 2026-09).
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: librepods
+
+finish-args:
+  # --- Display -------------------------------------------------------------
+  # Main window (iced) and the overlay (wlr-layer-shell) are native Wayland clients.
+  - --socket=wayland
+  # X11 only when no Wayland compositor is available (e.g. Steam Gaming Mode/gamescope X).
+  - --socket=fallback-x11
+  # X11 shared memory; required for decent performance under fallback-x11.
+  - --share=ipc
+  # GPU access for iced's wgpu renderer (falls back to software without it).
+  - --device=dri
+
+  # --- Audio ---------------------------------------------------------------
+  # libpulse (PipeWire-pulse on Bazzite): bluez card profile switching (A2DP/HFP),
+  # sink volume for conversational awareness, and keeping A2DP alive (AudioGuard).
+  - --socket=pulseaudio
+
+  # --- Bluetooth -----------------------------------------------------------
+  # Raw AF_BLUETOOTH sockets: AACP runs over an L2CAP channel (PSM 0x1001) that
+  # BlueZ does not expose over D-Bus. Without this, socket(AF_BLUETOOTH) is blocked
+  # by the Flatpak seccomp filter.
+  - --allow=bluetooth
+  # Device discovery, connection state, battery properties, BLE adverts (bluer).
+  - --system-talk-name=org.bluez
+
+  # --- System integration --------------------------------------------------
+  # logind PrepareForSleep signal: drop and re-establish the AACP link around suspend.
+  - --system-talk-name=org.freedesktop.login1
+  # System tray (ksni): register our StatusNotifierItem with Plasma's watcher.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  # ksni owns `org.kde.StatusNotifierItem-<pid>-<n>`. Inside the sandbox the app
+  # is PID 2 and owns a single tray, so the name is deterministic. Flatpak does not
+  # support a `StatusNotifierItem-*` wildcard (wildcards must follow a dot). The app
+  # should additionally call ksni's `disable_dbus_name(true)` when /.flatpak-info
+  # exists, so a different PID can never break the tray.
+  - --own-name=org.kde.StatusNotifierItem-2-1
+  # Low-battery / connection notifications, and overlay fallback on non-layer-shell
+  # desktops (GNOME).
+  - --talk-name=org.freedesktop.Notifications
+  # Ear detection: pause/resume media players over MPRIS.
+  - --talk-name=org.mpris.MediaPlayer2.*
+
+  # Deliberately absent:
+  #  * --socket=session-bus / --socket=system-bus (only the names above are needed)
+  #  * --share=network (nothing talks to the internet)
+  #  * filesystem access (settings live in the app's own XDG dirs; autostart goes
+  #    through the Background portal, which needs no permission)
+
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    # Must match the module name below: cargo-sources.json unpacks into cargo/.
+    CARGO_HOME: /run/build/librepods/cargo
+    CARGO_NET_OFFLINE: 'true'
+
+modules:
+  - name: librepods
+    buildsystem: simple
+    build-commands:
+      # Builds both binaries: librepods and librepods-overlay.
+      - cargo build --release --frozen --verbose
+      - install -Dm755 target/release/librepods -t ${FLATPAK_DEST}/bin/
+      - install -Dm755 target/release/librepods-overlay -t ${FLATPAK_DEST}/bin/
+      - install -Dm644 assets/io.github.dabarkle.LibrePods.desktop -t ${FLATPAK_DEST}/share/applications/
+      - install -Dm644 flatpak/io.github.dabarkle.LibrePods.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo/
+      - install -Dm644 assets/icons/io.github.dabarkle.LibrePods.svg -t ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/
+      - install -Dm644 assets/icons/io.github.dabarkle.LibrePods.png -t ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/
+      - install -Dm644 assets/icons/io.github.dabarkle.LibrePods-symbolic.svg -t ${FLATPAK_DEST}/share/icons/hicolor/symbolic/apps/
+      - install -Dm644 LICENSE -t ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/
+    sources:
+      - type: dir
+        path: ..
+        skip:
+          - target
+          - dist
+          - build-dir
+          - repo
+          - .flatpak-builder
+          - .appdir_path
+      # Repository licence (AGPL-3.0), which lives one level above linux-rust/.
+      - type: file
+        path: ../../LICENSE
+      - cargo-sources.json

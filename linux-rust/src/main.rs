@@ -1,3 +1,4 @@
+mod autostart;
 mod battery_service;
 mod bluetooth;
 mod core;
@@ -112,6 +113,14 @@ async fn async_main(
     no_tray: bool,
 ) {
     let battery = BatteryService::spawn(hub.clone());
+
+    // Zero-config: register for login autostart unless the user switched it off.
+    tokio::spawn(async {
+        let enabled = utils::app_setting_bool("start_at_login").unwrap_or(true);
+        if let Err(e) = autostart::ensure_autostart(enabled).await {
+            info!("Autostart registration skipped: {e}");
+        }
+    });
     let active_commands = Arc::new(Mutex::new(None));
 
     if !no_tray {

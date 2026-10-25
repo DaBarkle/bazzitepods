@@ -156,3 +156,11 @@ impl From<MyTheme> for Theme {
         }
     }
 }
+
+/// Read a boolean from app_settings.json, if present.
+pub fn app_setting_bool(key: &str) -> Option<bool> {
+    std::fs::read_to_string(get_app_settings_path())
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get(key).and_then(|b| b.as_bool()))
+}
