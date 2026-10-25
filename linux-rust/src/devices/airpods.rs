@@ -4,6 +4,7 @@
 //! when they disconnect. Inside, the AACP control channel is (re)opened with backoff for as long as
 //! the Bluetooth link is up, so walking out of range and back never needs user action.
 
+use crate::audio::{AudioGuard, AudioGuardHandle, AudioHealth};
 use crate::battery_service::{BatteryInput, BatteryService};
 use crate::bluetooth::aacp::{
     AACPEvent, AACPManager, AirPodsLEKeys, ControlCommandIdentifiers, EarDetectionStatus,
@@ -59,6 +60,21 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         ctx.local_mac.clone(),
     )));
 
+    // The audio guard runs for the whole Bluetooth link, independent of the control channel:
+    // audio must keep working even when AACP is down.
+    let audio = match bluer::Session::new().await {
+        Ok(session) => {
+            let guard = AudioGuard::spawn(mac, session);
+            guard.link_up();
+            spawn_health_mirror(&guard, &ctx, &mac_s, &name);
+            Some(guard)
+        }
+        Err(e) => {
+            warn!("Audio guard unavailable for {}: {}", mac_s, e);
+            None
+        }
+    };
+
     let mut attempt: u32 = 0;
     loop {
         if cancel.is_cancelled() {
@@ -83,7 +99,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         };
         attempt = 0;
 
-        session(mac, &name, &aacp, &ctx, &media, &cancel).await;
+        session(mac, &name, &aacp, &ctx, &media, audio.as_ref(), &cancel).await;
 
         aacp.shutdown().await;
         ctx.battery.send(BatteryInput::AacpLink(mac, false));
@@ -99,6 +115,12 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
             _ = sleep(Duration::from_secs(1)) => {}
         }
     }
+
+    if let Some(audio) = &audio {
+        audio.link_down();
+        audio.shutdown();
+    }
+    media.lock().await.stop_playback_listener().await;
 
     ctx.hub.update_device(&mac_s, &name, |d| {
         d.link = LinkState::Disconnected;
@@ -130,6 +152,7 @@ async fn session(
     aacp: &AACPManager,
     ctx: &DeviceContext,
     media: &Arc<Mutex<MediaController>>,
+    audio: Option<&AudioGuardHandle>,
     cancel: &CancellationToken,
 ) {
     let mac_s = mac.to_string();
@@ -194,7 +217,7 @@ async fn session(
             }
             event = event_rx.recv() => {
                 let Some(event) = event else { break };
-                handle_event(event, mac, name, aacp, ctx, media, &command_tx, stem_control).await;
+                handle_event(event, mac, name, aacp, ctx, media, audio, &command_tx, stem_control).await;
             }
         }
     }
@@ -290,6 +313,7 @@ async fn handle_event(
     aacp: &AACPManager,
     ctx: &DeviceContext,
     media: &Arc<Mutex<MediaController>>,
+    audio: Option<&AudioGuardHandle>,
     command_tx: &CommandSender,
     stem_control: bool,
 ) {
@@ -304,6 +328,9 @@ async fn handle_event(
             // left/right placement is refined by BLE. Store as (primary, secondary).
             ctx.hub
                 .update_device(&mac_s, name, |d| d.in_ear = (in_ear(0), in_ear(1)));
+            if let Some(audio) = audio {
+                audio.wearing_changed(new.contains(&EarDetectionStatus::InEar));
+            }
             media
                 .lock()
                 .await
@@ -359,6 +386,33 @@ async fn handle_event(
     let _ = ctx
         .ui_tx
         .send(BluetoothUIMessage::AACPUIEvent(mac_s, event));
+}
+
+/// Mirror the audio guard's health into the hub as a short human-readable status.
+fn spawn_health_mirror(guard: &AudioGuardHandle, ctx: &DeviceContext, mac_s: &str, name: &str) {
+    let mut rx = guard.health();
+    let hub = ctx.hub.clone();
+    let mac = mac_s.to_string();
+    let name = name.to_string();
+    tokio::spawn(async move {
+        loop {
+            let text = match &*rx.borrow_and_update() {
+                AudioHealth::Disconnected => None,
+                AudioHealth::Negotiating => Some("Connecting audio".to_string()),
+                AudioHealth::Ready { codec, profile } => Some(
+                    codec
+                        .clone()
+                        .unwrap_or_else(|| if profile.contains("aac") { "AAC".into() } else { "Audio ready".into() }),
+                ),
+                AudioHealth::Recovering { .. } => Some("Restoring audio".to_string()),
+                AudioHealth::Failed { reason } => Some(format!("Audio problem: {reason}")),
+            };
+            hub.update_device(&mac, &name, |d| d.audio = text);
+            if rx.changed().await.is_err() {
+                return;
+            }
+        }
+    });
 }
 
 /// Fill the model once the AirPods have sent their INFORMATION packet. Returns true when known.

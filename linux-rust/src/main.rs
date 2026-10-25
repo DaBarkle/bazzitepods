@@ -1,3 +1,4 @@
+mod audio;
 mod autostart;
 mod battery_service;
 mod bluetooth;
