@@ -6,6 +6,7 @@ mod core;
 mod devices;
 mod hub;
 mod media_controller;
+mod single_instance;
 mod sleep_monitor;
 mod overlay_client;
 mod overlay_feed;
@@ -105,6 +106,12 @@ fn main() -> iced::Result {
             start_minimized: false,
             demo: true,
         });
+    }
+
+    if let single_instance::Instance::Secondary =
+        single_instance::claim(ui_tx.clone(), !args.start_minimized && !args.no_tray)
+    {
+        return Ok(());
     }
 
     let runtime = match tokio::runtime::Runtime::new() {
