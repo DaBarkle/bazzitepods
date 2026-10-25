@@ -5,11 +5,19 @@ just works: it starts with your session, finds your AirPods, shows accurate batt
 for each pod and the case, and shows a small glass overlay over your games.
 
 Built for [Bazzite](https://bazzite.gg) (KDE Plasma, Wayland), and it works on any Flatpak
-desktop. BazzitePods is a modified fork of [LibrePods](https://github.com/librepods-org/librepods)
-(see [Credits and licence](#credits-and-licence)).
+desktop.
+
+> **A fork of [LibrePods](https://github.com/librepods-org/librepods).** LibrePods did the
+> hard part: reverse-engineering Apple's AirPods protocol. BazzitePods builds a
+> zero-config desktop app on top of it. See [How it builds on LibrePods](#how-it-builds-on-librepods).
 
 <p align="center">
-  <img src="linux-rust/docs/screenshots/main-window.png" width="340" alt="BazzitePods main window">
+  <img src="linux-rust/docs/screenshots/overlay-demo.gif" width="460" alt="The overlay over a game: the full card shows battery for each pod and the case, then shrinks into a compact widget, and expands again when the case starts charging or battery runs low">
+</p>
+<p align="center">
+  <img src="linux-rust/docs/screenshots/window-dark.png" width="300" alt="BazzitePods window, dark theme">
+  &nbsp;
+  <img src="linux-rust/docs/screenshots/window-light.png" width="300" alt="BazzitePods window, light theme">
 </p>
 
 ## Install
@@ -18,7 +26,7 @@ Run this in a terminal (Konsole). It needs no sudo, and nothing is layered into 
 image:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/packaging/install-bazzite.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh | bash
 ```
 
 That's all. BazzitePods appears in your system tray and starts by itself at every login.
@@ -58,9 +66,94 @@ up within a few seconds.
 - **Hands-off.** Survives Bluetooth restarts, adapter hot-plug and suspend/resume. It never
   turns Bluetooth on by itself. Launching it a second time just opens the window.
 
-| Full overlay | Compact widget |
+## A tour
+
+### At a glance
+
+The window shows every state at a glance, so you always know what your AirPods are doing.
+
+| Connected | On another device | Out of range | Low battery |
+| --- | --- | --- | --- |
+| <img src="linux-rust/docs/screenshots/state-connected.png" width="200" alt="Connected, with left, right and case battery rings"> | <img src="linux-rust/docs/screenshots/state-elsewhere.png" width="200" alt="Playing on another device, with a Use on this PC button"> | <img src="linux-rust/docs/screenshots/state-disconnected.png" width="200" alt="Not connected, last seen 1 hour ago, levels dimmed"> | <img src="linux-rust/docs/screenshots/state-low.png" width="200" alt="Low battery shown in red and amber, case last seen 42 minutes ago"> |
+
+### Controls and settings
+
+Models with noise control get Transparency, Adaptive and Noise Cancellation tiles, plus
+conversation awareness. **More options** has the theme, Apple device mode and stem-press
+track control.
+
+<p align="center">
+  <img src="linux-rust/docs/screenshots/window-pro.png" width="300" alt="AirPods Pro with listening mode tiles and conversation awareness">
+  &nbsp;
+  <img src="linux-rust/docs/screenshots/window-settings.png" width="300" alt="More options: appearance, Apple device mode, stem press control">
+</p>
+
+### The overlay
+
+| Full card | Compact widget |
 | --- | --- |
-| ![Full overlay](linux-rust/docs/screenshots/overlay.png) | ![Compact overlay](linux-rust/docs/screenshots/overlay-compact.png) |
+| <img src="linux-rust/docs/screenshots/overlay-full.png" width="380" alt="Full overlay card"> | <img src="linux-rust/docs/screenshots/overlay-compact.png" width="380" alt="Compact overlay widget"> |
+| <img src="linux-rust/docs/screenshots/overlay-low.png" width="380" alt="Overlay with low battery in amber and red"> | <img src="linux-rust/docs/screenshots/overlay-max.png" width="380" alt="Overlay for AirPods Max"> |
+
+### Tray
+
+The tray icon is a battery ring around your AirPods. It turns amber and then red as the
+battery runs low, shows a bolt while charging, and greys out when disconnected.
+
+<p align="center">
+  <img src="linux-rust/docs/screenshots/tray.png" width="520" alt="Tray icons: full, charging, low, disconnected, and small panel badges">
+</p>
+
+## How it works
+
+```mermaid
+flowchart LR
+    AP["AirPods"] -- "AACP over L2CAP<br/>(battery, ear detection, controls)" --> APP
+    AP -- "BLE adverts<br/>(battery while not connected)" --> APP
+    subgraph PC["Your PC"]
+        BZ["BlueZ"]
+        APP["BazzitePods<br/>(tray + window)"]
+        OV["Overlay process<br/>(layer-shell, click-through)"]
+        KW["KWin script"]
+        PW["PipeWire / PulseAudio"]
+    end
+    APP <--> BZ
+    APP -- "battery state" --> OV
+    KW -- "is a fullscreen window in front?" --> APP
+    APP -- "keeps the A2DP profile alive" --> PW
+```
+
+1. **Talking to the AirPods.** BazzitePods opens Apple's private control channel (AACP) on
+   the AirPods through BlueZ, the same way an iPhone does. That gives exact battery levels
+   for each pod and the case, ear detection, noise control and device switching. While the
+   AirPods are away, it reads their encrypted Bluetooth LE adverts instead, so you still see
+   levels when you open the case.
+2. **One source of truth.** Everything the AirPods report goes into a single state hub. The
+   window, tray and overlay all draw from it, so they never disagree.
+3. **The overlay** is a separate, tiny process on the compositor's overlay layer. It never
+   touches a game; see [Safe with anti-cheat](#safe-with-anti-cheat). It only sets up the GPU
+   while it's visible: hidden, it uses about 10 MB of memory and no CPU.
+4. **Fullscreen detection.** A small KWin script tells BazzitePods when the active window is
+   fullscreen, and the overlay turns translucent.
+5. **Audio guard.** It watches the Bluetooth audio profile and the default output. If the
+   AirPods come back "connected but silent", it renegotiates A2DP and restores your output.
+
+## How it builds on LibrePods
+
+[LibrePods](https://github.com/librepods-org/librepods) reverse-engineered the AirPods
+protocol and wrote a Linux app in Rust. BazzitePods keeps that core and builds a new app
+around it.
+
+| From LibrePods | Added in BazzitePods |
+| --- | --- |
+| The AACP protocol implementation: handshake, battery, ear detection, listening modes, conversation awareness, rename, device-switching packets | Zero-config Flatpak packaging, a one-line installer, autostart and tray |
+| Decrypting AirPods Bluetooth LE adverts with the proximity keys | Battery logic: one value per pod and case, last seen, cached case level |
+| Media pause and resume on ear detection | The game overlay (compact, pop-up, full), liquid glass, fullscreen detection |
+| The Rust Bluetooth groundwork with BlueZ (`bluer`) | The audio guard that fixes the "connected but silent" bug, plus reconnect with backoff |
+| The first Rust desktop app for Linux (iced window and tray) | A new interface (window, tray, icons), multi-device switching UI, Apple device mode |
+
+Upstream's original branches are kept in this repo: `upstream-main` (the Android and Qt
+apps) and `linux/rust`.
 
 ## Apple device mode (optional)
 
@@ -118,8 +211,8 @@ each model's abilities.
 - Design and rules: [`linux-rust/docs/ARCHITECTURE.md`](linux-rust/docs/ARCHITECTURE.md)
 - Build: `cd linux-rust && cargo build --release`, or `just flatpak` for the Flatpak.
 
-This repository still contains upstream LibrePods' Android app (`android/`) and its older Qt
-Linux app (`linux/`). BazzitePods is the Rust app in `linux-rust/`.
+BazzitePods is the Rust app in `linux-rust/`. The `android/` and `linux/` folders are
+upstream LibrePods' Android app and older Qt Linux app, kept as they were.
 
 ## Credits and licence
 

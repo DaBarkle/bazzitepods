@@ -50,6 +50,7 @@ const NAMESPACE: &str = "librepods-overlay";
 struct Args {
     demo: bool,
     demo_auto: bool,
+    demo_compact: bool,
     demo_step: Option<usize>,
     position: Option<OverlayPosition>,
 }
@@ -59,6 +60,7 @@ fn usage() -> &'static str {
      Options:\n  \
        --demo              cycle through sample states (always visible)\n  \
        --demo-auto         like --demo, but in auto mode (pops up, then unmaps)\n  \
+       --demo-compact      like --demo, but in compact mode (expands on changes)\n  \
        --step N            with --demo: show only sample N (0-6)\n  \
        --position P        top-left|top-center|top-right|bottom-left|bottom-center|bottom-right\n  \
        --probe             check for layer-shell support and exit (0 or 3)\n"
@@ -121,6 +123,8 @@ impl Overlay {
         if demo.is_some() {
             cfg.mode = if args.demo_auto {
                 OverlayMode::Auto
+            } else if args.demo_compact {
+                OverlayMode::Compact
             } else {
                 OverlayMode::Always
             };
@@ -301,7 +305,7 @@ impl Overlay {
         if let Some(d) = &self.demo
             && !d.fixed
         {
-            let every = if self.ctl.config.mode == OverlayMode::Auto {
+            let every = if self.ctl.config.mode != OverlayMode::Always {
                 6000
             } else {
                 2500
@@ -360,6 +364,10 @@ fn parse_args() -> Result<(Args, bool), String> {
             "--demo-auto" => {
                 args.demo = true;
                 args.demo_auto = true;
+            }
+            "--demo-compact" => {
+                args.demo = true;
+                args.demo_compact = true;
             }
             "--step" => {
                 let n = it

@@ -295,7 +295,7 @@ impl App {
             taking_audio: None,
             adaptive_volume: HashMap::new(),
             rename: String::new(),
-            apple_mode: None,
+            apple_mode: demo.then_some(false),
             apple_copied: false,
             rename_status: None,
             nothing: BTreeMap::new(),

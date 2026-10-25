@@ -8,7 +8,7 @@ Download `BazzitePods.flatpak` from the latest successful **Flatpak (BazzitePods
 `bazzite` branch (Actions tab → run → Artifacts), unzip it, then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/packaging/install-bazzite.sh \
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh \
   | bash -s -- ~/Downloads/BazzitePods.flatpak
 ```
 
