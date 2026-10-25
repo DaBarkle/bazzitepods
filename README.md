@@ -1,134 +1,143 @@
-![LibrePods Banner](/imgs/banner.png)
+# BazzitePods
 
-[![XDA Thread](https://img.shields.io/badge/XDA_Forums-Thread-orange)](https://xdaforums.com/t/app-root-for-now-airpodslikenormal-unlock-apple-exclusive-airpods-features-on-android.4707585/)
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/kavishdevar/librepods)](https://github.com/kavishdevar/librepods/releases/latest)
-[![GitHub all releases](https://img.shields.io/github/downloads/kavishdevar/librepods/total)](https://github.com/kavishdevar/librepods/releases)
-[![GitHub stars](https://img.shields.io/github/stars/kavishdevar/librepods)](https://github.com/kavishdevar/librepods/stargazers)
-[![GitHub issues](https://img.shields.io/github/issues/kavishdevar/librepods)](https://github.com/kavishdevar/librepods/issues)
-[![GitHub license](https://img.shields.io/github/license/kavishdevar/librepods)](https://github.com/kavishdevar/librepods/blob/main/LICENSE)
-[![GitHub contributors](https://img.shields.io/github/contributors/kavishdevar/librepods)](https://github.com/kavishdevar/librepods/graphs/contributors)
+AirPods on Linux, the way they work on an iPhone. You install it once, and from then on it
+just works: it starts with your session, finds your AirPods, shows accurate battery levels
+for each pod and the case, and shows a small glass overlay over your games.
 
+Built for [Bazzite](https://bazzite.gg) (KDE Plasma, Wayland), and it works on any Flatpak
+desktop. BazzitePods is a modified fork of [LibrePods](https://github.com/librepods-org/librepods)
+(see [Credits and licence](#credits-and-licence)).
 
-## What is LibrePods?
+<p align="center">
+  <img src="linux-rust/docs/screenshots/main-window.png" width="340" alt="BazzitePods main window">
+</p>
 
-LibrePods unlocks Apple's exclusive AirPods features on non-Apple devices. Get access to noise control modes, adaptive transparency, ear detection, hearing aid, customized transparency mode, battery status, and more - all the premium features you paid for but Apple locked to their ecosystem.
+## Install
 
-## Device Compatibility
+Run this in a terminal (Konsole). It needs no sudo, and nothing is layered into the system
+image:
 
-| Status | Device                | Features                                                   |
-| ------ | --------------------- | ---------------------------------------------------------- |
-| ✅      | AirPods Pro (2nd Gen) | Fully supported and tested                                 |
-| ✅      | AirPods Pro (3rd Gen) | Fully supported (except heartrate monitoring)              |
-| ⚠️      | Other AirPods models  | Basic features (battery status, ear detection) should work |
+```bash
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/packaging/install-bazzite.sh | bash
+```
 
-Most features should work with any AirPods. Currently, I've only got AirPods Pro 2 to test with.
+That's all. BazzitePods appears in your system tray and starts by itself at every login.
+Connect your AirPods in **System Settings → Bluetooth** as usual and the battery levels show
+up within a few seconds.
 
-## Key Features
+- To install a bundle you already downloaded, run `... | bash -s -- ~/Downloads/BazzitePods.flatpak`.
+- To uninstall, run `... | bash -s -- --uninstall`.
 
-- **Noise Control Modes**: Easily switch between noise control modes without having to reach out to your AirPods to long press
-- **Ear Detection**: Controls your music automatically when you put your AirPods in or take them out, and switch to phone speaker when you take them out
-- **Battery Status**: Accurate battery levels
-- **Head Gestures**: Answer calls just by nodding your head
-- **Conversational Awareness**: Volume automatically lowers when you speak
-- **Hearing Aid\***
-- **Customize Transparency Mode\***
-- **Multi-device connectivity\*** (upto 2 devices)
-- **Other customizations**:
-  - Rename your AirPods
-  - Customize long-press actions
-  - Few accessibility features
-  - And more!
+## Features
 
-See our [pinned issue](https://github.com/kavishdevar/librepods/issues/20) for a complete feature list and roadmap.
+- **Accurate battery for left, right and case**, including charging state. A pod that drops
+  out keeps its last value, dimmed, instead of showing 0%. The case shows its last known level
+  after the pods come out. Like on an iPhone, the case reports its level while at least one pod
+  is inside it.
+- **Game overlay** with four modes:
+  - **Compact** (default): a small widget that expands to the full card when something
+    changes, such as a pod going in or out, charging, or low battery.
+  - **Pop-up**: appears briefly on changes, then goes away.
+  - **Full**: always shows the full card while connected.
+  - **Off**.
+- **Liquid glass.** A **Glass** slider goes from smoked to clear glass. A **Game opacity**
+  slider makes the overlay see-through only while a fullscreen game or video is in front, and
+  it stays solid on the desktop. Text and icons have a built-in contrast halo, so they stay
+  readable on bright and dark scenes alike.
+- **Keeps audio working.** It fixes the classic "walked away, came back, connected but
+  silent" problem. It never leaves the audio card switched off, renegotiates A2DP when needed,
+  restores your default output, and reconnects the AirPods by itself when they come back in
+  range.
+- **Controls.** Noise control (when your model has it), ear detection with media pause and
+  resume, conversational awareness and renaming. Only the controls your model supports are
+  shown.
+- **Multiple devices.** When your iPhone or Mac takes the AirPods, BazzitePods pauses
+  what's playing here and shows **On another device**, while the AirPods stay connected.
+  Press **Use on this PC** (or just start playing something) to bring the audio back. The
+  overlay pops up when the audio moves.
+- **Hands-off.** Survives Bluetooth restarts, adapter hot-plug and suspend/resume. It never
+  turns Bluetooth on by itself. Launching it a second time just opens the window.
 
-## Platform Support
+| Full overlay | Compact widget |
+| --- | --- |
+| ![Full overlay](linux-rust/docs/screenshots/overlay.png) | ![Compact overlay](linux-rust/docs/screenshots/overlay-compact.png) |
 
-### Linux
+## Apple device mode (optional)
 
-The Linux version runs as a system tray app. Connect your AirPods and enjoy:
+AirPods behave best with devices that introduce themselves as Apple devices: they switch
+between them automatically and stay paired with both your iPhone and your PC. Apple device
+mode makes your PC's Bluetooth report Apple's vendor ID (`004C`) to the AirPods. It's off by
+default and changes one line in a system file, so BazzitePods never does it on its own.
 
-- Battery monitoring
-- Automatic Ear detection
-- Conversational Awareness
-- Switching Noise Control modes
-- Device renaming
+To turn it on, open **Settings → More options → Apple device mode** and press the button to
+copy the command, or run it yourself. It makes a backup, adds the line, and restarts
+Bluetooth (your devices drop for a few seconds):
 
-> [!NOTE]
-> Work in progress, but core functionality is stable and usable.
+```bash
+sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-bazzitepods && sudo sed -i '/^\[General\]/a DeviceID = bluetooth:004C:0000:0000' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth
+```
 
-For installation and detailed info, see the [Linux README](/linux/README.md).
+To undo it:
 
-### Android
+```bash
+sudo sed -i '/^DeviceID = bluetooth:004C:/d' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth
+```
 
-#### Screenshots
+Your other Bluetooth devices are not affected. Changes in `/etc` are kept across Bazzite
+updates.
 
-|                                                                                        |                                                   |                                                                             |
-| -------------------------------------------------------------------------------------- | ------------------------------------------------- | --------------------------------------------------------------------------- |
-| ![Settings 1](/android/imgs/settings-1.png)                                            | ![Settings 2](/android/imgs/settings-2.png)       | ![Debug Screen](/android/imgs/debug.png)                                    |
-| ![Battery Notification and QS Tile for NC Mode](/android/imgs/notification-and-qs.png) | ![Popup](/android/imgs/popup.png)                 | ![Head Tracking and Gestures](/android/imgs/head-tracking-and-gestures.png) |
-| ![Long Press Configuration](/android/imgs/long-press.png)                              | ![Widget](/android/imgs/widget.png)               | ![Customizations 1](/android/imgs/customizations-1.png)                     |
-| ![Customizations 2](/android/imgs/customizations-2.png)                                | ![accessibility](/android/imgs/accessibility.png) | ![transparency](/android/imgs/transparency.png)                             |
-| ![hearing-aid](/android/imgs/hearing-aid.png)                                          | ![hearing-test](/android/imgs/hearing-test.png)   | ![hearing-aid-adjustments](/android/imgs/hearing-aid-adjustments.png)       |
+## Safe with anti-cheat
 
+The overlay is an ordinary desktop surface drawn by its own process on the compositor's
+overlay layer (wlr-layer-shell). It doesn't touch games:
 
-here's a very unprofessional demo video
+- no Vulkan or OpenGL layers, no `LD_PRELOAD`, no injection or hooking
+- no ptrace, no reading other processes' memory or `/proc`
+- no screen capture: the overlay never reads what's behind it
+- click-through, and it never takes keyboard focus
 
-https://github.com/user-attachments/assets/43911243-0576-4093-8c55-89c1db5ea533
+Fullscreen detection asks KWin (through a small KWin script) whether the active window is
+fullscreen. It's a question to the window manager, not a look at the game.
 
-#### Root Requirement
+## Supported setups
 
-> [!CAUTION]
-> **You must have a rooted device with Xposed to use LibrePods on Android.** This is due to a [bug in the Android Bluetooth stack](https://issuetracker.google.com/issues/371713238). Please upvote the issue by clicking the '+1' icon on the IssueTracker page.
-> 
-> There are **no exceptions** to the root requirement until Google merges the fix.
+| Desktop | Overlay | Battery, controls, tray |
+| --- | --- | --- |
+| KDE Plasma 6 (Bazzite default) | Full, with smart fullscreen transparency | Yes |
+| Other wlr-layer-shell compositors (Hyprland, Sway, …) | Yes (solid; no fullscreen detection) | Yes |
+| GNOME | Desktop notifications instead | Yes |
+| Steam Gaming Mode (gamescope) | Not available | Yes |
 
-Until then, you must xposed. I used to provide a non-xposed method too, where the module used overlayfs to replace the bluetooth library with a locally patched one, but that was broken due to how various devices handled overlayfs and a patched library. With xposed, you can also enable the DID hook enabling a few extra features.
+**AirPods:** AirPods 4 (with and without noise cancellation), AirPods Pro 2 and 3, AirPods 3,
+AirPods Max and others. Battery and ear detection work on all of them. Feature controls follow
+each model's abilities.
 
-## Bluetooth DID (Device Identification) Hook
+## Testing and development
 
-Turns out, if you change the manufacturerid to that of Apple, you get access to several special features!
+- Hardware test steps: [`linux-rust/docs/TESTING.md`](linux-rust/docs/TESTING.md)
+- Design and rules: [`linux-rust/docs/ARCHITECTURE.md`](linux-rust/docs/ARCHITECTURE.md)
+- Build: `cd linux-rust && cargo build --release`, or `just flatpak` for the Flatpak.
 
-### Multi-device Connectivity
+This repository still contains upstream LibrePods' Android app (`android/`) and its older Qt
+Linux app (`linux/`). BazzitePods is the Rust app in `linux-rust/`.
 
-Upto two devices can be simultaneously connected to AirPods, for audio and control both. Seamless connection switching. The same notification shows up on Apple device when Android takes over the AirPods as if it were an Apple device ("Move to iPhone"). Android also shows a popup when the other device takes over.
+## Credits and licence
 
-### Accessibility Settings and Hearing Aid
+BazzitePods is a modified version of **LibrePods** by Kavish Devar and the LibrePods
+contributors (<https://github.com/librepods-org/librepods>). The AirPods protocol work,
+the Bluetooth core and much of the device logic come from LibrePods. This fork adds the
+Bazzite packaging, the overlay, the audio-recovery and battery logic, and the new interface.
 
-Accessibility settings like customizing transparency mode (amplification, balance, tone, conversation boost, and ambient noise reduction), and loud sound reduction can be configured.
-
-All hearing aid customizations can be done from Android, including setting the audiogram result. The app doesn't provide a way to take a hearing test because it requires much more precision. It is much better to use an already available audiogram result. 
-
-To enable these features, enable App Settings -> `act as Apple Device`.
-
-#### A few notes
-
-- Due to recent AirPods' firmware upgrades, you must enable `Off listening mode` to switch to `Off`. This is because in this mode, louds sounds are not reduced.
-
-- If you have take both AirPods out, the app will automatically switch to the phone speaker. But, Android might keep on trying to connect to the AirPods because the phone is still connected to them, just the A2DP profile is not connected. The app tries to disconnect the A2DP profile as soon as it detects that Android has connected again if they're not in the ear.
-
-- When renaming your AirPods through the app, you'll need to re-pair them with your phone for the name change to take effect. This is a limitation of how Bluetooth device naming works on Android.
-
-- If you want the AirPods icon and battery status to show in Android Settings app, install the app as a system app by using the root module.
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=kavishdevar/librepods&type=Date)](https://star-history.com/#kavishdevar/librepods&Date)
-
-# License
-
-LibrePods - AirPods liberated from Apple’s ecosystem
+BazzitePods - AirPods on Bazzite and other Linux desktops
 Copyright (C) 2025 LibrePods contributors
+Copyright (C) 2026 BazzitePods contributors
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published
-by the Free Software Foundation, either version 3 of the License.
+This program is free software: you can redistribute it and/or modify it under the terms of
+the GNU Affero General Public License as published by the Free Software Foundation, version 3
+of the License. It is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the [GNU Affero General Public License](LICENSE) for more details.
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
-
-You should have received a copy of the GNU Affero General Public License
-along with this program over [here](/LICENSE). If not, see <https://www.gnu.org/licenses/>.
-
-All trademarks, logos, and brand names are the property of their respective owners. Use of them does not imply any affiliation with or endorsement by them. All AirPods images, symbols, and the SF Pro font are the property of Apple Inc.
+BazzitePods is not affiliated with, endorsed by or sponsored by Apple Inc. AirPods, iPhone
+and other Apple marks are trademarks of Apple Inc. All other trademarks belong to their
+respective owners. The interface uses the Inter typeface (SIL Open Font License).

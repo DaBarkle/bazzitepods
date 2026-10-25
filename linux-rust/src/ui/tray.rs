@@ -1,301 +1,580 @@
-// use ksni::TrayMethods; // provides the spawn method
+//! System tray (StatusNotifierItem via ksni). Reads only from the hub.
+//!
+//! Icon: the themed `io.github.dabarkle.BazzitePods-symbolic` icon (recoloured by the panel), plus a
+//! small rendered battery badge as the overlay pixmap while connected. A fully rendered pixmap is
+//! provided as a fallback for hosts that cannot resolve the icon name. Rendered icons are cached
+//! by (level bucket, tone, charging, connected).
 
-use ab_glyph::{Font, ScaleFont};
-use ksni::{Icon, ToolTip};
+use crate::bluetooth::aacp::ControlCommandIdentifiers;
+use crate::devices::airpods::CommandSender;
+use crate::hub::{AppSnapshot, DeviceSnapshot, Hub};
+use crate::ui::format::{self, ListeningMode, Tone};
+use crate::ui::messages::BluetoothUIMessage;
+use ksni::{Icon, ToolTip, TrayMethods};
+use log::debug;
+use std::collections::HashMap;
+use std::f32::consts::TAU;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::bluetooth::aacp::{BatteryStatus, ControlCommandIdentifiers};
-use crate::ui::messages::BluetoothUIMessage;
-use crate::utils::get_app_settings_path;
+const ICON_NAME: &str = "io.github.dabarkle.BazzitePods-symbolic";
 
-#[derive(Debug)]
-pub struct MyTray {
-    pub conversation_detect_enabled: Option<bool>,
-    pub battery_headphone: Option<u8>,
-    pub battery_headphone_status: Option<BatteryStatus>,
-    pub battery_l: Option<u8>,
-    pub battery_l_status: Option<BatteryStatus>,
-    pub battery_r: Option<u8>,
-    pub battery_r_status: Option<BatteryStatus>,
-    pub battery_c: Option<u8>,
-    pub battery_c_status: Option<BatteryStatus>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct IconKey {
+    /// Level rounded to 5 %, `None` when unknown.
+    pub bucket: Option<u8>,
+    pub tone: Tone,
+    pub charging: bool,
     pub connected: bool,
-    pub listening_mode: Option<u8>,
-    pub allow_off_option: Option<u8>,
-    pub command_tx: Option<UnboundedSender<(ControlCommandIdentifiers, Vec<u8>)>>,
-    pub ui_tx: Option<UnboundedSender<BluetoothUIMessage>>,
 }
 
-impl ksni::Tray for MyTray {
+impl IconKey {
+    pub fn for_snapshot(snap: &AppSnapshot) -> Self {
+        match snap.primary().filter(|d| d.is_connected()) {
+            Some(d) => {
+                let (level, charging) = format::tray_level(d);
+                IconKey {
+                    bucket: level.map(|l| (l.min(100) + 2) / 5 * 5),
+                    tone: format::tone_for(level),
+                    charging,
+                    connected: true,
+                }
+            }
+            None => IconKey {
+                bucket: None,
+                tone: Tone::Muted,
+                charging: false,
+                connected: false,
+            },
+        }
+    }
+}
+
+type IconCache = Arc<Mutex<HashMap<(IconKey, bool), Vec<Icon>>>>;
+
+pub struct LibreTray {
+    snap: AppSnapshot,
+    commands: Option<CommandSender>,
+    ui_tx: UnboundedSender<BluetoothUIMessage>,
+    cache: IconCache,
+}
+
+impl LibreTray {
+    fn device(&self) -> Option<&DeviceSnapshot> {
+        self.snap.primary()
+    }
+
+    fn cached(&self, badge: bool, render: fn(IconKey) -> Vec<Icon>) -> Vec<Icon> {
+        let key = IconKey::for_snapshot(&self.snap);
+        let Ok(mut cache) = self.cache.lock() else {
+            return render(key);
+        };
+        if cache.len() > 128 {
+            cache.clear();
+        }
+        cache
+            .entry((key, badge))
+            .or_insert_with(|| render(key))
+            .clone()
+    }
+
+    fn send(&self, id: ControlCommandIdentifiers, value: u8) {
+        if let Some(tx) = &self.commands
+            && tx.send((id, vec![value])).is_err()
+        {
+            debug!("Control channel closed; tray command dropped");
+        }
+    }
+}
+
+impl ksni::Tray for LibreTray {
     fn id(&self) -> String {
         env!("CARGO_PKG_NAME").into()
     }
+
     fn title(&self) -> String {
-        "AirPods".into()
+        "BazzitePods".into()
     }
+
+    fn category(&self) -> ksni::Category {
+        ksni::Category::Hardware
+    }
+
+    fn icon_name(&self) -> String {
+        ICON_NAME.into()
+    }
+
     fn icon_pixmap(&self) -> Vec<Icon> {
-        let text = {
-            let mut levels: Vec<u8> = Vec::new();
-            if let Some(h) = self.battery_headphone {
-                if self.battery_headphone_status != Some(BatteryStatus::Disconnected) {
-                    levels.push(h);
-                }
-            } else {
-                if let Some(l) = self.battery_l
-                    && self.battery_l_status != Some(BatteryStatus::Disconnected)
-                {
-                    levels.push(l);
-                }
-                if let Some(r) = self.battery_r
-                    && self.battery_r_status != Some(BatteryStatus::Disconnected)
-                {
-                    levels.push(r);
-                }
-                // if let Some(c) = self.battery_c {
-                //     if self.battery_c_status != Some(BatteryStatus::Disconnected) {
-                //         levels.push(c);
-                //     }
-                // }
-            }
-            let min_battery = levels.iter().min().copied();
-            if let Some(b) = min_battery {
-                format!("{}", b)
-            } else {
-                "?".to_string()
-            }
-        };
-        let any_bud_charging = matches!(self.battery_l_status, Some(BatteryStatus::Charging))
-            || matches!(self.battery_r_status, Some(BatteryStatus::Charging));
-        let app_settings_path = get_app_settings_path();
-        let settings = std::fs::read_to_string(&app_settings_path)
-            .ok()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok());
-        let text_mode = settings
-            .clone()
-            .and_then(|v| v.get("tray_text_mode").cloned())
-            .and_then(|ttm| serde_json::from_value(ttm).ok())
-            .unwrap_or(false);
-        let icon = generate_icon(&text, text_mode, any_bud_charging);
-        vec![icon]
+        self.cached(false, |k| vec![render_full(k, 64), render_full(k, 32)])
     }
+
+    fn overlay_icon_pixmap(&self) -> Vec<Icon> {
+        if !IconKey::for_snapshot(&self.snap).connected {
+            return Vec::new();
+        }
+        self.cached(true, |k| vec![render_badge(k, 32), render_badge(k, 16)])
+    }
+
     fn tool_tip(&self) -> ToolTip {
-        let format_component =
-            |label: &str, level: Option<u8>, status: Option<BatteryStatus>| -> String {
-                match status {
-                    Some(BatteryStatus::Disconnected) => format!("{}: -", label),
-                    _ => {
-                        let pct = level.map(|b| format!("{}%", b)).unwrap_or("?".to_string());
-                        let suffix = if status == Some(BatteryStatus::Charging) {
-                            "⚡"
-                        } else {
-                            ""
-                        };
-                        format!("{}: {}{}", label, pct, suffix)
-                    }
-                }
-            };
-
-        let l = format_component("L", self.battery_l, self.battery_l_status);
-        let r = format_component("R", self.battery_r, self.battery_r_status);
-        let c = format_component("C", self.battery_c, self.battery_c_status);
-
+        let (title, description) = format::tooltip(&self.snap, SystemTime::now());
         ToolTip {
-            icon_name: "".to_string(),
-            icon_pixmap: vec![],
-            title: "Battery Status".to_string(),
-            description: format!("{} {} {}", l, r, c),
+            icon_name: String::new(),
+            icon_pixmap: Vec::new(),
+            title,
+            description,
         }
     }
+
+    fn activate(&mut self, _x: i32, _y: i32) {
+        let _ = self.ui_tx.send(BluetoothUIMessage::OpenWindow);
+    }
+
     fn menu(&self) -> Vec<ksni::MenuItem<Self>> {
         use ksni::menu::*;
-        let allow_off = self.allow_off_option == Some(0x01);
-        let options = if allow_off {
-            vec![
-                ("Off", 0x01),
-                ("Noise Cancellation", 0x02),
-                ("Transparency", 0x03),
-                ("Adaptive", 0x04),
-            ]
-        } else {
-            vec![
-                ("Noise Cancellation", 0x02),
-                ("Transparency", 0x03),
-                ("Adaptive", 0x04),
-            ]
-        };
-        let selected = self
-            .listening_mode
-            .and_then(|mode| options.iter().position(|&(_, val)| val == mode))
-            .unwrap_or(0);
-        let options_clone = options.clone();
-        vec![
+        let mut items: Vec<MenuItem<Self>> = Vec::new();
+        let info_item = |label: String| -> MenuItem<Self> {
             StandardItem {
-                label: "Open Window".into(),
+                label,
+                enabled: false,
+                ..Default::default()
+            }
+            .into()
+        };
+
+        match self.device() {
+            Some(d) => {
+                let (status, _) = format::connection_label(d);
+                items.push(info_item(format!(
+                    "{} — {}",
+                    d.name.replace('_', "__"),
+                    status
+                )));
+                if d.is_connected() || format::is_nearby(d) {
+                    items.push(info_item(format::battery_line(d, SystemTime::now())));
+                }
+                let enabled = format::controls_enabled(d);
+                let modes = format::listening_modes(d);
+                if d.is_connected() && !modes.is_empty() {
+                    items.push(MenuItem::Separator);
+                    let current = d.listening_mode.and_then(ListeningMode::from_byte);
+                    let selected = current
+                        .and_then(|m| modes.iter().position(|x| *x == m))
+                        .unwrap_or(usize::MAX);
+                    let options = modes.clone();
+                    items.push(
+                        RadioGroup {
+                            selected,
+                            select: Box::new(move |this: &mut Self, i| {
+                                if let Some(m) = options.get(i) {
+                                    this.send(ControlCommandIdentifiers::ListeningMode, m.byte());
+                                }
+                            }),
+                            options: modes
+                                .iter()
+                                .map(|m| RadioItem {
+                                    label: m.label().into(),
+                                    enabled,
+                                    ..Default::default()
+                                })
+                                .collect(),
+                        }
+                        .into(),
+                    );
+                }
+                if d.is_connected() && format::shows_conversation_awareness(d) {
+                    let on = d.conversation_awareness.unwrap_or(false);
+                    items.push(
+                        CheckmarkItem {
+                            label: "Conversation Awareness".into(),
+                            checked: on,
+                            enabled: enabled && d.conversation_awareness.is_some(),
+                            activate: Box::new(move |this: &mut Self| {
+                                this.send(
+                                    ControlCommandIdentifiers::ConversationDetectConfig,
+                                    if on { 0x02 } else { 0x01 },
+                                );
+                            }),
+                            ..Default::default()
+                        }
+                        .into(),
+                    );
+                }
+            }
+            None => {
+                let (_, body) = format::tooltip(&self.snap, SystemTime::now());
+                items.push(info_item(body));
+            }
+        }
+
+        items.push(MenuItem::Separator);
+        items.push(
+            StandardItem {
+                label: "Open BazzitePods".into(),
                 icon_name: "window-new".into(),
                 activate: Box::new(|this: &mut Self| {
-                    if let Some(tx) = &this.ui_tx {
-                        let _ = tx.send(BluetoothUIMessage::OpenWindow);
-                    }
+                    let _ = this.ui_tx.send(BluetoothUIMessage::OpenWindow);
                 }),
                 ..Default::default()
             }
             .into(),
-            RadioGroup {
-                selected,
-                select: Box::new(move |this: &mut Self, current| {
-                    if let Some(tx) = &this.command_tx {
-                        let value = options_clone
-                            .get(current)
-                            .map(|&(_, val)| val)
-                            .unwrap_or(0x02);
-                        let _ = tx.send((ControlCommandIdentifiers::ListeningMode, vec![value]));
-                    }
-                }),
-                options: options
-                    .into_iter()
-                    .map(|(label, _)| RadioItem {
-                        label: label.into(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            }
-            .into(),
-            MenuItem::Separator,
-            CheckmarkItem {
-                label: "Conversation Detection".into(),
-                checked: self.conversation_detect_enabled.unwrap_or(false),
-                enabled: self.conversation_detect_enabled.is_some(),
-                activate: Box::new(|this: &mut Self| {
-                    if let Some(tx) = &this.command_tx
-                        && let Some(is_enabled) = this.conversation_detect_enabled
-                    {
-                        let new_state = !is_enabled;
-                        let value = if !new_state { 0x02 } else { 0x01 };
-                        let _ = tx.send((
-                            ControlCommandIdentifiers::ConversationDetectConfig,
-                            vec![value],
-                        ));
-                        this.conversation_detect_enabled = Some(new_state);
-                    }
-                }),
-                ..Default::default()
-            }
-            .into(),
+        );
+        items.push(
             StandardItem {
-                label: "Exit".into(),
+                label: "Quit".into(),
                 icon_name: "application-exit".into(),
                 activate: Box::new(|_| std::process::exit(0)),
                 ..Default::default()
             }
             .into(),
-        ]
+        );
+        items
     }
 }
 
-fn generate_icon(text: &str, text_mode: bool, charging: bool) -> Icon {
-    use ab_glyph::{FontRef, PxScale};
-    use image::{ImageBuffer, Rgba};
-    use imageproc::drawing::draw_text_mut;
-
-    let width = 64;
-    let height = 64;
-
-    let mut img = ImageBuffer::from_fn(width, height, |_, _| Rgba([0u8, 0u8, 0u8, 0u8]));
-
-    let font_data = include_bytes!("../../assets/font/DejaVuSans.ttf");
-    let font = match FontRef::try_from_slice(font_data) {
-        Ok(f) => f,
-        Err(_) => {
-            return Icon {
-                width: width as i32,
-                height: height as i32,
-                data: vec![0u8; (width * height * 4) as usize],
-            };
+/// Mirror the hub into the tray until the hub closes.
+pub async fn run_tray(
+    hub: Hub,
+    ui_tx: UnboundedSender<BluetoothUIMessage>,
+    active_commands: Arc<tokio::sync::Mutex<Option<CommandSender>>>,
+) {
+    let cache: IconCache = Arc::new(Mutex::new(HashMap::new()));
+    let in_flatpak = crate::autostart::running_in_flatpak();
+    // No StatusNotifierWatcher (e.g. GNOME without the AppIndicator extension): retry quietly,
+    // the rest of the app works without a tray.
+    let handle = loop {
+        let tray = LibreTray {
+            snap: hub.snapshot(),
+            commands: active_commands.lock().await.clone(),
+            ui_tx: ui_tx.clone(),
+            cache: cache.clone(),
+        };
+        // Inside Flatpak we may not own extra bus names; the SNI works without one.
+        match tray.disable_dbus_name(in_flatpak).spawn().await {
+            Ok(h) => break h,
+            Err(e) => {
+                debug!("Tray not available yet: {e}");
+                tokio::time::sleep(Duration::from_secs(30)).await;
+            }
         }
     };
-    if !text_mode {
-        let percentage = text.parse::<f32>().unwrap_or(0.0) / 100.0;
 
-        let center_x = width as f32 / 2.0;
-        let center_y = height as f32 / 2.0;
-        let inner_radius = 22.0;
-        let outer_radius = 28.0;
+    let mut rx = hub.subscribe();
+    loop {
+        let snap = rx.borrow_and_update().clone();
+        let commands = active_commands.lock().await.clone();
+        handle
+            .update(move |t: &mut LibreTray| {
+                t.snap = snap;
+                t.commands = commands;
+            })
+            .await;
+        if rx.changed().await.is_err() {
+            return;
+        }
+    }
+}
 
-        // ring background
-        for y in 0..height {
-            for x in 0..width {
-                let dx = x as f32 - center_x;
-                let dy = y as f32 - center_y;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > inner_radius && dist <= outer_radius {
-                    img.put_pixel(x, y, Rgba([128u8, 128u8, 128u8, 255u8]));
+// ------------------------------------------------------------------ rendering
+
+#[derive(Clone, Copy)]
+struct Rgba(f32, f32, f32, f32);
+
+const fn hex(h: u32, a: f32) -> Rgba {
+    Rgba(
+        ((h >> 16) & 0xFF) as f32 / 255.0,
+        ((h >> 8) & 0xFF) as f32 / 255.0,
+        (h & 0xFF) as f32 / 255.0,
+        a,
+    )
+}
+
+fn tone_color(tone: Tone, charging: bool) -> Rgba {
+    match tone {
+        _ if charging => hex(0x34D17A, 1.0),
+        Tone::Normal => hex(0x34D17A, 1.0),
+        Tone::Low => hex(0xFFB224, 1.0),
+        Tone::Critical => hex(0xFF5A4E, 1.0),
+        Tone::Muted => hex(0x8A8F98, 1.0),
+    }
+}
+
+/// Premultiplied RGBA canvas drawn with signed distance fields (anti-aliased, no fonts).
+struct Canvas {
+    size: u32,
+    px: Vec<[f32; 4]>,
+}
+
+impl Canvas {
+    fn new(size: u32) -> Self {
+        Self {
+            size,
+            px: vec![[0.0; 4]; (size * size) as usize],
+        }
+    }
+
+    /// Paint `color` with coverage from `sdf` (negative inside), in unit (0..1) coordinates.
+    fn paint(&mut self, color: Rgba, sdf: impl Fn(f32, f32) -> f32) {
+        let s = self.size as f32;
+        for y in 0..self.size {
+            for x in 0..self.size {
+                let (u, v) = ((x as f32 + 0.5) / s, (y as f32 + 0.5) / s);
+                let cov = (0.5 - sdf(u, v) * s).clamp(0.0, 1.0);
+                if cov <= 0.0 {
+                    continue;
                 }
-            }
-        }
-
-        // ring
-        for y in 0..height {
-            for x in 0..width {
-                let dx = x as f32 - center_x;
-                let dy = y as f32 - center_y;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist > inner_radius && dist <= outer_radius {
-                    let angle = dy.atan2(dx);
-                    let angle_from_top =
-                        (angle + std::f32::consts::PI / 2.0).rem_euclid(2.0 * std::f32::consts::PI);
-                    if angle_from_top <= percentage * 2.0 * std::f32::consts::PI {
-                        img.put_pixel(x, y, Rgba([0u8, 255u8, 0u8, 255u8]));
-                    }
+                let a = color.3 * cov;
+                let p = &mut self.px[(y * self.size + x) as usize];
+                for (i, c) in [color.0, color.1, color.2].into_iter().enumerate() {
+                    p[i] = c * a + p[i] * (1.0 - a);
                 }
+                p[3] = a + p[3] * (1.0 - a);
             }
         }
-        if charging {
-            let emoji = "⚡";
-            let scale = PxScale::from(48.0);
-            let color = Rgba([0u8, 255u8, 0u8, 255u8]);
-            let scaled_font = font.as_scaled(scale);
-            let mut emoji_width = 0.0;
-            for c in emoji.chars() {
-                let glyph_id = font.glyph_id(c);
-                emoji_width += scaled_font.h_advance(glyph_id);
-            }
-            let x = ((width as f32 - emoji_width) / 2.0).max(0.0) as i32;
-            let y = ((height as f32 - scale.y) / 2.0).max(0.0) as i32;
-            draw_text_mut(&mut img, color, x, y, scale, &font, emoji);
+    }
+
+    fn into_icon(self) -> Icon {
+        let mut data = Vec::with_capacity(self.px.len() * 4);
+        for [r, g, b, a] in self.px {
+            let un = |c: f32| {
+                if a > 0.0 {
+                    ((c / a).clamp(0.0, 1.0) * 255.0).round() as u8
+                } else {
+                    0
+                }
+            };
+            data.extend_from_slice(&[
+                (a.clamp(0.0, 1.0) * 255.0).round() as u8,
+                un(r),
+                un(g),
+                un(b),
+            ]);
         }
-    } else {
-        // battery text
-        let scale = PxScale::from(48.0);
-        let color = if charging {
-            Rgba([0u8, 255u8, 0u8, 255u8])
+        Icon {
+            width: self.size as i32,
+            height: self.size as i32,
+            data,
+        }
+    }
+}
+
+fn circle(cx: f32, cy: f32, r: f32) -> impl Fn(f32, f32) -> f32 {
+    move |x, y| ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - r
+}
+
+fn capsule(ax: f32, ay: f32, bx: f32, by: f32, w: f32) -> impl Fn(f32, f32) -> f32 {
+    move |x, y| {
+        let (px, py, dx, dy) = (x - ax, y - ay, bx - ax, by - ay);
+        let h = ((px * dx + py * dy) / (dx * dx + dy * dy).max(1e-6)).clamp(0.0, 1.0);
+        ((px - dx * h).powi(2) + (py - dy * h).powi(2)).sqrt() - w / 2.0
+    }
+}
+
+/// Arc of radius `r` and stroke `w` starting at 12 o'clock, clockwise over `sweep` (0..1),
+/// with round caps.
+fn arc(cx: f32, cy: f32, r: f32, w: f32, sweep: f32) -> impl Fn(f32, f32) -> f32 {
+    let sweep = sweep.clamp(0.0, 1.0) * TAU;
+    let end = (cx + r * sweep.sin(), cy - r * sweep.cos());
+    move |x, y| {
+        let (dx, dy) = (x - cx, y - cy);
+        let ang = dx.atan2(-dy).rem_euclid(TAU);
+        if ang <= sweep {
+            ((dx * dx + dy * dy).sqrt() - r).abs() - w / 2.0
         } else {
-            Rgba([255u8, 255u8, 255u8, 255u8])
-        };
-
-        let scaled_font = font.as_scaled(scale);
-        let mut text_width = 0.0;
-        for c in text.chars() {
-            let glyph_id = font.glyph_id(c);
-            text_width += scaled_font.h_advance(glyph_id);
+            let d0 = ((x - cx).powi(2) + (y - (cy - r)).powi(2)).sqrt();
+            let d1 = ((x - end.0).powi(2) + (y - end.1).powi(2)).sqrt();
+            d0.min(d1) - w / 2.0
         }
-        let x = ((width as f32 - text_width) / 2.0).max(0.0) as i32;
-        let y = ((height as f32 - scale.y) / 2.0).max(0.0) as i32;
+    }
+}
 
-        draw_text_mut(&mut img, color, x, y, scale, &font, text);
+fn polygon(points: Vec<(f32, f32)>) -> impl Fn(f32, f32) -> f32 {
+    move |x, y| {
+        let n = points.len();
+        let mut d = f32::MAX;
+        let mut inside = false;
+        for i in 0..n {
+            let (ax, ay) = points[i];
+            let (bx, by) = points[(i + 1) % n];
+            d = d.min(capsule(ax, ay, bx, by, 0.0)(x, y));
+            if ((ay > y) != (by > y)) && (x < (bx - ax) * (y - ay) / (by - ay) + ax) {
+                inside = !inside;
+            }
+        }
+        if inside { -d } else { d }
+    }
+}
+
+fn bolt(cx: f32, cy: f32, h: f32) -> impl Fn(f32, f32) -> f32 {
+    let s = h / 16.0;
+    let p = |x: f32, y: f32| (cx + (x - 8.0) * s, cy + (y - 8.0) * s);
+    polygon(vec![
+        p(9.5, 0.0),
+        p(2.5, 9.2),
+        p(7.4, 9.2),
+        p(6.3, 16.0),
+        p(13.5, 6.6),
+        p(8.6, 6.6),
+    ])
+}
+
+/// Rotated ellipse (`rot` in radians, clockwise); approximate distance, fine for AA.
+fn ellipse(cx: f32, cy: f32, rx: f32, ry: f32, rot: f32) -> impl Fn(f32, f32) -> f32 {
+    let (sn, cs) = rot.sin_cos();
+    move |x, y| {
+        let (dx, dy) = (x - cx, y - cy);
+        let (lx, ly) = (dx * cs + dy * sn, -dx * sn + dy * cs);
+        (((lx / rx).powi(2) + (ly / ry).powi(2)).sqrt() - 1.0) * rx.min(ry)
+    }
+}
+
+/// The pair of earbuds, same geometry as the overlay glyph and `assets/icons/` (a 32-unit
+/// box, right bud first, left mirrored). `grow` fattens every shape (for the halo).
+fn earbuds(c: &mut Canvas, color: Rgba, grow: f32, grille: Option<Rgba>) {
+    let k = 0.6 / 32.0;
+    for side in [1.0f32, -1.0] {
+        let p = |x: f32, y: f32| (0.5 + side * (x - 16.0) * k, 0.5 + (y - 16.8) * k);
+        let rot = side * -20f32.to_radians();
+        let (sx0, sy0) = p(25.0, 10.5);
+        let (sx1, sy1) = p(25.7, 28.0);
+        c.paint(color, capsule(sx0, sy0, sx1, sy1, 3.6 * k + grow * 2.0));
+        let (hx, hy) = p(22.6, 8.6);
+        c.paint(color, ellipse(hx, hy, 5.0 * k + grow, 4.6 * k + grow, rot));
+        if let Some(g) = grille {
+            let (gx, gy) = p(19.4, 9.6);
+            c.paint(g, ellipse(gx, gy, 1.25 * k, 1.9 * k, rot));
+        }
+    }
+}
+
+/// Full fallback icon: battery ring around two earbuds.
+pub fn render_full(key: IconKey, size: u32) -> Icon {
+    let mut c = Canvas::new(size);
+    let glyph = if key.connected {
+        hex(0xECEEF1, 1.0)
+    } else {
+        hex(0x8A8F98, 1.0)
+    };
+    let halo = hex(0x000000, 0.35);
+    let (r, w) = (0.40, 0.085);
+    c.paint(halo, arc(0.5, 0.5, r, w + 0.05, 1.0));
+    c.paint(
+        hex(0x8A8F98, if key.connected { 0.45 } else { 0.6 }),
+        arc(0.5, 0.5, r, w, 1.0),
+    );
+    if let Some(b) = key.bucket.filter(|_| key.connected) {
+        c.paint(
+            tone_color(key.tone, key.charging),
+            arc(0.5, 0.5, r, w, b as f32 / 100.0),
+        );
+    }
+    earbuds(&mut c, halo, 0.025, None);
+    earbuds(&mut c, glyph, 0.0, Some(hex(0x16181C, 0.55)));
+    if key.charging {
+        c.paint(halo, circle(0.78, 0.78, 0.2));
+        c.paint(tone_color(Tone::Normal, true), bolt(0.78, 0.78, 0.3));
+    }
+    c.into_icon()
+}
+
+/// Small overlay badge: dark disc with the battery arc, bolt inside while charging.
+pub fn render_badge(key: IconKey, size: u32) -> Icon {
+    let mut c = Canvas::new(size);
+    c.paint(hex(0x16181C, 0.92), circle(0.5, 0.5, 0.5));
+    let (r, w) = (0.33, 0.16);
+    c.paint(hex(0xFFFFFF, 0.18), arc(0.5, 0.5, r, w, 1.0));
+    let color = tone_color(key.tone, key.charging);
+    if let Some(b) = key.bucket {
+        c.paint(color, arc(0.5, 0.5, r, w, b as f32 / 100.0));
+    }
+    if key.charging {
+        c.paint(color, bolt(0.5, 0.5, 0.42));
+    }
+    c.into_icon()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::battery::ComponentBattery;
+    use crate::hub::LinkState;
+
+    fn snap(level: u8, charging: bool, link: LinkState) -> AppSnapshot {
+        let mut d = DeviceSnapshot::new("AA".into(), "Pods".into());
+        d.link = link;
+        let c = ComponentBattery {
+            level: Some(level),
+            charging,
+            present: true,
+            stale: false,
+            last_seen: None,
+        };
+        d.battery.left = c.clone();
+        d.battery.right = c;
+        let mut s = AppSnapshot::default();
+        s.devices.insert("AA".into(), d);
+        s
     }
 
-    let mut data = Vec::with_capacity((width * height * 4) as usize);
-    for pixel in img.pixels() {
-        data.push(pixel[3]);
-        data.push(pixel[0]);
-        data.push(pixel[1]);
-        data.push(pixel[2]);
+    #[test]
+    fn icon_key_buckets() {
+        let k = IconKey::for_snapshot(&snap(83, false, LinkState::Connected));
+        assert_eq!(k.bucket, Some(85));
+        assert_eq!(k.tone, Tone::Normal);
+        assert!(k.connected);
+        assert_eq!(
+            IconKey::for_snapshot(&snap(81, false, LinkState::Connected)),
+            IconKey::for_snapshot(&snap(79, false, LinkState::Connected))
+        );
+        let low = IconKey::for_snapshot(&snap(9, true, LinkState::Connected));
+        assert_eq!(low.tone, Tone::Critical);
+        assert!(low.charging);
+        let off = IconKey::for_snapshot(&snap(50, false, LinkState::Disconnected));
+        assert!(!off.connected);
+        assert_eq!(off.bucket, None);
     }
 
-    Icon {
-        width: width as i32,
-        height: height as i32,
-        data,
+    /// `LIBREPODS_ICON_DUMP=/some/dir cargo test dump_tray_icons -- --ignored` writes previews.
+    #[test]
+    #[ignore]
+    fn dump_tray_icons() {
+        let Some(dir) = std::env::var_os("LIBREPODS_ICON_DUMP") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        let cases = [
+            ("full-80", snap(80, false, LinkState::Connected)),
+            ("full-15-charging", snap(15, true, LinkState::Connected)),
+            ("full-8", snap(8, false, LinkState::Connected)),
+            ("full-off", snap(50, false, LinkState::Disconnected)),
+        ];
+        for (name, s) in cases {
+            let k = IconKey::for_snapshot(&s);
+            for (kind, icon) in [("icon", render_full(k, 64)), ("badge", render_badge(k, 32))] {
+                let rgba: Vec<u8> = icon
+                    .data
+                    .chunks(4)
+                    .flat_map(|p| [p[1], p[2], p[3], p[0]])
+                    .collect();
+                let img = image::RgbaImage::from_raw(icon.width as u32, icon.height as u32, rgba)
+                    .unwrap();
+                img.save(dir.join(format!("{name}-{kind}.png"))).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn renders_have_expected_size_and_content() {
+        let key = IconKey::for_snapshot(&snap(50, true, LinkState::Connected));
+        for size in [16, 32, 64] {
+            let icon = render_full(key, size);
+            assert_eq!(icon.data.len(), (size * size * 4) as usize);
+            assert!(
+                icon.data.chunks(4).any(|p| p[0] > 200),
+                "something opaque drawn"
+            );
+            let badge = render_badge(key, size);
+            assert_eq!(badge.width, size as i32);
+        }
     }
 }

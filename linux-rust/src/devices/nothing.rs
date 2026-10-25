@@ -25,12 +25,12 @@ impl NothingDevice {
     pub async fn new(
         mac_address: Address,
         ui_tx: mpsc::UnboundedSender<BluetoothUIMessage>,
-    ) -> Self {
+    ) -> Option<Self> {
         let mut att_manager = ATTManager::new();
-        att_manager
-            .connect(mac_address)
-            .await
-            .expect("Failed to connect");
+        if let Err(e) = att_manager.connect(mac_address).await {
+            log::warn!("ATT connect to {} failed: {}", mac_address, e);
+            return None;
+        }
 
         let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
 
@@ -70,7 +70,7 @@ impl NothingDevice {
                 ],
             )
             .await
-            .expect("Failed to write");
+            .ok()?;
 
         sleep(Duration::from_millis(100)).await;
 
@@ -81,14 +81,15 @@ impl NothingDevice {
                 &[0x55, 0x20, 0x01, 0x06, 0xC0, 0x00, 0x00, 0x13, 0x00, 0x00],
             )
             .await
-            .expect("Failed to write");
+            .ok()?;
 
         // let ui_tx_clone = ui_tx.clone();
         let information_l = information.clone();
         tokio::spawn(async move {
             while let Some(data) = rx.recv().await {
                 if data.starts_with(&[0x55, 0x20, 0x01, 0x42, 0x40]) {
-                    let firmware_version = String::from_utf8_lossy(&data[8..]).to_string();
+                    let firmware_version =
+                        String::from_utf8_lossy(data.get(8..).unwrap_or_default()).to_string();
                     info!(
                         "Received firmware version from Nothing device {}: {}",
                         mac_address, firmware_version
@@ -112,8 +113,11 @@ impl NothingDevice {
                             information: Some(DeviceInformation::Nothing(new_information)),
                         },
                     );
-                    let json = serde_json::to_string(&new_devices).unwrap();
-                    std::fs::write(get_devices_path(), json).expect("Failed to write devices file");
+                    if let Ok(json) = serde_json::to_string(&new_devices)
+                        && let Err(e) = std::fs::write(get_devices_path(), json)
+                    {
+                        log::warn!("Failed to write devices file: {}", e);
+                    }
                 } else if data.starts_with(&[0x55, 0x20, 0x01, 0x06, 0x40]) {
                     let serial_number_start_position = data
                         .iter()
@@ -153,9 +157,11 @@ impl NothingDevice {
                                 information: Some(DeviceInformation::Nothing(new_information)),
                             },
                         );
-                        let json = serde_json::to_string(&new_devices).unwrap();
-                        std::fs::write(get_devices_path(), json)
-                            .expect("Failed to write devices file");
+                        if let Ok(json) = serde_json::to_string(&new_devices)
+                            && let Err(e) = std::fs::write(get_devices_path(), json)
+                        {
+                            log::warn!("Failed to write devices file: {}", e);
+                        }
                     } else {
                         debug!(
                             "Serial number format unexpected from Nothing device {}: {:?}",
@@ -171,9 +177,9 @@ impl NothingDevice {
             }
         });
 
-        NothingDevice {
+        Some(NothingDevice {
             att_manager,
             information,
-        }
+        })
     }
 }
