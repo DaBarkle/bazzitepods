@@ -285,15 +285,44 @@ fn owns_audio(hub: &crate::hub::Hub, mac: &str) -> Option<bool> {
     hub.snapshot().devices.get(mac).and_then(|d| d.owns_audio)
 }
 
-/// The audio came back from another device. While it was away the AirPods may have
-/// dropped A2DP to this PC (the sink disappears and the default output moves), so have
-/// the audio guard re-run its full setup: reconnect the profile, pick A2DP, restore the
-/// default output.
+/// The audio came back from another device. While it was away the AirPods usually broke
+/// the A2DP transport to this PC, so have the audio guard check at once and repair it.
+/// The repair rebuilds the output, which makes players pause; resume the ones that were
+/// playing when the audio came back, so one press of play is enough.
 fn route_regained(audio: Option<&AudioGuardHandle>) {
     info!("Audio route is back on this PC; re-checking the audio setup");
-    if let Some(audio) = audio {
-        audio.resume_hint();
-    }
+    let Some(audio) = audio.cloned() else {
+        return;
+    };
+    audio.route_back();
+    tokio::spawn(async move {
+        let playing = MediaController::playing_players().await;
+        if playing.is_empty() {
+            return;
+        }
+        let mut health = audio.health();
+        let deadline = sleep(Duration::from_secs(15));
+        tokio::pin!(deadline);
+        let mut repaired = false;
+        loop {
+            tokio::select! {
+                _ = &mut deadline => return,
+                changed = health.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    match *health.borrow() {
+                        AudioHealth::Recovering { .. } => repaired = true,
+                        AudioHealth::Ready { .. } if repaired => break,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // Let the new output settle before pressing play.
+        sleep(Duration::from_millis(800)).await;
+        MediaController::resume_if_paused(playing).await;
+    });
 }
 
 /// Tell every other device on the AirPods that this PC is taking the audio route, so

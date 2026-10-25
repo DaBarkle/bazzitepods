@@ -106,6 +106,12 @@ impl AudioGuardHandle {
         self.send(Cmd::Resume);
     }
 
+    /// The audio route just came back from another Apple device. Its A2DP transport was
+    /// often broken while away, so re-check at once and repair a stall within a second.
+    pub fn route_back(&self) {
+        self.send(Cmd::RouteBack);
+    }
+
     pub fn health(&self) -> watch::Receiver<AudioHealth> {
         self.health_rx.clone()
     }

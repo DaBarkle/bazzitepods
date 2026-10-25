@@ -498,6 +498,24 @@ async fn recovery_is_rate_limited() {
 }
 
 #[tokio::test]
+async fn route_back_repairs_without_waiting_for_the_cooldown() {
+    // One recovery has just run (and the 30 s cooldown would block another), then the
+    // user takes the audio back from the iPhone: the guard repairs again at once.
+    let (world, handle) = start(stalled_world(), fast());
+    handle.link_up();
+    wait_health(&handle, "failed", |h| {
+        matches!(h, AudioHealth::Failed { .. })
+    })
+    .await;
+    settle(100).await;
+    assert_eq!(lock(&world).count("profile:off"), 1);
+
+    handle.route_back();
+    settle(1500).await;
+    assert_eq!(lock(&world).count("profile:off"), 2);
+}
+
+#[tokio::test]
 async fn recovery_ladders_per_link_are_bounded() {
     let mut cfg = fast();
     cfg.ladder_cooldown = Duration::from_millis(30);

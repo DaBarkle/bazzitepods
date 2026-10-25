@@ -67,6 +67,38 @@ impl MediaController {
         }
     }
 
+    /// Local MPRIS players that are playing right now (phone players via KDE Connect are
+    /// never included).
+    pub async fn playing_players() -> Vec<String> {
+        tokio::task::spawn_blocking(|| {
+            mpris::with_players(|conn, players| {
+                players
+                    .into_iter()
+                    .filter(|s| mpris::playback_status(conn, s).as_deref() == Some("Playing"))
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default()
+        })
+        .await
+        .unwrap_or_default()
+    }
+
+    /// Presses play on those of `players` that are paused now.
+    pub async fn resume_if_paused(players: Vec<String>) {
+        let _ = tokio::task::spawn_blocking(move || {
+            mpris::with_bus(|conn| {
+                for service in players {
+                    if mpris::playback_status(conn, &service).as_deref() == Some("Paused")
+                        && mpris::call(conn, &service, "Play")
+                    {
+                        info!("Resumed {} after the audio output was rebuilt", service);
+                    }
+                }
+            })
+        })
+        .await;
+    }
+
     /// Starts watching MPRIS playback (signal based, no polling). Stops when
     /// [`MediaController::stop_playback_listener`] is called or `control_tx` closes.
     pub async fn start_playback_listener(
