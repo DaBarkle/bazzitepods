@@ -837,7 +837,7 @@ impl App {
     fn settings_card(&self) -> Element<'_, Message> {
         let s = &self.settings;
         let overlay_on = s.overlay_mode != OverlayMode::Off;
-        let mode = segmented(
+        let mode = segmented_wide(
             &[
                 ("Pop-up", OverlayMode::Auto),
                 ("Compact", OverlayMode::Compact),
@@ -849,12 +849,12 @@ impl App {
             Message::SetOverlayMode,
         );
         let col = column![
-            setting_row(
+            setting_block(
                 "Overlay in games",
                 Some(match s.overlay_mode {
-                    OverlayMode::Auto => "Appears briefly when battery or pods change",
-                    OverlayMode::Always => "Stays on screen while connected",
-                    OverlayMode::Compact => "Small widget; expands when something changes",
+                    OverlayMode::Auto => "Shows briefly on changes",
+                    OverlayMode::Always => "Always on screen",
+                    OverlayMode::Compact => "Mini widget, expands on changes",
                     OverlayMode::Off => "Never shown",
                 }),
                 mode,
@@ -882,12 +882,12 @@ impl App {
             divider(),
             setting_row(
                 "Glass",
-                Some("From smoked to clear liquid glass"),
+                Some("Smoked to clear"),
                 row![
                     slider(0.0..=1.0, s.overlay_glass, Message::SetOverlayGlass)
                         .step(0.05_f32)
                         .on_release(Message::CommitOverlaySliders)
-                        .width(Length::Fixed(140.0)),
+                        .width(Length::Fixed(120.0)),
                     text(format!("{}%", (s.overlay_glass * 100.0).round() as u32))
                         .size(12)
                         .font(style::INTER_MEDIUM)
@@ -899,13 +899,13 @@ impl App {
             ),
             divider(),
             setting_row(
-                "Opacity in fullscreen games",
-                Some("Solid on the desktop, see-through over games and videos"),
+                "Game opacity",
+                Some("Over fullscreen games and video"),
                 row![
                     slider(0.2..=1.0, s.overlay_opacity, Message::SetOverlayOpacity)
                         .step(0.05_f32)
                         .on_release(Message::CommitOverlaySliders)
-                        .width(Length::Fixed(140.0)),
+                        .width(Length::Fixed(120.0)),
                     text(format!("{}%", (s.overlay_opacity * 100.0).round() as u32))
                         .size(12)
                         .font(style::INTER_MEDIUM)
@@ -1202,6 +1202,19 @@ fn mode_tile<'a>(m: ListeningMode, selected: bool, enabled: bool) -> Element<'a,
         .into()
 }
 
+/// A setting whose control needs the full width: title and caption above it.
+fn setting_block<'a>(
+    title: &'a str,
+    caption: Option<&'a str>,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
+    let mut col = column![text(title).size(14).font(style::INTER_MEDIUM)].spacing(2);
+    if let Some(c) = caption {
+        col = col.push(text(c).size(12).style(dim_text));
+    }
+    column![col, control].spacing(10).into()
+}
+
 fn setting_row<'a>(
     title: &'a str,
     caption: Option<&'a str>,
@@ -1232,15 +1245,42 @@ fn segmented<'a, T: Copy + PartialEq + 'a>(
     enabled: bool,
     msg: fn(T) -> Message,
 ) -> Element<'a, Message> {
+    segmented_impl(options, selected, enabled, msg, false)
+}
+
+/// Like [`segmented`], stretched to the full width with equal segments.
+fn segmented_wide<'a, T: Copy + PartialEq + 'a>(
+    options: &[(&'a str, T)],
+    selected: T,
+    enabled: bool,
+    msg: fn(T) -> Message,
+) -> Element<'a, Message> {
+    segmented_impl(options, selected, enabled, msg, true)
+}
+
+fn segmented_impl<'a, T: Copy + PartialEq + 'a>(
+    options: &[(&'a str, T)],
+    selected: T,
+    enabled: bool,
+    msg: fn(T) -> Message,
+    wide: bool,
+) -> Element<'a, Message> {
     let mut r = row![].spacing(2);
     for &(label, value) in options {
         let is_sel = value == selected;
+        let label = text(label).size(12).font(if is_sel {
+            style::INTER_SEMIBOLD
+        } else {
+            style::INTER_MEDIUM
+        });
+        let label = if wide {
+            label.width(Fill).align_x(Center)
+        } else {
+            label
+        };
         r = r.push(
-            button(text(label).size(12).font(if is_sel {
-                style::INTER_SEMIBOLD
-            } else {
-                style::INTER_MEDIUM
-            }))
+            button(label)
+            .width(if wide { Fill } else { Length::Shrink })
             .padding(Padding {
                 top: 5.0,
                 bottom: 5.0,
@@ -1251,7 +1291,8 @@ fn segmented<'a, T: Copy + PartialEq + 'a>(
             .on_press_maybe(enabled.then_some(msg(value))),
         );
     }
-    container(r).padding(2).style(style::segment_track).into()
+    let track = container(r).padding(2).style(style::segment_track);
+    if wide { track.width(Fill).into() } else { track.into() }
 }
 
 fn corner_picker<'a>(selected: OverlayPosition, enabled: bool) -> Element<'a, Message> {
