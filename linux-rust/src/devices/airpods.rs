@@ -219,6 +219,7 @@ async fn session(
         let hub = ctx.hub.clone();
         let local = ctx.local_mac.clone();
         let (mac, name) = (mac_s.clone(), name.to_string());
+        let audio = audio.cloned();
         tasks.spawn(async move {
             while let Some((id, value)) = command_rx.recv().await {
                 if let Err(e) = aacp.send_control_command(id, &value).await {
@@ -227,16 +228,20 @@ async fn session(
                 }
                 if id == ControlCommandIdentifiers::OwnsConnection {
                     let owns = value.first().copied().unwrap_or(0) != 0;
+                    let had = owns_audio(&hub, &mac);
                     hub.update_device(&mac, &name, |d| d.owns_audio = Some(owns));
                     if owns {
                         claim_audio_route(&aacp, &local).await;
+                        if had != Some(true) {
+                            route_regained(audio.as_ref());
+                        }
                     }
                 }
             }
         });
     }
 
-    subscribe_controls(aacp, ctx, &mac_s, name, media, &mut tasks).await;
+    subscribe_controls(aacp, ctx, &mac_s, name, media, audio, &mut tasks).await;
 
     {
         let controller = media.lock().await;
@@ -274,6 +279,21 @@ async fn session(
     tasks.abort_all();
     // Wait for aborted tasks so their channels are really closed before cleanup checks them.
     while tasks.join_next().await.is_some() {}
+}
+
+fn owns_audio(hub: &crate::hub::Hub, mac: &str) -> Option<bool> {
+    hub.snapshot().devices.get(mac).and_then(|d| d.owns_audio)
+}
+
+/// The audio came back from another device. While it was away the AirPods may have
+/// dropped A2DP to this PC (the sink disappears and the default output moves), so have
+/// the audio guard re-run its full setup: reconnect the profile, pick A2DP, restore the
+/// default output.
+fn route_regained(audio: Option<&AudioGuardHandle>) {
+    info!("Audio route is back on this PC; re-checking the audio setup");
+    if let Some(audio) = audio {
+        audio.resume_hint();
+    }
 }
 
 /// Tell every other device on the AirPods that this PC is taking the audio route, so
@@ -337,6 +357,7 @@ async fn subscribe_controls(
     mac_s: &str,
     name: &str,
     media: &Arc<Mutex<MediaController>>,
+    audio: Option<&AudioGuardHandle>,
     tasks: &mut JoinSet<()>,
 ) {
     let watch = [
@@ -374,17 +395,19 @@ async fn subscribe_controls(
         .await;
     let media = media.clone();
     let hub = ctx.hub.clone();
+    let audio = audio.cloned();
     let (mac, name) = (mac_s.to_string(), name.to_string());
     tasks.spawn(async move {
-        let mut owned = false;
         while let Some(value) = rx.recv().await {
             let owns = value.first().copied().unwrap_or(0) != 0;
+            let had = owns_audio(&hub, &mac);
             hub.update_device(&mac, &name, |d| d.owns_audio = Some(owns));
-            if owned && !owns {
+            if had == Some(true) && !owns {
                 info!("Another device took the AirPods; pausing local media");
                 media.lock().await.pause_all_media().await;
+            } else if had == Some(false) && owns {
+                route_regained(audio.as_ref());
             }
-            owned = owns;
         }
     });
 }

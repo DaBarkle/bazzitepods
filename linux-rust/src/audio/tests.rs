@@ -573,6 +573,36 @@ async fn default_sink_and_streams_restored_after_range_loss() {
 }
 
 #[tokio::test]
+async fn audio_restored_when_route_returns_from_another_device() {
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    w.snap.default_sink = Some(bt_sink_name());
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(60).await;
+
+    // The iPhone takes the AirPods: the link stays up, but A2DP to this PC is dropped
+    // and WirePlumber falls back to the speakers.
+    {
+        let mut w = lock(&world);
+        w.remove_card();
+        w.connect_creates_card = true;
+    }
+
+    // The audio comes back to this PC.
+    handle.resume_hint();
+    wait_health(&handle, "negotiating", |h| *h == AudioHealth::Negotiating).await;
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink")).await;
+    let w = lock(&world);
+    assert!(w.count("connect") >= 1, "A2DP was reconnected");
+    assert_eq!(
+        w.snap.default_sink.as_deref(),
+        Some(bt_sink_name().as_str())
+    );
+}
+
+#[tokio::test]
 async fn default_restored_by_a_new_guard_after_reconnect() {
     // Real reconnects create a fresh device task and guard; the "we were default" memory
     // must survive that.
