@@ -19,12 +19,10 @@ use crate::devices::airpods::DeviceContext;
 use crate::devices::enums::{DeviceData, DeviceType};
 use crate::hub::{AdapterState, Hub};
 use crate::ui::messages::BluetoothUIMessage;
-use crate::ui::tray::MyTray;
 use crate::utils::get_devices_path;
 use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, DeviceProperty};
 use clap::Parser;
 use futures::StreamExt;
-use ksni::TrayMethods;
 use log::{debug, info, warn};
 use std::collections::HashMap;
 use std::env;
@@ -56,6 +54,10 @@ struct Args {
     le_debug: bool,
     #[arg(long, short = 'v', help = "Show application version and exit")]
     version: bool,
+    /// Preview the UI with fake AirPods state and no Bluetooth (for screenshots/development).
+    /// Scenarios: airpods4 (default), pro, max, low, disconnected, empty, btoff.
+    #[arg(long, hide = true, num_args = 0..=1, default_missing_value = "airpods4")]
+    ui_demo: Option<String>,
 }
 
 fn main() -> iced::Result {
@@ -88,6 +90,22 @@ fn main() -> iced::Result {
     let device_managers: Arc<RwLock<HashMap<String, DeviceManagers>>> =
         Arc::new(RwLock::new(HashMap::new()));
     let hub = Hub::new();
+    let active_commands: Arc<Mutex<Option<devices::airpods::CommandSender>>> =
+        Arc::new(Mutex::new(None));
+    let settings = ui::settings::SettingsStore::load();
+
+    if let Some(scenario) = args.ui_demo.as_deref() {
+        ui::demo::seed(&hub, scenario);
+        return ui::window::start_ui(ui::window::UiContext {
+            hub,
+            active_commands,
+            device_managers,
+            settings: ui::settings::SettingsStore::ephemeral(settings.get()),
+            ui_rx,
+            start_minimized: false,
+            demo: true,
+        });
+    }
 
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -99,14 +117,25 @@ fn main() -> iced::Result {
 
     if args.no_tray {
         info!("Running in headless mode (no GUI)");
-        runtime.block_on(async_main(ui_tx, device_managers, hub, args.no_tray));
+        runtime.block_on(async_main(ui_tx, device_managers, hub, active_commands, args.no_tray));
         Ok(())
     } else {
         let dm = device_managers.clone();
         let no_tray = args.no_tray;
         let hub_bg = hub.clone();
-        std::thread::spawn(move || runtime.block_on(async_main(ui_tx, dm, hub_bg, no_tray)));
-        ui::window::start_ui(ui_rx, args.start_minimized, device_managers)
+        let commands_bg = active_commands.clone();
+        std::thread::spawn(move || {
+            runtime.block_on(async_main(ui_tx, dm, hub_bg, commands_bg, no_tray))
+        });
+        ui::window::start_ui(ui::window::UiContext {
+            hub,
+            active_commands,
+            device_managers,
+            settings,
+            ui_rx,
+            start_minimized: args.start_minimized,
+            demo: false,
+        })
     }
 }
 
@@ -114,6 +143,7 @@ async fn async_main(
     ui_tx: UnboundedSender<BluetoothUIMessage>,
     device_managers: Arc<RwLock<HashMap<String, DeviceManagers>>>,
     hub: Hub,
+    active_commands: Arc<Mutex<Option<devices::airpods::CommandSender>>>,
     no_tray: bool,
 ) {
     let battery = BatteryService::spawn(hub.clone());
@@ -126,10 +156,8 @@ async fn async_main(
             info!("Autostart registration skipped: {e}");
         }
     });
-    let active_commands = Arc::new(Mutex::new(None));
-
     if !no_tray {
-        tokio::spawn(run_tray(hub.clone(), ui_tx.clone(), active_commands.clone()));
+        tokio::spawn(ui::tray::run_tray(hub.clone(), ui_tx.clone(), active_commands.clone()));
     }
 
     let (kick_tx, kick_rx) = unbounded_channel::<Kick>();
@@ -423,93 +451,4 @@ fn saved_devices() -> HashMap<String, DeviceData> {
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
-}
-
-/// Mirrors the hub into the tray. The tray only reads state; commands go to the active device.
-async fn run_tray(
-    hub: Hub,
-    ui_tx: UnboundedSender<BluetoothUIMessage>,
-    active_commands: Arc<Mutex<Option<devices::airpods::CommandSender>>>,
-) {
-    use crate::bluetooth::aacp::BatteryStatus;
-    use crate::core::battery::ComponentBattery;
-
-    let make_tray = || MyTray {
-        conversation_detect_enabled: None,
-        battery_headphone: None,
-        battery_headphone_status: None,
-        battery_l: None,
-        battery_l_status: None,
-        battery_r: None,
-        battery_r_status: None,
-        battery_c: None,
-        battery_c_status: None,
-        connected: false,
-        listening_mode: None,
-        allow_off_option: None,
-        command_tx: None,
-        ui_tx: Some(ui_tx.clone()),
-    };
-    // No StatusNotifierWatcher (e.g. GNOME without the AppIndicator extension): retry quietly,
-    // the rest of the app works without a tray.
-    let handle = loop {
-        match make_tray().spawn().await {
-            Ok(h) => break h,
-            Err(e) => {
-                debug!("Tray not available yet: {e}");
-                sleep(Duration::from_secs(30)).await;
-            }
-        }
-    };
-
-    fn split(c: &ComponentBattery) -> (Option<u8>, Option<BatteryStatus>) {
-        if c.level.is_none() {
-            return (None, None);
-        }
-        let status = if !c.present {
-            BatteryStatus::Disconnected
-        } else if c.charging {
-            BatteryStatus::Charging
-        } else {
-            BatteryStatus::NotCharging
-        };
-        (c.level, Some(status))
-    }
-
-    let mut rx = hub.subscribe();
-    loop {
-        let snap = rx.borrow_and_update().clone();
-        let commands = active_commands.lock().await.clone();
-        let primary = snap.primary().filter(|d| d.is_connected()).cloned();
-        handle
-            .update(|t: &mut MyTray| {
-                t.command_tx = commands;
-                match &primary {
-                    Some(d) => {
-                        t.connected = true;
-                        (t.battery_l, t.battery_l_status) = split(&d.battery.left);
-                        (t.battery_r, t.battery_r_status) = split(&d.battery.right);
-                        (t.battery_c, t.battery_c_status) = split(&d.battery.case);
-                        (t.battery_headphone, t.battery_headphone_status) =
-                            split(&d.battery.headphone);
-                        t.listening_mode = d.listening_mode;
-                        t.allow_off_option = d.allow_off_mode.map(u8::from);
-                        t.conversation_detect_enabled = d.conversation_awareness;
-                    }
-                    None => {
-                        t.connected = false;
-                        t.battery_l = None;
-                        t.battery_r = None;
-                        t.battery_c = None;
-                        t.battery_headphone = None;
-                        t.listening_mode = None;
-                        t.conversation_detect_enabled = None;
-                    }
-                }
-            })
-            .await;
-        if rx.changed().await.is_err() {
-            return;
-        }
-    }
 }

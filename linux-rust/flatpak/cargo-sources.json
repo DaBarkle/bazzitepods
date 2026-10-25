@@ -2745,14 +2745,14 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/iced_tiny_skia/iced_tiny_skia-0.14.0.crate",
-        "sha256": "fe0acf8b75a3bc914aff5f2329fdffc1b36eeaea29dda0e4bd232f1c62e9cc3d",
-        "dest": "cargo/vendor/iced_tiny_skia-0.14.0"
+        "url": "https://static.crates.io/crates/iced_tiny_skia/iced_tiny_skia-0.14.1.crate",
+        "sha256": "c267596d742714b1853cc10c3983a367762816fc4836bd3b79f76ce76787d6f8",
+        "dest": "cargo/vendor/iced_tiny_skia-0.14.1"
     },
     {
         "type": "inline",
-        "contents": "{\"package\": \"fe0acf8b75a3bc914aff5f2329fdffc1b36eeaea29dda0e4bd232f1c62e9cc3d\", \"files\": {}}",
-        "dest": "cargo/vendor/iced_tiny_skia-0.14.0",
+        "contents": "{\"package\": \"c267596d742714b1853cc10c3983a367762816fc4836bd3b79f76ce76787d6f8\", \"files\": {}}",
+        "dest": "cargo/vendor/iced_tiny_skia-0.14.1",
         "dest-filename": ".cargo-checksum.json"
     },
     {
