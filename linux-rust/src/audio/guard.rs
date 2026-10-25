@@ -51,6 +51,9 @@ pub struct GuardConfig {
     pub retry_after_failure: Duration,
     /// Maximum setup attempts per link session (wearing/resume resets it).
     pub max_ensure_attempts: u8,
+    /// After the link comes up, the output was just built: a take-back this soon doesn't
+    /// rebuild it again (a stall is still repaired).
+    pub fresh_link: Duration,
 }
 
 impl Default for GuardConfig {
@@ -69,6 +72,7 @@ impl Default for GuardConfig {
             max_ladders_per_link: 3,
             retry_after_failure: Duration::from_secs(30),
             max_ensure_attempts: 3,
+            fresh_link: Duration::from_secs(10),
         }
     }
 }
@@ -103,7 +107,10 @@ const FAST_STALL: Duration = Duration::from_millis(800);
 /// streams back onto the AirPods.
 const UNHUSH_WAIT: Duration = Duration::from_secs(2);
 const UNHUSH_MARGIN: Duration = Duration::from_millis(250);
-const REPAIR_COOLDOWN: Duration = Duration::from_secs(20);
+/// Two take-backs this close together share one rebuild. Bouncing between devices is
+/// prevented where it starts (devices/airpods.rs), so this only merges duplicates: a
+/// longer limit left the AirPods silent after a quick switch back.
+const REPAIR_COOLDOWN: Duration = Duration::from_secs(3);
 
 const PREFERRED_A2DP: [&str; 4] = [
     "a2dp-sink-aac",
@@ -293,6 +300,7 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     /// Rebuild the output at the next monitor pass, stall or not.
     repair_pending: bool,
     last_repair: Option<Instant>,
+    linked_at: Option<Instant>,
     /// Another device has the AirPods: leave the dead output alone until they come back.
     away: bool,
     /// Other outputs muted while ours is rebuilt, so nothing plays on the speakers.
@@ -332,6 +340,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             fast_until: None,
             repair_pending: false,
             last_repair: None,
+            linked_at: None,
             away: false,
             hushed: Vec::new(),
         }
@@ -379,6 +388,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         match cmd {
             Cmd::LinkUp => {
                 self.away = false;
+                self.linked_at = Some(now);
                 self.linked = true;
                 self.restart = self.busy;
                 self.ready = false;
@@ -441,9 +451,10 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             Cmd::Repair => {
                 if self.linked {
                     self.on_cmd(Cmd::RouteBack);
-                    // Rebuilding drops every stream for a moment. If the route keeps
-                    // bouncing, fall back to repairing only a real stall.
-                    if self.last_repair.is_none_or(|t| now - t >= REPAIR_COOLDOWN) {
+                    let fresh = self
+                        .linked_at
+                        .is_some_and(|t| now - t < self.cfg.fresh_link);
+                    if !fresh && self.last_repair.is_none_or(|t| now - t >= REPAIR_COOLDOWN) {
                         self.last_repair = Some(now);
                         self.repair_pending = true;
                     }

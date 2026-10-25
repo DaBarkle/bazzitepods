@@ -242,6 +242,7 @@ fn fast() -> GuardConfig {
         max_ladders_per_link: 3,
         retry_after_failure: Duration::from_secs(30),
         max_ensure_attempts: 3,
+        fresh_link: Duration::ZERO,
     }
 }
 
