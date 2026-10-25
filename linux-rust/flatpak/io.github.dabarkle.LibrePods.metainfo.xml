@@ -43,9 +43,9 @@
     <binary>librepods-overlay</binary>
   </provides>
 
-  <url type="homepage">https://github.com/DaBarkle/librepods</url>
-  <url type="bugtracker">https://github.com/DaBarkle/librepods/issues</url>
-  <url type="vcs-browser">https://github.com/DaBarkle/librepods</url>
+  <url type="homepage">https://github.com/DaBarkle/bazzitepods</url>
+  <url type="bugtracker">https://github.com/DaBarkle/bazzitepods/issues</url>
+  <url type="vcs-browser">https://github.com/DaBarkle/bazzitepods</url>
 
   <categories>
     <category>Utility</category>
@@ -62,15 +62,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>Battery levels for both earbuds and the case</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/librepods/bazzite/linux-rust/docs/screenshots/main-window.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/docs/screenshots/main-window.png</image>
     </screenshot>
     <screenshot>
       <caption>The battery overlay shown when the earbuds connect</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/librepods/bazzite/linux-rust/docs/screenshots/overlay.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/docs/screenshots/overlay.png</image>
     </screenshot>
     <screenshot>
       <caption>Quick controls from the system tray</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/librepods/bazzite/linux-rust/docs/screenshots/tray.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/bazzite/linux-rust/docs/screenshots/tray.png</image>
     </screenshot>
   </screenshots>
 

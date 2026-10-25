@@ -46,8 +46,12 @@ pub async fn ensure_autostart(enable: bool) -> Result<(), String> {
                 std::env::var_os("XDG_CONFIG_HOME"),
                 std::env::var_os("HOME"),
             )?;
-            let exe = std::env::current_exe()
-                .map_err(|e| format!("cannot determine the current executable: {e}"))?;
+            // AppImages run from a temporary mount; $APPIMAGE is the stable path.
+            let exe = match std::env::var_os("APPIMAGE") {
+                Some(p) => std::path::PathBuf::from(p),
+                None => std::env::current_exe()
+                    .map_err(|e| format!("cannot determine the current executable: {e}"))?,
+            };
             set_autostart_file(&dir, &exe, enable)
         }
     })
