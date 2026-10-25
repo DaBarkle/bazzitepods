@@ -72,6 +72,10 @@ pub fn seed(hub: &Hub, scenario: &str) {
                 d.battery.right = comp(17, false);
                 d.battery.case = stale(12, 42);
             }
+            "elsewhere" => {
+                d.owns_audio = Some(false);
+                d.other_devices = 1;
+            }
             "disconnected" => {
                 d.link = LinkState::Disconnected;
                 d.audio = None;

@@ -847,7 +847,7 @@ impl App {
                 left: 12.0,
                 right: 12.0,
             })
-            .style(style::secondary);
+            .style(style::segment(true));
         if !switching {
             take = take.on_press(Message::TakeAudio);
         }
