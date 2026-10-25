@@ -1,6 +1,8 @@
 mod bluetooth;
 mod devices;
 mod media_controller;
+mod overlay_client;
+mod overlay_protocol;
 mod ui;
 mod utils;
 

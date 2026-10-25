@@ -11,7 +11,7 @@ uuid = "1.23.0"
 log = "0.4.29"
 dbus = "0.9.10"
 hex = "0.4.3"
-iced = { version = "0.14.0", features = ["tokio", "image"] }
+iced = { version = "0.14.0", features = ["tokio", "image", "canvas"] }
 libpulse-binding = "2.30.1"
 ksni = "0.3.1"
 image = "0.25.8"
@@ -22,6 +22,16 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 aes = "0.9.0-rc.4"
 futures = "0.3.32"
+iced_layershell = { version = "0.19.1", default-features = false }
+wayland-client = "0.31"
+
+[[bin]]
+name = "librepods"
+path = "src/main.rs"
+
+[[bin]]
+name = "librepods-overlay"
+path = "src/bin/librepods-overlay.rs"
 
 [profile.release]
 opt-level = "s"

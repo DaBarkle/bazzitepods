@@ -1,0 +1,454 @@
+//! Spawns and feeds the `librepods-overlay` process (JSON lines on its stdin,
+//! see `docs/ARCHITECTURE.md`, "Overlay protocol").
+//!
+//! Every public method only pushes onto a channel, so callers (UI thread or
+//! tokio tasks) never block. A dedicated supervisor thread owns the child:
+//! it writes lines, restarts the child with backoff if it crashes, replays the
+//! last config and state after a restart, and gives up for good when the child
+//! exits with code 3 (no layer-shell, e.g. GNOME), so the app can fall back to
+//! desktop notifications (check [`OverlayClient::unsupported`]).
+
+// Integrated by the main app; not every helper is used yet.
+#![allow(dead_code)]
+
+use std::collections::VecDeque;
+use std::io::Write;
+use std::path::PathBuf;
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use log::{debug, info, warn};
+
+// Re-exported so callers only need `overlay_client::*`.
+#[allow(unused_imports)]
+pub use crate::overlay_protocol::{
+    ComponentState, EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayMode, OverlayPosition,
+    OverlayState,
+};
+
+pub const OVERLAY_BIN: &str = "librepods-overlay";
+
+/// At most this many (re)starts within `RESTART_WINDOW`.
+const MAX_STARTS: usize = 5;
+const RESTART_WINDOW: Duration = Duration::from_secs(60);
+const POLL: Duration = Duration::from_millis(500);
+
+enum Msg {
+    Cmd(OverlayCommand),
+    Shutdown,
+}
+
+pub struct OverlayClient {
+    tx: Sender<Msg>,
+    unsupported: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl OverlayClient {
+    /// Starts the supervisor thread, which launches the overlay process.
+    /// Never blocks and never fails; check [`Self::unsupported`] later.
+    pub fn spawn(config: OverlayConfig) -> OverlayClient {
+        Self::spawn_with_binary(config, find_binary())
+    }
+
+    fn spawn_with_binary(config: OverlayConfig, binary: Option<PathBuf>) -> OverlayClient {
+        let (tx, rx) = mpsc::channel();
+        let unsupported = Arc::new(AtomicBool::new(false));
+        let running = Arc::new(AtomicBool::new(false));
+        let sup = Supervisor {
+            binary,
+            config,
+            state: None,
+            child: None,
+            stdin: None,
+            starts: VecDeque::new(),
+            next_start: Instant::now(),
+            backoff: Duration::from_secs(1),
+            unsupported: unsupported.clone(),
+            running: running.clone(),
+        };
+        let thread = std::thread::Builder::new()
+            .name("overlay-client".into())
+            .spawn(move || sup.run(rx));
+        let thread = match thread {
+            Ok(t) => Some(t),
+            Err(e) => {
+                warn!("overlay: cannot start supervisor thread: {e}");
+                unsupported.store(true, Ordering::SeqCst);
+                None
+            }
+        };
+        OverlayClient {
+            tx,
+            unsupported,
+            running,
+            thread,
+        }
+    }
+
+    fn send(&self, cmd: OverlayCommand) {
+        // Fails only after shutdown; nothing to do then.
+        let _ = self.tx.send(Msg::Cmd(cmd));
+    }
+
+    /// Sends the latest battery state. The overlay decides itself whether the
+    /// change is worth showing (in `auto` mode).
+    pub fn update(&self, state: OverlayState) {
+        self.send(OverlayCommand::State { state });
+    }
+
+    /// Pops the overlay up for `auto_hide_secs` (in `auto` mode).
+    pub fn show(&self, reason: &str) {
+        self.send(OverlayCommand::Show {
+            reason: reason.to_string(),
+        });
+    }
+
+    pub fn hide(&self) {
+        self.send(OverlayCommand::Hide);
+    }
+
+    pub fn set_config(&self, config: OverlayConfig) {
+        self.send(OverlayCommand::Config(config));
+    }
+
+    /// True once the overlay can't run here (exit code 3: no layer-shell or no
+    /// Wayland, or the binary is missing). Use desktop notifications instead.
+    pub fn unsupported(&self) -> bool {
+        self.unsupported.load(Ordering::SeqCst)
+    }
+
+    /// True while an overlay process is alive.
+    pub fn is_running(&self) -> bool {
+        self.running.load(Ordering::SeqCst)
+    }
+
+    /// Asks the overlay to quit and stops the supervisor. Does not block.
+    pub fn shutdown(&self) {
+        let _ = self.tx.send(Msg::Shutdown);
+    }
+}
+
+impl Drop for OverlayClient {
+    fn drop(&mut self) {
+        let _ = self.tx.send(Msg::Shutdown);
+        if let Some(t) = self.thread.take() {
+            // The supervisor exits within ~1 s (graceful quit, then kill).
+            let _ = t.join();
+        }
+    }
+}
+
+/// Next to our own executable first (Flatpak: /app/bin), then `$PATH`.
+fn find_binary() -> Option<PathBuf> {
+    let sibling = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join(OVERLAY_BIN)));
+    if let Some(p) = sibling.filter(|p| p.is_file()) {
+        return Some(p);
+    }
+    std::env::var_os("PATH").and_then(|paths| {
+        std::env::split_paths(&paths)
+            .map(|d| d.join(OVERLAY_BIN))
+            .find(|p| p.is_file())
+    })
+}
+
+/// Restart policy: allowed if fewer than `MAX_STARTS` starts happened in the window.
+fn may_start(starts: &mut VecDeque<Instant>, now: Instant) -> bool {
+    while starts
+        .front()
+        .is_some_and(|t| now.duration_since(*t) > RESTART_WINDOW)
+    {
+        starts.pop_front();
+    }
+    starts.len() < MAX_STARTS
+}
+
+struct Supervisor {
+    binary: Option<PathBuf>,
+    config: OverlayConfig,
+    state: Option<OverlayState>,
+    child: Option<Child>,
+    stdin: Option<ChildStdin>,
+    starts: VecDeque<Instant>,
+    next_start: Instant,
+    backoff: Duration,
+    unsupported: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+}
+
+impl Supervisor {
+    fn run(mut self, rx: mpsc::Receiver<Msg>) {
+        let Some(binary) = self.binary.clone() else {
+            warn!("overlay: {OVERLAY_BIN} not found next to the app or in PATH; overlay disabled");
+            self.unsupported.store(true, Ordering::SeqCst);
+            return;
+        };
+        loop {
+            if self.unsupported.load(Ordering::SeqCst) {
+                break;
+            }
+            if self.child.is_none() && Instant::now() >= self.next_start {
+                self.start(&binary);
+            }
+            match rx.recv_timeout(POLL) {
+                Ok(Msg::Cmd(cmd)) => {
+                    // Remember what a restarted child needs to catch up.
+                    match &cmd {
+                        OverlayCommand::Config(c) => self.config = c.clone(),
+                        OverlayCommand::State { state } => self.state = Some(state.clone()),
+                        _ => {}
+                    }
+                    self.write(&cmd);
+                }
+                Ok(Msg::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            self.reap();
+        }
+        self.stop_child();
+    }
+
+    fn start(&mut self, binary: &PathBuf) {
+        let now = Instant::now();
+        if !may_start(&mut self.starts, now) {
+            // Too many crashes: wait until the oldest start leaves the window.
+            let wait = self
+                .starts
+                .front()
+                .map(|t| RESTART_WINDOW.saturating_sub(now.duration_since(*t)))
+                .unwrap_or(RESTART_WINDOW);
+            warn!("overlay: crashing repeatedly, pausing restarts for {wait:?}");
+            self.next_start = now + wait;
+            return;
+        }
+        self.starts.push_back(now);
+        let spawned = Command::new(binary)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::inherit())
+            .spawn();
+        match spawned {
+            Ok(mut child) => {
+                info!("overlay: started {} (pid {})", binary.display(), child.id());
+                self.stdin = child.stdin.take();
+                self.child = Some(child);
+                self.running.store(true, Ordering::SeqCst);
+                let replay = [
+                    Some(OverlayCommand::Config(self.config.clone())),
+                    self.state
+                        .clone()
+                        .map(|state| OverlayCommand::State { state }),
+                ];
+                for cmd in replay.into_iter().flatten() {
+                    self.write(&cmd);
+                }
+            }
+            Err(e) => {
+                warn!("overlay: failed to start {}: {e}", binary.display());
+                self.schedule_restart();
+            }
+        }
+    }
+
+    fn schedule_restart(&mut self) {
+        self.next_start = Instant::now() + self.backoff;
+        self.backoff = (self.backoff * 2).min(Duration::from_secs(30));
+    }
+
+    fn write(&mut self, cmd: &OverlayCommand) {
+        let Some(stdin) = self.stdin.as_mut() else {
+            return;
+        };
+        let line = cmd.to_line();
+        if let Err(e) = stdin.write_all(line.as_bytes()).and_then(|_| stdin.flush()) {
+            debug!("overlay: write failed ({e}); child probably exited");
+            self.stdin = None;
+            self.reap();
+        }
+    }
+
+    /// Notices a dead child and decides whether to restart it.
+    fn reap(&mut self) {
+        let Some(child) = self.child.as_mut() else {
+            return;
+        };
+        let status = match child.try_wait() {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                // Still alive. A healthy run resets the backoff.
+                if self
+                    .starts
+                    .back()
+                    .is_some_and(|t| t.elapsed() > RESTART_WINDOW)
+                {
+                    self.backoff = Duration::from_secs(1);
+                }
+                return;
+            }
+            Err(e) => {
+                warn!("overlay: cannot query child: {e}");
+                return;
+            }
+        };
+        self.child = None;
+        self.stdin = None;
+        self.running.store(false, Ordering::SeqCst);
+        if status.code() == Some(EXIT_UNSUPPORTED) {
+            info!("overlay: not supported by this compositor; falling back to notifications");
+            self.unsupported.store(true, Ordering::SeqCst);
+            return;
+        }
+        warn!(
+            "overlay: exited ({status}); restarting in {:?}",
+            self.backoff
+        );
+        self.schedule_restart();
+    }
+
+    fn stop_child(&mut self) {
+        if self.stdin.is_some() {
+            self.write(&OverlayCommand::Quit);
+        }
+        // Closing stdin also makes the overlay exit (EOF).
+        self.stdin = None;
+        if let Some(mut child) = self.child.take() {
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                match child.try_wait() {
+                    Ok(Some(_)) => break,
+                    Ok(None) if Instant::now() < deadline => {
+                        std::thread::sleep(Duration::from_millis(20))
+                    }
+                    _ => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        break;
+                    }
+                }
+            }
+        }
+        self.running.store(false, Ordering::SeqCst);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn script(name: &str, body: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("librepods-overlay-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    fn wait_for(mut f: impl FnMut() -> bool) -> bool {
+        let end = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < end {
+            if f() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        false
+    }
+
+    #[test]
+    fn restart_window() {
+        let mut q = VecDeque::new();
+        let t0 = Instant::now();
+        for i in 0..MAX_STARTS {
+            assert!(may_start(&mut q, t0 + Duration::from_secs(i as u64)));
+            q.push_back(t0 + Duration::from_secs(i as u64));
+        }
+        assert!(!may_start(&mut q, t0 + Duration::from_secs(10)));
+        assert!(may_start(
+            &mut q,
+            t0 + RESTART_WINDOW + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn exit_code_3_marks_unsupported() {
+        let bin = script("unsupported", "exit 3");
+        let c = OverlayClient::spawn_with_binary(OverlayConfig::default(), Some(bin));
+        assert!(wait_for(|| c.unsupported()));
+        // Calls after that are harmless no-ops.
+        c.show("x");
+        c.update(OverlayState::default());
+    }
+
+    #[test]
+    fn missing_binary_marks_unsupported() {
+        let c = OverlayClient::spawn_with_binary(OverlayConfig::default(), None);
+        assert!(wait_for(|| c.unsupported()));
+    }
+
+    #[test]
+    fn writes_lines_and_replays_after_crash() {
+        let out =
+            std::env::temp_dir().join(format!("librepods-overlay-out-{}", std::process::id()));
+        let _ = std::fs::remove_file(&out);
+        // Each instance appends what it reads; the first one dies after 2 lines.
+        let bin = script(
+            "fake",
+            &format!(
+                "n=0; while read -r l; do echo \"$l\" >> '{}'; n=$((n+1)); [ ! -e '{}.crashed' ] && [ $n -ge 3 ] && touch '{}.crashed' && exit 1; done; exit 0",
+                out.display(),
+                out.display(),
+                out.display()
+            ),
+        );
+        let _ = std::fs::remove_file(format!("{}.crashed", out.display()));
+        let c = OverlayClient::spawn_with_binary(OverlayConfig::default(), Some(bin));
+        let state = OverlayState {
+            name: "Pods".into(),
+            connected: true,
+            ..Default::default()
+        };
+        c.update(state.clone());
+        c.show("connected");
+        // First child: config, state, show -> crashes. Second child gets config + state replayed.
+        assert!(wait_for(|| {
+            std::fs::read_to_string(&out)
+                .map(|s| s.lines().count() >= 5)
+                .unwrap_or(false)
+        }));
+        let lines: Vec<OverlayCommand> = std::fs::read_to_string(&out)
+            .unwrap()
+            .lines()
+            .filter_map(|l| OverlayCommand::parse_line(l).ok().flatten())
+            .collect();
+        assert_eq!(lines[0], OverlayCommand::Config(OverlayConfig::default()));
+        assert_eq!(
+            lines[1],
+            OverlayCommand::State {
+                state: state.clone()
+            }
+        );
+        assert_eq!(
+            lines[2],
+            OverlayCommand::Show {
+                reason: "connected".into()
+            }
+        );
+        assert_eq!(lines[3], OverlayCommand::Config(OverlayConfig::default()));
+        assert_eq!(lines[4], OverlayCommand::State { state });
+        assert!(!c.unsupported());
+        c.shutdown();
+        drop(c);
+        let s = std::fs::read_to_string(&out).unwrap();
+        assert!(s.lines().last().unwrap().contains("quit"));
+    }
+}
