@@ -159,8 +159,16 @@ pub fn decode_proximity(data: &[u8], decrypted: Option<&[u8; 16]>) -> Option<Ble
 
     // In-ear bits (same mapping as the Qt app).
     let xor = primary_left ^ this_in_case;
-    let left_in_ear = if xor { status & 0x02 != 0 } else { status & 0x08 != 0 };
-    let right_in_ear = if xor { status & 0x08 != 0 } else { status & 0x02 != 0 };
+    let left_in_ear = if xor {
+        status & 0x02 != 0
+    } else {
+        status & 0x08 != 0
+    };
+    let right_in_ear = if xor {
+        status & 0x08 != 0
+    } else {
+        status & 0x02 != 0
+    };
     r.left_in_ear = Some(left_in_ear);
     r.right_in_ear = Some(right_in_ear);
 
@@ -507,9 +515,14 @@ fn monitor_unsupported(e: &bluer::Error) -> bool {
         return true;
     }
     let text = format!("{e} {e:?}");
-    ["doesn't exist", "UnknownMethod", "UnknownInterface", "UnknownObject"]
-        .iter()
-        .any(|needle| text.contains(needle))
+    [
+        "doesn't exist",
+        "UnknownMethod",
+        "UnknownInterface",
+        "UnknownObject",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
 }
 
 /// True while any of our AirPods has a classic link to this PC. AACP then supplies

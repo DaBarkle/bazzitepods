@@ -26,7 +26,11 @@ pub fn load_config() -> OverlayConfig {
     else {
         return cfg;
     };
-    if let Some(mode) = v.get("overlay_mode").cloned().and_then(|m| serde_json::from_value(m).ok()) {
+    if let Some(mode) = v
+        .get("overlay_mode")
+        .cloned()
+        .and_then(|m| serde_json::from_value(m).ok())
+    {
         cfg.mode = mode;
     }
     if let Some(pos) = v
@@ -75,7 +79,9 @@ pub fn set_fullscreen(active: bool) {
 }
 
 pub fn spawn(hub: Hub) {
-    let client = CLIENT.get_or_init(|| Arc::new(OverlayClient::spawn(load_config()))).clone();
+    let client = CLIENT
+        .get_or_init(|| Arc::new(OverlayClient::spawn(load_config())))
+        .clone();
     tokio::spawn(run(hub, client));
 }
 
@@ -136,8 +142,17 @@ pub fn to_overlay_state(snap: &AppSnapshot) -> Option<OverlayState> {
         connected: d.is_connected(),
         left: comp(&d.battery.left),
         right: comp(&d.battery.right),
-        case: if info.has_case_battery { comp(&d.battery.case) } else { None },
-        headphone: if info.is_headphone { comp(&d.battery.headphone) } else { None },
+        case: if info.has_case_battery {
+            comp(&d.battery.case)
+        } else {
+            None
+        },
+        headphone: if info.is_headphone {
+            comp(&d.battery.headphone)
+        } else {
+            None
+        },
+        elsewhere: d.in_use_elsewhere(),
     })
 }
 

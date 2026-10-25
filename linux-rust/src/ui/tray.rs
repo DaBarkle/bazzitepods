@@ -418,13 +418,32 @@ fn bolt(cx: f32, cy: f32, h: f32) -> impl Fn(f32, f32) -> f32 {
     ])
 }
 
-/// Two earbuds (head + stem), matching the symbolic icon's proportions.
-fn earbuds(c: &mut Canvas, color: Rgba, grow: f32) {
-    for side in [-1.0f32, 1.0] {
-        let hx = 0.5 + side * 0.15;
-        c.paint(color, circle(hx, 0.39, 0.115 + grow));
-        let sx = 0.5 + side * 0.094;
-        c.paint(color, capsule(sx, 0.42, sx, 0.70, 0.088 + grow * 2.0));
+/// Rotated ellipse (`rot` in radians, clockwise); approximate distance, fine for AA.
+fn ellipse(cx: f32, cy: f32, rx: f32, ry: f32, rot: f32) -> impl Fn(f32, f32) -> f32 {
+    let (sn, cs) = rot.sin_cos();
+    move |x, y| {
+        let (dx, dy) = (x - cx, y - cy);
+        let (lx, ly) = (dx * cs + dy * sn, -dx * sn + dy * cs);
+        (((lx / rx).powi(2) + (ly / ry).powi(2)).sqrt() - 1.0) * rx.min(ry)
+    }
+}
+
+/// The pair of earbuds, same geometry as the overlay glyph and `assets/icons/` (a 32-unit
+/// box, right bud first, left mirrored). `grow` fattens every shape (for the halo).
+fn earbuds(c: &mut Canvas, color: Rgba, grow: f32, grille: Option<Rgba>) {
+    let k = 0.6 / 32.0;
+    for side in [1.0f32, -1.0] {
+        let p = |x: f32, y: f32| (0.5 + side * (x - 16.0) * k, 0.5 + (y - 16.8) * k);
+        let rot = side * -20f32.to_radians();
+        let (sx0, sy0) = p(25.0, 10.5);
+        let (sx1, sy1) = p(25.7, 28.0);
+        c.paint(color, capsule(sx0, sy0, sx1, sy1, 3.6 * k + grow * 2.0));
+        let (hx, hy) = p(22.6, 8.6);
+        c.paint(color, ellipse(hx, hy, 5.0 * k + grow, 4.6 * k + grow, rot));
+        if let Some(g) = grille {
+            let (gx, gy) = p(19.4, 9.6);
+            c.paint(g, ellipse(gx, gy, 1.25 * k, 1.9 * k, rot));
+        }
     }
 }
 
@@ -449,8 +468,8 @@ pub fn render_full(key: IconKey, size: u32) -> Icon {
             arc(0.5, 0.5, r, w, b as f32 / 100.0),
         );
     }
-    earbuds(&mut c, halo, 0.025);
-    earbuds(&mut c, glyph, 0.0);
+    earbuds(&mut c, halo, 0.025, None);
+    earbuds(&mut c, glyph, 0.0, Some(hex(0x16181C, 0.55)));
     if key.charging {
         c.paint(halo, circle(0.78, 0.78, 0.2));
         c.paint(tone_color(Tone::Normal, true), bolt(0.78, 0.78, 0.3));

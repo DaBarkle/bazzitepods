@@ -47,6 +47,14 @@ grep bluez ~/.local/state/wireplumber/default-profile
 Suspend the PC with the AirPods connected, wake it, put the AirPods in. Battery and audio
 should come back without touching anything.
 
+## 5. Case battery and multi-device
+
+1. Put one pod in the case and open the lid. The case level shows within a few seconds,
+   and is still shown (dimmed) after you take the pod out again.
+2. With the AirPods playing on the PC, start something on your iPhone. The window shows
+   **On another device** and the overlay pops up. Press **Use on this PC**: the audio
+   comes back to the PC within a few seconds.
+
 ## Logs
 
 `journalctl --user -b | grep -i librepods` or run with `RUST_LOG=librepods=debug` as above.

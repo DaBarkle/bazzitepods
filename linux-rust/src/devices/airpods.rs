@@ -111,8 +111,12 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         if cancel.is_cancelled() {
             break;
         }
-        info!("Control channel to {} dropped while link is up; reconnecting", mac_s);
-        ctx.hub.set_link(&mac_s, LinkState::Reconnecting { attempt: 1 });
+        info!(
+            "Control channel to {} dropped while link is up; reconnecting",
+            mac_s
+        );
+        ctx.hub
+            .set_link(&mac_s, LinkState::Reconnecting { attempt: 1 });
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = sleep(Duration::from_secs(1)) => {}
@@ -212,10 +216,21 @@ async fn session(
     *ctx.active_commands.lock().await = Some(command_tx.clone());
     {
         let aacp = aacp.clone();
+        let hub = ctx.hub.clone();
+        let local = ctx.local_mac.clone();
+        let (mac, name) = (mac_s.clone(), name.to_string());
         tasks.spawn(async move {
             while let Some((id, value)) = command_rx.recv().await {
                 if let Err(e) = aacp.send_control_command(id, &value).await {
                     warn!("Failed to send control command {:?}: {}", id, e);
+                    continue;
+                }
+                if id == ControlCommandIdentifiers::OwnsConnection {
+                    let owns = value.first().copied().unwrap_or(0) != 0;
+                    hub.update_device(&mac, &name, |d| d.owns_audio = Some(owns));
+                    if owns {
+                        claim_audio_route(&aacp, &local).await;
+                    }
                 }
             }
         });
@@ -259,6 +274,33 @@ async fn session(
     tasks.abort_all();
     // Wait for aborted tasks so their channels are really closed before cleanup checks them.
     while tasks.join_next().await.is_some() {}
+}
+
+/// Tell every other device on the AirPods that this PC is taking the audio route, so
+/// they hand it over (the same exchange an iPhone does when you pick it in Control Centre).
+/// Runs after `OwnsConnection = 1` was sent, whether from playback starting or from the
+/// "Use on this PC" button.
+async fn claim_audio_route(aacp: &AACPManager, local: &str) {
+    let others: Vec<String> = aacp
+        .state
+        .lock()
+        .await
+        .connected_devices
+        .iter()
+        .filter(|d| !d.mac.eq_ignore_ascii_case(local))
+        .map(|d| d.mac.clone())
+        .collect();
+    for peer in others {
+        if let Err(e) = aacp.send_media_information(local, &peer, true).await {
+            warn!("Failed to send media information to {peer}: {e}");
+        }
+        if let Err(e) = aacp.send_smart_routing_show_ui(&peer).await {
+            warn!("Failed to send smart routing UI to {peer}: {e}");
+        }
+        if let Err(e) = aacp.send_hijack_request(&peer).await {
+            warn!("Failed to send hijack request to {peer}: {e}");
+        }
+    }
 }
 
 async fn handshake(aacp: &AACPManager) -> bluer::Result<()> {
@@ -313,7 +355,9 @@ async fn subscribe_controls(
                 let Some(&byte) = value.first() else { continue };
                 hub.update_device(&mac, &name, |d| match id {
                     ControlCommandIdentifiers::ListeningMode => d.listening_mode = Some(byte),
-                    ControlCommandIdentifiers::AllowOffOption => d.allow_off_mode = Some(byte == 0x01),
+                    ControlCommandIdentifiers::AllowOffOption => {
+                        d.allow_off_mode = Some(byte == 0x01)
+                    }
                     ControlCommandIdentifiers::ConversationDetectConfig => {
                         d.conversation_awareness = Some(byte == 0x01)
                     }
@@ -329,10 +373,13 @@ async fn subscribe_controls(
     aacp.subscribe_to_control_command(ControlCommandIdentifiers::OwnsConnection, tx)
         .await;
     let media = media.clone();
+    let hub = ctx.hub.clone();
+    let (mac, name) = (mac_s.to_string(), name.to_string());
     tasks.spawn(async move {
         let mut owned = false;
         while let Some(value) = rx.recv().await {
             let owns = value.first().copied().unwrap_or(0) != 0;
+            hub.update_device(&mac, &name, |d| d.owns_audio = Some(owns));
             if owned && !owns {
                 info!("Another device took the AirPods; pausing local media");
                 media.lock().await.pause_all_media().await;
@@ -360,6 +407,22 @@ async fn handle_event(
             ctx.battery.send(BatteryInput::Aacp(mac, info.clone()));
         }
         AACPEvent::EarDetection(old, new) => {
+            // A pod just went into the case. The first battery report then often says
+            // "case unknown" (255) and the real level may never follow, so ask the AirPods
+            // to resend their state a little later.
+            let in_case = |v: &Vec<EarDetectionStatus>| v.contains(&EarDetectionStatus::InCase);
+            if in_case(new) && !in_case(old) {
+                let aacp = aacp.clone();
+                tokio::spawn(async move {
+                    for delay in [2, 4] {
+                        sleep(Duration::from_secs(delay)).await;
+                        if let Err(e) = aacp.send_notification_request().await {
+                            debug!("case battery refresh failed: {e}");
+                            return;
+                        }
+                    }
+                });
+            }
             let in_ear = |i: usize| new.get(i).map(|s| *s == EarDetectionStatus::InEar);
             // AACP reports primary/secondary; the UI only needs "is anything in an ear", and
             // left/right placement is refined by BLE. Store as (primary, secondary).
@@ -383,6 +446,12 @@ async fn handle_event(
         }
         AACPEvent::ConnectedDevices(old_devices, new_devices) => {
             let local = ctx.local_mac.clone();
+            let others = new_devices
+                .iter()
+                .filter(|n| !n.mac.eq_ignore_ascii_case(&local))
+                .count();
+            ctx.hub
+                .update_device(&mac_s, name, |d| d.other_devices = others);
             for device in new_devices
                 .iter()
                 .filter(|n| n.mac != local && old_devices.iter().all(|o| o.mac != n.mac))
@@ -436,11 +505,13 @@ fn spawn_health_mirror(guard: &AudioGuardHandle, ctx: &DeviceContext, mac_s: &st
             let text = match &*rx.borrow_and_update() {
                 AudioHealth::Disconnected => None,
                 AudioHealth::Negotiating => Some("Connecting audio".to_string()),
-                AudioHealth::Ready { codec, profile } => Some(
-                    codec
-                        .clone()
-                        .unwrap_or_else(|| if profile.contains("aac") { "AAC".into() } else { "Audio ready".into() }),
-                ),
+                AudioHealth::Ready { codec, profile } => Some(codec.clone().unwrap_or_else(|| {
+                    if profile.contains("aac") {
+                        "AAC".into()
+                    } else {
+                        "Audio ready".into()
+                    }
+                })),
                 AudioHealth::Recovering { .. } => Some("Restoring audio".to_string()),
                 AudioHealth::Failed { reason } => Some(format!("Audio problem: {reason}")),
             };
@@ -488,7 +559,10 @@ fn setting_bool(key: &str) -> bool {
 pub fn saved_device_name(mac: &str) -> Option<String> {
     let json = std::fs::read_to_string(get_devices_path()).ok()?;
     let devices: HashMap<String, DeviceData> = serde_json::from_str(&json).ok()?;
-    devices.get(mac).map(|d| d.name.clone()).filter(|n| !n.is_empty())
+    devices
+        .get(mac)
+        .map(|d| d.name.clone())
+        .filter(|n| !n.is_empty())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

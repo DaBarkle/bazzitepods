@@ -88,7 +88,8 @@ impl NothingDevice {
         tokio::spawn(async move {
             while let Some(data) = rx.recv().await {
                 if data.starts_with(&[0x55, 0x20, 0x01, 0x42, 0x40]) {
-                    let firmware_version = String::from_utf8_lossy(data.get(8..).unwrap_or_default()).to_string();
+                    let firmware_version =
+                        String::from_utf8_lossy(data.get(8..).unwrap_or_default()).to_string();
                     info!(
                         "Received firmware version from Nothing device {}: {}",
                         mac_address, firmware_version

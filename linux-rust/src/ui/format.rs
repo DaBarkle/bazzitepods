@@ -79,6 +79,9 @@ pub fn is_nearby(d: &DeviceSnapshot) -> bool {
 }
 
 pub fn connection_label(d: &DeviceSnapshot) -> (&'static str, PillTone) {
+    if d.in_use_elsewhere() {
+        return ("On another device", PillTone::Info);
+    }
     match d.link {
         LinkState::Connected | LinkState::Limited => ("Connected", PillTone::Good),
         LinkState::Connecting => ("Connecting…", PillTone::Busy),
@@ -454,6 +457,18 @@ mod tests {
         d.battery = BatterySnapshot::default();
         assert_eq!(connection_label(&d).0, "Not connected");
         assert_eq!(model_name(ModelKind::Unknown), "AirPods");
+    }
+
+    #[test]
+    fn elsewhere_overrides_connected_label() {
+        let mut d = device(ModelKind::AirPods4, LinkState::Connected);
+        d.owns_audio = Some(false);
+        assert_eq!(connection_label(&d).0, "On another device");
+        d.owns_audio = Some(true);
+        assert_eq!(connection_label(&d).0, "Connected");
+        d.owns_audio = Some(false);
+        d.link = LinkState::Disconnected;
+        assert!(!d.in_use_elsewhere());
     }
 
     #[test]

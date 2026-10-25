@@ -18,8 +18,7 @@ use crate::ui::style::{self, Tokens};
 use crate::ui::widgets::{self, Glyph, Ink};
 use futures::Stream;
 use iced::widget::{
-    Space, button, column, container, pick_list, row, scrollable, slider, text, text_input,
-    toggler,
+    Space, button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
 };
 use iced::{Center, Element, Fill, Length, Padding, Size, Subscription, Task, Theme, window};
 use log::{debug, info, warn};
@@ -168,6 +167,9 @@ pub enum Message {
     AutostartDone(Result<(), String>),
     NothingConnected(Option<String>),
     SavedDevices(HashMap<String, DeviceData>),
+    AppleMode(Option<bool>),
+    CopyAppleCommand,
+    TakeAudio,
     SetNothingMode(String, NothingMode),
     Ignore,
 }
@@ -239,8 +241,13 @@ pub struct App {
     more_open: bool,
     pending_mode: Option<(u8, Instant)>,
     pending_ca: Option<(bool, Instant)>,
+    /// "Use on this PC" was pressed; shows "Switching…" until the AirPods answer.
+    taking_audio: Option<Instant>,
     adaptive_volume: HashMap<String, bool>,
     rename: String,
+    /// Bluetooth adapter reports Apple's vendor id (DeviceID spoofing); None = unknown.
+    apple_mode: Option<bool>,
+    apple_copied: bool,
     rename_status: Option<String>,
     nothing: BTreeMap<String, Option<NothingMode>>,
     /// devices.json (serials, firmware), loaded off the UI thread.
@@ -285,8 +292,11 @@ impl App {
             more_open: demo && std::env::var_os("LIBREPODS_UI_EXPAND").is_some(),
             pending_mode: None,
             pending_ca: None,
+            taking_audio: None,
             adaptive_volume: HashMap::new(),
             rename: String::new(),
+            apple_mode: None,
+            apple_copied: false,
             rename_status: None,
             nothing: BTreeMap::new(),
             saved: HashMap::new(),
@@ -302,7 +312,12 @@ impl App {
         } else {
             load_saved_devices()
         };
-        (app, Task::batch([theme, open, saved]))
+        let apple = if demo {
+            Task::none()
+        } else {
+            load_apple_mode()
+        };
+        (app, Task::batch([theme, open, saved, apple]))
     }
 
     fn open_window(&mut self) -> Task<Message> {
@@ -363,6 +378,7 @@ impl App {
                 d.conversation_awareness = Some(value == 0x01)
             }
             ControlCommandIdentifiers::AllowOffOption => d.allow_off_mode = Some(value == 0x01),
+            ControlCommandIdentifiers::OwnsConnection => d.owns_audio = Some(value == 0x01),
             _ => {}
         });
     }
@@ -518,7 +534,29 @@ impl App {
             }
             Message::ToggleMore => {
                 self.more_open = !self.more_open;
+                self.apple_copied = false;
+                if self.more_open && !self.demo {
+                    load_apple_mode()
+                } else {
+                    Task::none()
+                }
+            }
+            Message::AppleMode(on) => {
+                self.apple_mode = on;
                 Task::none()
+            }
+            Message::TakeAudio => {
+                self.taking_audio = Some(Instant::now());
+                self.send(ControlCommandIdentifiers::OwnsConnection, 0x01)
+            }
+            Message::CopyAppleCommand => {
+                self.apple_copied = true;
+                let cmd = if self.apple_mode == Some(true) {
+                    APPLE_MODE_OFF
+                } else {
+                    APPLE_MODE_ON
+                };
+                iced::clipboard::write(cmd.to_string())
             }
             Message::RenameInput(s) => {
                 self.rename = s.chars().take(32).collect();
@@ -746,6 +784,12 @@ impl App {
             subtitle.push_str(" · ");
             subtitle.push_str(&format::last_seen_text(seen, self.now));
         }
+        if d.is_connected() && !d.in_use_elsewhere() && d.other_devices > 0 {
+            subtitle.push_str(&match d.other_devices {
+                1 => " · Also on 1 other device".to_string(),
+                n => format!(" · Also on {n} other devices"),
+            });
+        }
 
         let header = row![
             column![
@@ -769,7 +813,11 @@ impl App {
             ring_row = ring_row.push(gauge_cell(g, size));
         }
 
-        container(column![header, ring_row].spacing(22))
+        let mut body = column![header].spacing(22);
+        if d.in_use_elsewhere() {
+            body = body.push(self.elsewhere_banner());
+        }
+        container(body.push(ring_row))
             .padding(Padding {
                 top: 20.0,
                 bottom: 20.0,
@@ -779,6 +827,51 @@ impl App {
             .width(Fill)
             .style(style::hero)
             .into()
+    }
+
+    /// Shown while another Apple device has the audio: the AirPods are still connected
+    /// here, and one press brings the sound back to this PC.
+    fn elsewhere_banner<'a>(&self) -> Element<'a, Message> {
+        let switching = self
+            .taking_audio
+            .is_some_and(|t| t.elapsed() < Duration::from_secs(6));
+        let label = if switching {
+            "Switching…"
+        } else {
+            "Use on this PC"
+        };
+        let mut take = button(text(label).size(12).font(style::INTER_MEDIUM))
+            .padding(Padding {
+                top: 6.0,
+                bottom: 6.0,
+                left: 12.0,
+                right: 12.0,
+            })
+            .style(style::secondary);
+        if !switching {
+            take = take.on_press(Message::TakeAudio);
+        }
+        container(
+            row![
+                column![
+                    text("Playing on another device")
+                        .size(13)
+                        .font(style::INTER_SEMIBOLD),
+                    text("Still connected here. Starting playback also switches back.")
+                        .size(12)
+                        .style(dim_text),
+                ]
+                .spacing(2)
+                .width(Fill),
+                take,
+            ]
+            .align_y(Center)
+            .spacing(10),
+        )
+        .padding(12)
+        .width(Fill)
+        .style(style::segment_track)
+        .into()
     }
 
     fn controls<'a>(&self, d: &'a DeviceSnapshot) -> Option<Element<'a, Message>> {
@@ -955,6 +1048,43 @@ impl App {
         .into()
     }
 
+    /// Opt-in Apple DeviceID ("VendorID spoofing"). The sandboxed app can't edit
+    /// /etc/bluetooth/main.conf, so it hands the user a one-line command instead.
+    fn apple_mode_row(&self) -> Element<'_, Message> {
+        let (state, action) = match self.apple_mode {
+            Some(true) => ("On", "Copy command to turn off"),
+            Some(false) => ("Off", "Copy command to turn on"),
+            None => ("Unknown", "Copy command to turn on"),
+        };
+        let button_label = if self.apple_copied {
+            "Copied. Paste it in a terminal"
+        } else {
+            action
+        };
+        setting_block(
+            "Apple device mode",
+            Some(
+                "Makes this PC introduce itself as an Apple device, so AirPods can stay paired \
+                 with your iPhone and this PC and switch between them. Restarts Bluetooth \
+                 for a few seconds; needs your password once.",
+            ),
+            row![
+                text(state).size(12).font(style::INTER_SEMIBOLD).width(Fill),
+                button(text(button_label).size(12).font(style::INTER_MEDIUM))
+                    .padding(Padding {
+                        top: 6.0,
+                        bottom: 6.0,
+                        left: 12.0,
+                        right: 12.0,
+                    })
+                    .style(style::secondary)
+                    .on_press(Message::CopyAppleCommand),
+            ]
+            .align_y(Center)
+            .into(),
+        )
+    }
+
     fn more_card(&self) -> Element<'_, Message> {
         let s = &self.settings;
         let mut col = column![setting_row(
@@ -973,6 +1103,7 @@ impl App {
         )]
         .spacing(14);
 
+        col = col.push(divider()).push(self.apple_mode_row());
         col = col.push(divider()).push(setting_row(
             "Stem press track control",
             Some("Double-press for next track, triple-press for previous. Applies on reconnect."),
@@ -1099,6 +1230,26 @@ fn load_saved_devices() -> Task<Message> {
             .unwrap_or_default()
         },
         Message::SavedDevices,
+    )
+}
+
+/// Adds Apple's Bluetooth vendor id (0x004C) to BlueZ, keeping a backup of the config.
+const APPLE_MODE_ON: &str = "sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-bazzitepods && \
+sudo sed -i '/^\\[General\\]/a DeviceID = bluetooth:004C:0000:0000' /etc/bluetooth/main.conf && \
+sudo systemctl restart bluetooth";
+const APPLE_MODE_OFF: &str = "sudo sed -i '/^DeviceID = bluetooth:004C:/d' /etc/bluetooth/main.conf && \
+sudo systemctl restart bluetooth";
+
+/// Reads the adapter's modalias: BlueZ reports the configured DeviceID there.
+fn load_apple_mode() -> Task<Message> {
+    Task::perform(
+        async {
+            let session = bluer::Session::new().await.ok()?;
+            let adapter = session.default_adapter().await.ok()?;
+            let m = adapter.modalias().await.ok()??;
+            Some(m.vendor == 0x004C)
+        },
+        Message::AppleMode,
     )
 }
 
@@ -1280,19 +1431,23 @@ fn segmented_impl<'a, T: Copy + PartialEq + 'a>(
         };
         r = r.push(
             button(label)
-            .width(if wide { Fill } else { Length::Shrink })
-            .padding(Padding {
-                top: 5.0,
-                bottom: 5.0,
-                left: 10.0,
-                right: 10.0,
-            })
-            .style(style::segment(is_sel))
-            .on_press_maybe(enabled.then_some(msg(value))),
+                .width(if wide { Fill } else { Length::Shrink })
+                .padding(Padding {
+                    top: 5.0,
+                    bottom: 5.0,
+                    left: 10.0,
+                    right: 10.0,
+                })
+                .style(style::segment(is_sel))
+                .on_press_maybe(enabled.then_some(msg(value))),
         );
     }
     let track = container(r).padding(2).style(style::segment_track);
-    if wide { track.width(Fill).into() } else { track.into() }
+    if wide {
+        track.width(Fill).into()
+    } else {
+        track.into()
+    }
 }
 
 fn corner_picker<'a>(selected: OverlayPosition, enabled: bool) -> Element<'a, Message> {

@@ -385,6 +385,16 @@ fn parse_args() -> Result<(Args, bool), String> {
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
+    // Render with Vulkan only (skips a noisy EGL probe) and on the low-power GPU when
+    // there are two: the pill is tiny, so the integrated GPU easily draws it and the
+    // discrete one stays entirely with the game. Both can be overridden from outside.
+    for (key, value) in [("WGPU_BACKEND", "vulkan"), ("WGPU_POWER_PREF", "low")] {
+        if std::env::var_os(key).is_none() {
+            // SAFETY: first thing in main, before any other thread exists.
+            unsafe { std::env::set_var(key, value) };
+        }
+    }
+
     let (args, probe_only) = match parse_args() {
         Ok(a) => a,
         Err(e) => {

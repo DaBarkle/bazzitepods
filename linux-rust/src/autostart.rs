@@ -13,10 +13,10 @@
 
 // Wired up by the integrator (call sites live in main.rs / ui); until then nothing uses it.
 
+use dbus::Path as DbusPath;
 use dbus::arg::{PropMap, RefArg, Variant};
 use dbus::blocking::Connection;
 use dbus::message::MatchRule;
-use dbus::Path as DbusPath;
 use log::{debug, info, warn};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
@@ -73,8 +73,8 @@ pub fn running_in_flatpak() -> bool {
 // ---------------------------------------------------------------------------
 
 fn request_background_portal(enable: bool) -> Result<(), String> {
-    let conn = Connection::new_session()
-        .map_err(|e| format!("cannot connect to the session bus: {e}"))?;
+    let conn =
+        Connection::new_session().map_err(|e| format!("cannot connect to the session bus: {e}"))?;
 
     let token = handle_token();
     let sender = conn.unique_name().to_string();
@@ -135,8 +135,8 @@ fn add_response_match(
     path: &str,
     slot: Arc<Mutex<Option<(u32, PropMap)>>>,
 ) -> Result<(), String> {
-    let path = DbusPath::new(path.to_string())
-        .map_err(|e| format!("invalid portal request path: {e}"))?;
+    let path =
+        DbusPath::new(path.to_string()).map_err(|e| format!("invalid portal request path: {e}"))?;
     let rule = MatchRule::new_signal(REQUEST_IFACE, "Response").with_path(path);
     conn.add_match(rule, move |(code, results): (u32, PropMap), _, _| {
         match slot.lock() {
@@ -152,8 +152,14 @@ fn add_response_match(
 fn interpret_response(enable: bool, code: u32, results: &PropMap) -> Result<(), String> {
     match code {
         0 => {
-            let autostart = results.get("autostart").and_then(|v| v.0.as_u64()).map(|v| v != 0);
-            let background = results.get("background").and_then(|v| v.0.as_u64()).map(|v| v != 0);
+            let autostart = results
+                .get("autostart")
+                .and_then(|v| v.0.as_u64())
+                .map(|v| v != 0);
+            let background = results
+                .get("background")
+                .and_then(|v| v.0.as_u64())
+                .map(|v| v != 0);
             debug!("Background portal: background={background:?} autostart={autostart:?}");
             if enable && autostart == Some(false) {
                 warn!("Background portal granted the request but did not enable autostart");
@@ -166,7 +172,9 @@ fn interpret_response(enable: bool, code: u32, results: &PropMap) -> Result<(), 
             Ok(())
         }
         1 => Err("the user denied the background/autostart request".into()),
-        _ => Err(format!("the Background portal request failed (response {code})")),
+        _ => Err(format!(
+            "the Background portal request failed (response {code})"
+        )),
     }
 }
 
@@ -194,7 +202,10 @@ fn request_path(unique_name: &str, token: &str) -> String {
 // Non-Flatpak fallback: ~/.config/autostart/<app-id>.desktop
 // ---------------------------------------------------------------------------
 
-fn autostart_dir(xdg_config_home: Option<OsString>, home: Option<OsString>) -> Result<PathBuf, String> {
+fn autostart_dir(
+    xdg_config_home: Option<OsString>,
+    home: Option<OsString>,
+) -> Result<PathBuf, String> {
     // Per the XDG base dir spec, a relative XDG_CONFIG_HOME is invalid and must be ignored.
     let config = match xdg_config_home.map(PathBuf::from) {
         Some(p) if p.is_absolute() => p,

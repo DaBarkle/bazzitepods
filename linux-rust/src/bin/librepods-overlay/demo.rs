@@ -20,6 +20,7 @@ fn buds(name: &str, kind: &str) -> OverlayState {
         right: c(77, false, true),
         case: c(46, false, true),
         headphone: None,
+        ..Default::default()
     }
 }
 
@@ -51,6 +52,9 @@ pub fn states() -> Vec<(&'static str, OverlayState)> {
     all_charging.right = c(100, true, true);
     all_charging.case = c(31, true, true);
 
+    let mut elsewhere = normal.clone();
+    elsewhere.elsewhere = true;
+
     let max = OverlayState {
         name: "AirPods Max".into(),
         kind: "airpods_max".into(),
@@ -66,6 +70,7 @@ pub fn states() -> Vec<(&'static str, OverlayState)> {
         ("low", low),
         ("stale-case", stale_case),
         ("all-charging", all_charging),
+        ("elsewhere", elsewhere),
         ("max", max),
     ]
 }

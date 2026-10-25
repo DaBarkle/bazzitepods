@@ -211,7 +211,9 @@ impl Supervisor {
             }
             // A late retry that stays up means the overlay works after all.
             if self.child.is_some()
-                && self.started_at.is_some_and(|t| t.elapsed() > Duration::from_secs(5))
+                && self
+                    .started_at
+                    .is_some_and(|t| t.elapsed() > Duration::from_secs(5))
             {
                 self.unsupported.store(false, Ordering::SeqCst);
             }

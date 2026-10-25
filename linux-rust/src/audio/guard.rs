@@ -228,7 +228,11 @@ fn with_default_memory<R>(f: impl FnOnce(&DefaultMemory) -> R) -> R {
 }
 
 fn was_default(mac: &str) -> bool {
-    with_default_memory(|m| m.lock().map(|m| m.get(mac).copied().unwrap_or(false)).unwrap_or(false))
+    with_default_memory(|m| {
+        m.lock()
+            .map(|m| m.get(mac).copied().unwrap_or(false))
+            .unwrap_or(false)
+    })
 }
 
 #[derive(Debug)]
@@ -689,7 +693,10 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         let Ok(snap) = self.pulse.snapshot().await else {
             return Vec::new();
         };
-        let Some(sink) = snap.card_for(&self.mac_str).and_then(|c| snap.sink_for_card(c)) else {
+        let Some(sink) = snap
+            .card_for(&self.mac_str)
+            .and_then(|c| snap.sink_for_card(c))
+        else {
             return Vec::new();
         };
         snap.sink_inputs
@@ -704,8 +711,14 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
     async fn restore_streams(&mut self, streams: &[u32]) {
         let deadline = Instant::now() + self.cfg.verify_timeout;
         let (snap, sink) = loop {
-            let Ok(snap) = self.pulse.snapshot().await else { return };
-            if let Some(sink) = snap.card_for(&self.mac_str).and_then(|c| snap.sink_for_card(c)).cloned() {
+            let Ok(snap) = self.pulse.snapshot().await else {
+                return;
+            };
+            if let Some(sink) = snap
+                .card_for(&self.mac_str)
+                .and_then(|c| snap.sink_for_card(c))
+                .cloned()
+            {
                 break (snap, sink);
             }
             if Instant::now() >= deadline {
@@ -724,7 +737,10 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             .filter(|i| streams.contains(&i.index) && i.sink != sink.index)
         {
             if let Err(e) = self.pulse.move_sink_input(input.index, sink.index).await {
-                debug!("[audio {}] move stream {} failed: {}", self.mac_str, input.index, e);
+                debug!(
+                    "[audio {}] move stream {} failed: {}",
+                    self.mac_str, input.index, e
+                );
             }
         }
     }

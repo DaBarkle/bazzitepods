@@ -29,6 +29,9 @@ pub fn meaningful_change(prev: Option<&OverlayState>, next: &OverlayState) -> Op
     let Some(prev) = prev.filter(|p| p.connected) else {
         return Some("connected");
     };
+    if prev.elsewhere != next.elsewhere {
+        return Some("route");
+    }
     let pairs: [(
         &Option<ComponentState>,
         &Option<ComponentState>,
@@ -75,6 +78,7 @@ fn placeholder() -> OverlayState {
         right: unknown(),
         case: unknown(),
         headphone: None,
+        ..Default::default()
     }
 }
 
@@ -341,6 +345,7 @@ mod tests {
             right: comp(r, false, true),
             case: comp(c, false, true),
             headphone: None,
+            elsewhere: false,
         }
     }
 
@@ -604,7 +609,10 @@ mod tests {
             t0,
         );
         assert_eq!(c.tick(t0), SurfaceAction::Map);
-        assert!((c.expansion() - 1.0).abs() < 1e-6, "connect shows the full pill");
+        assert!(
+            (c.expansion() - 1.0).abs() < 1e-6,
+            "connect shows the full pill"
+        );
         assert!(c.has_deadline());
         let (acts, t1) = run(&mut c, t0, 5000);
         assert!(acts.is_empty(), "compact never unmaps while connected");
@@ -618,5 +626,14 @@ mod tests {
         let (acts, _) = run(&mut c, t1, 500);
         assert!(acts.is_empty());
         assert!((c.expansion() - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn route_change_is_meaningful() {
+        let a = buds(80, 80, 50);
+        let mut b = a.clone();
+        b.elsewhere = true;
+        assert_eq!(meaningful_change(Some(&a), &b), Some("route"));
+        assert_eq!(meaningful_change(Some(&b), &b), None);
     }
 }

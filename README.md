@@ -51,12 +51,40 @@ up within a few seconds.
 - **Controls.** Noise control (when your model has it), ear detection with media pause and
   resume, conversational awareness and renaming. Only the controls your model supports are
   shown.
+- **Multiple devices.** When your iPhone or Mac takes the AirPods, BazzitePods pauses
+  what's playing here and shows **On another device**, while the AirPods stay connected.
+  Press **Use on this PC** (or just start playing something) to bring the audio back. The
+  overlay pops up when the audio moves.
 - **Hands-off.** Survives Bluetooth restarts, adapter hot-plug and suspend/resume. It never
   turns Bluetooth on by itself. Launching it a second time just opens the window.
 
 | Full overlay | Compact widget |
 | --- | --- |
 | ![Full overlay](linux-rust/docs/screenshots/overlay.png) | ![Compact overlay](linux-rust/docs/screenshots/overlay-compact.png) |
+
+## Apple device mode (optional)
+
+AirPods behave best with devices that introduce themselves as Apple devices: they switch
+between them automatically and stay paired with both your iPhone and your PC. Apple device
+mode makes your PC's Bluetooth report Apple's vendor ID (`004C`) to the AirPods. It's off by
+default and changes one line in a system file, so BazzitePods never does it on its own.
+
+To turn it on, open **Settings → More options → Apple device mode** and press the button to
+copy the command, or run it yourself. It makes a backup, adds the line, and restarts
+Bluetooth (your devices drop for a few seconds):
+
+```bash
+sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-bazzitepods && sudo sed -i '/^\[General\]/a DeviceID = bluetooth:004C:0000:0000' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth
+```
+
+To undo it:
+
+```bash
+sudo sed -i '/^DeviceID = bluetooth:004C:/d' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth
+```
+
+Your other Bluetooth devices are not affected. Changes in `/etc` are kept across Bazzite
+updates.
 
 ## Safe with anti-cheat
 

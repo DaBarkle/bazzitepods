@@ -106,6 +106,8 @@ pub struct OverlayState {
     pub case: Option<ComponentState>,
     /// Set for over-ear headphones (AirPods Max); then left/right/case are ignored.
     pub headphone: Option<ComponentState>,
+    /// Connected here, but another Apple device has the audio.
+    pub elsewhere: bool,
 }
 
 /// One line of the protocol.

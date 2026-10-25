@@ -141,48 +141,23 @@ impl MediaController {
             if !was_playing && is_playing {
                 // Copy what we need and release the lock before any await: send_packet
                 // takes the same (non-reentrant) mutex, so holding it here deadlocks.
-                let (any_in_ear, connected_devices) = {
-                    let aacp_state = aacp_manager.state.lock().await;
-                    (
-                        aacp_state
-                            .ear_detection_status
-                            .contains(&EarDetectionStatus::InEar),
-                        aacp_state.connected_devices.clone(),
-                    )
-                };
+                let any_in_ear = aacp_manager
+                    .state
+                    .lock()
+                    .await
+                    .ear_detection_status
+                    .contains(&EarDetectionStatus::InEar);
                 if !any_in_ear {
                     info!("Media playback started but buds not in ear, skipping takeover");
                     continue;
                 }
                 info!("Media playback started, taking ownership and checking A2DP");
+                // The device task notifies the other devices once this is sent.
                 let _ = control_tx.send((
                     crate::bluetooth::aacp::ControlCommandIdentifiers::OwnsConnection,
                     vec![0x01],
                 ));
                 self.activate_a2dp_profile().await;
-
-                info!("already connected locally, hijacking connection by asking AirPods");
-
-                for device in connected_devices {
-                    if !device.mac.eq_ignore_ascii_case(&local_mac) {
-                        if let Err(e) = aacp_manager
-                            .send_media_information(&local_mac, &device.mac, true)
-                            .await
-                        {
-                            error!("Failed to send media information to {}: {}", device.mac, e);
-                        }
-                        if let Err(e) = aacp_manager.send_smart_routing_show_ui(&device.mac).await {
-                            error!(
-                                "Failed to send smart routing show ui to {}: {}",
-                                device.mac, e
-                            );
-                        }
-                        if let Err(e) = aacp_manager.send_hijack_request(&device.mac).await {
-                            error!("Failed to send hijack request to {}: {}", device.mac, e);
-                        }
-                    }
-                }
-
                 debug!("completed playback takeover process");
             }
         }

@@ -202,12 +202,30 @@ mod tests {
 
     #[test]
     fn other_model_numbers() {
-        assert_eq!(ModelInfo::from_model_number("A2698").kind, ModelKind::AirPodsPro2);
-        assert_eq!(ModelInfo::from_model_number("A3048").kind, ModelKind::AirPodsPro2);
-        assert_eq!(ModelInfo::from_model_number("a3064").kind, ModelKind::AirPodsPro3);
-        assert_eq!(ModelInfo::from_model_number(" A2084 ").kind, ModelKind::AirPodsPro);
-        assert_eq!(ModelInfo::from_model_number("A1523").kind, ModelKind::AirPods1);
-        assert_eq!(ModelInfo::from_model_number("A3531").kind, ModelKind::AirPods5);
+        assert_eq!(
+            ModelInfo::from_model_number("A2698").kind,
+            ModelKind::AirPodsPro2
+        );
+        assert_eq!(
+            ModelInfo::from_model_number("A3048").kind,
+            ModelKind::AirPodsPro2
+        );
+        assert_eq!(
+            ModelInfo::from_model_number("a3064").kind,
+            ModelKind::AirPodsPro3
+        );
+        assert_eq!(
+            ModelInfo::from_model_number(" A2084 ").kind,
+            ModelKind::AirPodsPro
+        );
+        assert_eq!(
+            ModelInfo::from_model_number("A1523").kind,
+            ModelKind::AirPods1
+        );
+        assert_eq!(
+            ModelInfo::from_model_number("A3531").kind,
+            ModelKind::AirPods5
+        );
         let max = ModelInfo::from_model_number("A3184");
         assert_eq!(max.kind, ModelKind::AirPodsMax);
         assert!(max.is_headphone && !max.has_case_battery);
@@ -215,11 +233,26 @@ mod tests {
 
     #[test]
     fn ble_product_ids() {
-        assert_eq!(ModelInfo::from_ble_product_id(0x1920).kind, ModelKind::AirPods4);
-        assert_eq!(ModelInfo::from_ble_product_id(0x1B20).kind, ModelKind::AirPods4Anc);
-        assert_eq!(ModelInfo::from_ble_product_id(0x2420).kind, ModelKind::AirPodsPro2);
-        assert_eq!(ModelInfo::from_ble_product_id(0x1F20).kind, ModelKind::AirPodsMax);
-        assert_eq!(ModelInfo::from_ble_product_id(0x0220).kind, ModelKind::AirPods1);
+        assert_eq!(
+            ModelInfo::from_ble_product_id(0x1920).kind,
+            ModelKind::AirPods4
+        );
+        assert_eq!(
+            ModelInfo::from_ble_product_id(0x1B20).kind,
+            ModelKind::AirPods4Anc
+        );
+        assert_eq!(
+            ModelInfo::from_ble_product_id(0x2420).kind,
+            ModelKind::AirPodsPro2
+        );
+        assert_eq!(
+            ModelInfo::from_ble_product_id(0x1F20).kind,
+            ModelKind::AirPodsMax
+        );
+        assert_eq!(
+            ModelInfo::from_ble_product_id(0x0220).kind,
+            ModelKind::AirPods1
+        );
     }
 
     #[test]
@@ -240,10 +273,22 @@ mod tests {
 
     #[test]
     fn serde_names() {
-        assert_eq!(serde_json::to_string(&ModelKind::AirPods4).unwrap(), "\"airpods4\"");
-        assert_eq!(serde_json::to_string(&ModelKind::AirPods4Anc).unwrap(), "\"airpods4anc\"");
-        assert_eq!(serde_json::to_string(&ModelKind::AirPodsPro2).unwrap(), "\"airpodspro2\"");
-        assert_eq!(serde_json::to_string(&ModelKind::AirPodsMax).unwrap(), "\"airpodsmax\"");
+        assert_eq!(
+            serde_json::to_string(&ModelKind::AirPods4).unwrap(),
+            "\"airpods4\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelKind::AirPods4Anc).unwrap(),
+            "\"airpods4anc\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelKind::AirPodsPro2).unwrap(),
+            "\"airpodspro2\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ModelKind::AirPodsMax).unwrap(),
+            "\"airpodsmax\""
+        );
         let k: ModelKind = serde_json::from_str("\"unknown\"").unwrap();
         assert_eq!(k, ModelKind::Unknown);
     }

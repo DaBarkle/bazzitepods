@@ -325,6 +325,20 @@ impl BatteryTracker {
         }
     }
 
+    /// Seed the case with a level remembered from an earlier run. Shown as stale
+    /// ("last seen") until the case reports again; never overrides a live reading.
+    pub fn restore_case(&mut self, level: u8, seen: SystemTime) {
+        let st = self.slot(Slot::Case);
+        if st.battery.level.is_some() || level > 100 {
+            return;
+        }
+        st.battery.level = Some(level);
+        st.battery.present = false;
+        st.battery.charging = false;
+        st.battery.stale = true;
+        st.battery.last_seen = Some(seen);
+    }
+
     /// Forget everything (e.g. a different device).
     pub fn reset(&mut self) {
         self.slots = Default::default();
@@ -475,6 +489,21 @@ mod tests {
         assert!(!s.left.present && !s.right.present && !s.case.present);
         assert!(s.right.stale);
         assert_eq!(s.source, Some(BatterySource::Ble));
+    }
+
+    #[test]
+    fn restored_case_is_stale_until_reported() {
+        let (t0, w0) = (
+            Instant::now(),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1000),
+        );
+        let mut t = BatteryTracker::with_anchor(t0, w0);
+        t.restore_case(53, w0);
+        let s = t.snapshot();
+        assert_eq!(s.case.level, Some(53));
+        assert!(s.case.stale && !s.case.present);
+        t.restore_case(10, w0);
+        assert_eq!(t.snapshot().case.level, Some(53), "restore never overrides");
     }
 
     #[test]

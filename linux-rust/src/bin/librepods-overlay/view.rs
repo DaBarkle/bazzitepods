@@ -116,7 +116,12 @@ impl Pill {
         let e = self.expand.clamp(0.0, 1.0);
         let full = Size::new(size.width - 2.0 * PAD, PILL_H.min(size.height - 2.0 * PAD));
         let mini = Size::new(
-            if is_headphone(&self.state) { MINI_W_HEADPHONE } else { MINI_W_BUDS }.min(full.width),
+            if is_headphone(&self.state) {
+                MINI_W_HEADPHONE
+            } else {
+                MINI_W_BUDS
+            }
+            .min(full.width),
             MINI_H,
         );
         let lerp = |a: f32, b: f32| a + (b - a) * e;
@@ -186,7 +191,10 @@ impl Pill {
         let body = Path::rounded_rectangle(Point::ORIGIN, Size::new(w, h), Radius::from(radius));
         // Tint: dense smoked glass at 0, clear liquid glass at 1. Never below 0.36 so
         // the text stays readable over a bright game.
-        frame.fill(&body, Color::from_rgba8(18, 18, 22, (0.86 - 0.5 * g) * alpha));
+        frame.fill(
+            &body,
+            Color::from_rgba8(18, 18, 22, (0.86 - 0.5 * g) * alpha),
+        );
         // A faint cool wash, like light passing through glass.
         let wash = gradient::Linear::new(Point::ORIGIN, Point::new(w, h))
             .add_stop(0.0, Color::from_rgba(0.62, 0.74, 1.0, 0.06 * g * alpha))
@@ -245,7 +253,7 @@ impl Pill {
             draw_headphone_glyph(frame, Point::new(18.0, cy), 0.9, glyph);
             vec![(Label::Headphone, Some(hp))]
         } else {
-            draw_buds_glyph(frame, Point::new(18.0, cy), 0.85, glyph);
+            draw_buds_glyph(frame, Point::new(19.0, cy), 1.2, glyph);
             vec![
                 (Label::Letter("L"), self.state.left.as_ref()),
                 (Label::Letter("R"), self.state.right.as_ref()),
@@ -255,20 +263,32 @@ impl Pill {
         let mut x = 36.0;
         for (label, comp) in items {
             let comp_shown = comp.filter(|c| c.present || c.stale);
-            let dim = if comp.is_some_and(|c| c.present) { 1.0 } else { 0.45 };
+            let dim = if comp.is_some_and(|c| c.present) {
+                1.0
+            } else {
+                0.45
+            };
             let label_c = white(0.55 * alpha * dim);
             match (&label, comp_shown.is_some_and(|c| c.charging && c.present)) {
-                (_, true) => draw_bolt(frame, Point::new(x + 4.0, cy), 0.8, with_alpha(GREEN, alpha)),
-                (Label::Letter(l), _) => fill_text_lifted(frame, canvas::Text {
-                    content: (*l).into(),
-                    position: Point::new(x + 4.0, cy),
-                    color: label_c,
-                    size: 11.0.into(),
-                    font: semibold(),
-                    align_x: TextAlign::Center,
-                    align_y: Vertical::Center,
-                    ..Default::default()
-                }),
+                (_, true) => draw_bolt(
+                    frame,
+                    Point::new(x + 4.0, cy),
+                    0.8,
+                    with_alpha(GREEN, alpha),
+                ),
+                (Label::Letter(l), _) => fill_text_lifted(
+                    frame,
+                    canvas::Text {
+                        content: (*l).into(),
+                        position: Point::new(x + 4.0, cy),
+                        color: label_c,
+                        size: 11.0.into(),
+                        font: semibold(),
+                        align_x: TextAlign::Center,
+                        align_y: Vertical::Center,
+                        ..Default::default()
+                    },
+                ),
                 (Label::Case, _) => draw_case_glyph_small(frame, Point::new(x + 5.0, cy), label_c),
                 (Label::Headphone, _) => {}
             }
@@ -288,15 +308,18 @@ impl Pill {
                 ),
                 None => ("--".into(), white(0.6 * alpha * dim)),
             };
-            fill_text_lifted(frame, canvas::Text {
-                content: pct,
-                position: Point::new(lx, cy),
-                color,
-                size: 13.0.into(),
-                font: semibold(),
-                align_y: Vertical::Center,
-                ..Default::default()
-            });
+            fill_text_lifted(
+                frame,
+                canvas::Text {
+                    content: pct,
+                    position: Point::new(lx, cy),
+                    color,
+                    size: 13.0.into(),
+                    font: semibold(),
+                    align_y: Vertical::Center,
+                    ..Default::default()
+                },
+            );
             x += MINI_ITEM_W;
         }
     }
@@ -315,25 +338,30 @@ impl Pill {
             draw_buds_glyph(
                 frame,
                 Point::new(INSET + 10.0, header_y),
-                1.2,
+                1.45,
                 white(0.9 * alpha),
             );
         }
         let name_x = INSET + 28.0;
-        let name = if self.state.name.trim().is_empty() {
+        let name = if self.state.elsewhere {
+            "On another device".to_string()
+        } else if self.state.name.trim().is_empty() {
             "AirPods".to_string()
         } else {
             truncate(self.state.name.trim(), w - name_x - INSET, 14.0)
         };
-        fill_text_lifted(frame, canvas::Text {
-            content: name,
-            position: Point::new(name_x, header_y),
-            color: white(0.95 * alpha),
-            size: 14.0.into(),
-            font: semibold(),
-            align_y: Vertical::Center,
-            ..Default::default()
-        });
+        fill_text_lifted(
+            frame,
+            canvas::Text {
+                content: name,
+                position: Point::new(name_x, header_y),
+                color: white(0.95 * alpha),
+                size: 14.0.into(),
+                font: semibold(),
+                align_y: Vertical::Center,
+                ..Default::default()
+            },
+        );
 
         // Battery segments.
         let segments: Vec<Segment> = if let Some(hp) = &self.state.headphone {
@@ -484,16 +512,19 @@ fn draw_segment(frame: &mut Frame, seg: &Segment, origin: Point, alpha: f32) {
         draw_bolt(frame, center, 1.0, with_alpha(GREEN, alpha));
     } else {
         match seg.label {
-            Label::Letter(l) => fill_text_lifted(frame, canvas::Text {
-                content: l.into(),
-                position: center,
-                color: label_color,
-                size: 12.0.into(),
-                font: semibold(),
-                align_x: TextAlign::Center,
-                align_y: Vertical::Center,
-                ..Default::default()
-            }),
+            Label::Letter(l) => fill_text_lifted(
+                frame,
+                canvas::Text {
+                    content: l.into(),
+                    position: center,
+                    color: label_color,
+                    size: 12.0.into(),
+                    font: semibold(),
+                    align_x: TextAlign::Center,
+                    align_y: Vertical::Center,
+                    ..Default::default()
+                },
+            ),
             Label::Case => draw_case_glyph(frame, center, label_color),
             Label::Headphone => draw_headphone_glyph(frame, center, 0.62, label_color),
         }
@@ -509,15 +540,18 @@ fn draw_segment(frame: &mut Frame, seg: &Segment, origin: Point, alpha: f32) {
         Some(c) if !c.charging && c.level <= 20 && present => with_alpha(accent, alpha),
         _ => white(0.95 * alpha * dim),
     };
-    fill_text_lifted(frame, canvas::Text {
-        content: pct,
-        position: Point::new(text_x, center.y - 7.0),
-        color: pct_color,
-        size: 16.0.into(),
-        font: semibold(),
-        align_y: Vertical::Center,
-        ..Default::default()
-    });
+    fill_text_lifted(
+        frame,
+        canvas::Text {
+            content: pct,
+            position: Point::new(text_x, center.y - 7.0),
+            color: pct_color,
+            size: 16.0.into(),
+            font: semibold(),
+            align_y: Vertical::Center,
+            ..Default::default()
+        },
+    );
     let subtitle = match seg.comp {
         Some(c) if !c.present || c.stale => match c.last_seen_secs {
             Some(s) => age_text(s),
@@ -526,15 +560,18 @@ fn draw_segment(frame: &mut Frame, seg: &Segment, origin: Point, alpha: f32) {
         },
         _ => seg.title.to_string(),
     };
-    fill_text_lifted(frame, canvas::Text {
-        content: subtitle,
-        position: Point::new(text_x, center.y + 9.0),
-        color: white(0.5 * alpha * if present { 1.0 } else { 0.8 }),
-        size: 11.0.into(),
-        font: medium(),
-        align_y: Vertical::Center,
-        ..Default::default()
-    });
+    fill_text_lifted(
+        frame,
+        canvas::Text {
+            content: subtitle,
+            position: Point::new(text_x, center.y + 9.0),
+            color: white(0.5 * alpha * if present { 1.0 } else { 0.8 }),
+            size: 11.0.into(),
+            font: medium(),
+            align_y: Vertical::Center,
+            ..Default::default()
+        },
+    );
 }
 
 /// Lightning bolt centered at `c`, about 12 px tall at scale 1.
@@ -583,60 +620,48 @@ fn draw_case_glyph(frame: &mut Frame, c: Point, color: Color) {
     frame.fill(&Path::circle(Point::new(c.x, c.y + 1.4), 0.9), color);
 }
 
-/// Two earbuds, mirrored, centered at `c`: a softly lit head with a speaker grille,
-/// and a tapered stem with a microphone cap. About 16 px tall at scale 1.
+/// The pair of earbuds, centered at `c`, about 16 px tall at scale 1. The geometry is
+/// shared with the app and tray icons (see `assets/icons/`): it is laid out in a 32-unit
+/// box, right bud first, the left one mirrored.
 fn draw_buds_glyph(frame: &mut Frame, c: Point, s: f32, color: Color) {
+    let u = s * 0.5;
     let a = color.a;
-    let lit = |k: f32| Color::from_rgba(1.0, 1.0, 1.0, a * k);
-    for side in [-1.0_f32, 1.0] {
-        let hx = c.x + side * 4.3 * s;
-        let hy = c.y - 3.4 * s;
-        let head_r = 4.1 * s;
-
-        // Stem first, so the head overlaps its top. Tapers from 2.9 to 2.3 wide.
-        let top = hy + 0.8 * s;
-        let bottom = c.y + 7.6 * s;
-        let x_out = hx + side * 2.9 * s;
-        let stem = Path::new(|b| {
-            b.move_to(Point::new(x_out, top));
-            b.line_to(Point::new(x_out - side * 2.9 * s, top));
-            b.line_to(Point::new(x_out - side * 2.5 * s, bottom - 1.15 * s));
-            b.arc_to(
-                Point::new(x_out - side * 2.5 * s, bottom),
-                Point::new(x_out - side * 1.4 * s, bottom),
-                1.15 * s,
+    let at = |x: f32, y: f32| Point::new(c.x + (x - 16.0) * u, c.y + (y - 16.0) * u);
+    let fill = gradient::Linear::new(at(0.0, 3.0), at(0.0, 30.0))
+        .add_stop(0.0, Color::from_rgba(1.0, 1.0, 1.0, a))
+        .add_stop(1.0, Color::from_rgba(0.85, 0.87, 0.9, a));
+    for side in [1.0_f32, -1.0] {
+        // Mirror around the box's vertical axis for the left bud.
+        let x = |v: f32| 16.0 + side * (v - 16.0);
+        // Stem: a rounded bar leaning slightly outwards towards the bottom.
+        frame.with_save(|f| {
+            let top = at(x(25.0), 9.5);
+            f.translate(Vector::new(top.x, top.y));
+            f.rotate(side * -4.0_f32.to_radians());
+            let stem = Path::rounded_rectangle(
+                Point::new(-1.8 * u, 0.0),
+                Size::new(3.6 * u, 19.5 * u),
+                Radius::from(1.8 * u),
             );
-            b.arc_to(
-                Point::new(x_out - side * 0.2 * s, bottom),
-                Point::new(x_out - side * 0.2 * s, bottom - 1.15 * s),
-                1.15 * s,
-            );
-            b.close();
+            f.fill(&stem, fill);
         });
-        let stem_fill = gradient::Linear::new(Point::new(0.0, top), Point::new(0.0, bottom))
-            .add_stop(0.0, lit(0.96))
-            .add_stop(1.0, lit(0.78));
-        frame.fill(&stem, stem_fill);
-        // Microphone cap at the bottom of the stem.
-        let cap = Path::rounded_rectangle(
-            Point::new(x_out - side * 1.35 * s - 0.9 * s, bottom - 1.5 * s),
-            Size::new(1.8 * s, 0.9 * s),
-            Radius::from(0.45 * s),
-        );
-        frame.fill(&cap, Color::from_rgba(0.0, 0.0, 0.0, 0.28 * a));
-
-        // Head: lit from the top-left.
-        let head = Path::circle(Point::new(hx, hy), head_r);
-        let head_fill = gradient::Linear::new(
-            Point::new(hx - head_r, hy - head_r),
-            Point::new(hx + head_r, hy + head_r),
-        )
-        .add_stop(0.0, lit(1.0))
-        .add_stop(1.0, lit(0.8));
-        frame.fill(&head, head_fill);
+        let ellipse = |cx: f32, cy: f32, rx: f32, ry: f32| {
+            Path::new(|b| {
+                b.ellipse(canvas::path::arc::Elliptical {
+                    center: at(x(cx), cy),
+                    radii: Vector::new(rx * u, ry * u),
+                    rotation: (side * -20.0_f32.to_radians()).into(),
+                    start_angle: 0.0.into(),
+                    end_angle: (2.0 * PI).into(),
+                })
+            })
+        };
+        frame.fill(&ellipse(22.6, 8.6, 5.0, 4.6), fill);
         // Speaker grille, facing the other bud.
-        let grille = Path::circle(Point::new(hx - side * 1.6 * s, hy + 0.5 * s), 1.1 * s);
-        frame.fill(&grille, Color::from_rgba(0.0, 0.0, 0.0, 0.32 * a));
+        frame.fill(
+            &ellipse(19.4, 9.6, 1.25, 1.9),
+            Color::from_rgba(0.1, 0.11, 0.14, 0.5 * a),
+        );
     }
 }
 

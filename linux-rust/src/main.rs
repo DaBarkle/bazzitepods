@@ -7,11 +7,11 @@ mod devices;
 mod fullscreen_watch;
 mod hub;
 mod media_controller;
-mod single_instance;
-mod sleep_monitor;
 mod overlay_client;
 mod overlay_feed;
 mod overlay_protocol;
+mod single_instance;
+mod sleep_monitor;
 mod ui;
 mod utils;
 
@@ -125,7 +125,13 @@ fn main() -> iced::Result {
 
     if args.no_tray {
         info!("Running in headless mode (no GUI)");
-        runtime.block_on(async_main(ui_tx, device_managers, hub, active_commands, args.no_tray));
+        runtime.block_on(async_main(
+            ui_tx,
+            device_managers,
+            hub,
+            active_commands,
+            args.no_tray,
+        ));
         Ok(())
     } else {
         let dm = device_managers.clone();
@@ -166,7 +172,11 @@ async fn async_main(
         }
     });
     if !no_tray {
-        tokio::spawn(ui::tray::run_tray(hub.clone(), ui_tx.clone(), active_commands.clone()));
+        tokio::spawn(ui::tray::run_tray(
+            hub.clone(),
+            ui_tx.clone(),
+            active_commands.clone(),
+        ));
     }
 
     let (kick_tx, kick_rx) = unbounded_channel::<Kick>();
@@ -189,7 +199,11 @@ async fn async_main(
                 || reading.lid_open == Some(true)
                 || (reading.left.is_some() && !reading.left_in_case)
                 || (reading.right.is_some() && !reading.right_in_case);
-            if in_use && last_kick.get(&mac).is_none_or(|t| t.elapsed() >= Duration::from_secs(10)) {
+            if in_use
+                && last_kick
+                    .get(&mac)
+                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(10))
+            {
                 last_kick.insert(mac, Instant::now());
                 let _ = ble_kick.send(Kick::BleSeen(mac, in_use));
             }
@@ -292,7 +306,10 @@ async fn acquire_adapter() -> bluer::Result<Adapter> {
 async fn stop_task(dev: RunningDevice) {
     dev.cancel.cancel();
     let abort = dev.handle.abort_handle();
-    if tokio::time::timeout(TASK_STOP_TIMEOUT, dev.handle).await.is_err() {
+    if tokio::time::timeout(TASK_STOP_TIMEOUT, dev.handle)
+        .await
+        .is_err()
+    {
         warn!("Device task did not stop in time; aborting it");
         abort.abort();
     }
@@ -390,7 +407,9 @@ async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mu
     if !in_use || st.running.contains_key(&addr) {
         return;
     }
-    let Some(lost_at) = st.lost_link.get(&addr).copied() else { return };
+    let Some(lost_at) = st.lost_link.get(&addr).copied() else {
+        return;
+    };
     if lost_at.elapsed() > AUTO_RECONNECT_WINDOW {
         st.lost_link.remove(&addr);
         return;
@@ -405,7 +424,9 @@ async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mu
     if !adapter.is_powered().await.unwrap_or(false) {
         return;
     }
-    let Ok(device) = adapter.device(addr) else { return };
+    let Ok(device) = adapter.device(addr) else {
+        return;
+    };
     if !device.is_paired().await.unwrap_or(false) || device.is_connected().await.unwrap_or(true) {
         return;
     }
@@ -429,13 +450,17 @@ async fn watch_device(
     if watched.contains_key(&addr) {
         return;
     }
-    let Ok(device) = adapter.device(addr) else { return };
+    let Ok(device) = adapter.device(addr) else {
+        return;
+    };
     // Unpaired objects are transient BLE advertisers (phones, beacons, ...). Ignoring them
     // keeps busy places (offices, trains) from triggering a reconcile per advert.
     if !device.is_paired().await.unwrap_or(false) {
         return;
     }
-    let Ok(events) = device.events().await else { return };
+    let Ok(events) = device.events().await else {
+        return;
+    };
     let kick_tx = kick_tx.clone();
     let _ = kick_tx.send(Kick::DeviceChanged);
     watched.insert(
@@ -458,7 +483,12 @@ async fn watch_device(
     );
 }
 
-async fn reconcile(adapter: &Adapter, local_mac: &str, ctx: &SupervisorCtx, st: &mut AdapterState_) {
+async fn reconcile(
+    adapter: &Adapter,
+    local_mac: &str,
+    ctx: &SupervisorCtx,
+    st: &mut AdapterState_,
+) {
     let powered = adapter.is_powered().await.unwrap_or(false);
     ctx.hub.set_adapter(if powered {
         AdapterState::On
@@ -473,7 +503,9 @@ async fn reconcile(adapter: &Adapter, local_mac: &str, ctx: &SupervisorCtx, st: 
     let addrs = adapter.device_addresses().await.unwrap_or_default();
     let saved = saved_devices();
     for addr in addrs {
-        let Ok(device) = adapter.device(addr) else { continue };
+        let Ok(device) = adapter.device(addr) else {
+            continue;
+        };
         let connected = if powered {
             match device.is_connected().await {
                 Ok(c) => c,

@@ -4,7 +4,9 @@ use crate::ui::format::{Gauge, ListeningMode};
 use crate::ui::style::{self, Tokens};
 use iced::widget::canvas::{self, Frame, Geometry, LineCap, Path, Stroke, path::Arc};
 use iced::widget::{Canvas, column, container, stack, text};
-use iced::{Color, Element, Length, Point, Radians, Rectangle, Renderer, Theme, mouse};
+use iced::{
+    Color, Element, Length, Point, Radians, Rectangle, Renderer, Size, Theme, Vector, mouse,
+};
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 /// A circular battery gauge.
@@ -214,15 +216,39 @@ impl<Message> canvas::Program<Message> for Icon {
                 frame.stroke(&path, stroke.with_line_join(canvas::LineJoin::Round));
             }
             Glyph::Earbuds => {
-                for side in [-1.0f32, 1.0] {
-                    let hx = c.x + side * s * 0.2;
-                    let hy = c.y - s * 0.16;
-                    let head_r = s * 0.16;
-                    frame.fill(&Path::circle(Point::new(hx, hy), head_r), color);
-                    let stem_x = hx - side * head_r * 0.45;
-                    frame.stroke(
-                        &Path::line(Point::new(stem_x, hy), Point::new(stem_x, c.y + s * 0.36)),
-                        stroke.with_width(s * 0.13),
+                // Same 32-unit geometry as the app icon and the overlay glyph.
+                let u = s / 32.0;
+                let at = |x: f32, y: f32| Point::new(c.x + (x - 16.0) * u, c.y + (y - 16.5) * u);
+                for side in [1.0f32, -1.0] {
+                    let x = |v: f32| 16.0 + side * (v - 16.0);
+                    frame.with_save(|f| {
+                        let top = at(x(25.0), 9.5);
+                        f.translate(Vector::new(top.x, top.y));
+                        f.rotate(side * -4f32.to_radians());
+                        f.fill(
+                            &Path::rounded_rectangle(
+                                Point::new(-1.8 * u, 0.0),
+                                Size::new(3.6 * u, 19.5 * u),
+                                (1.8 * u).into(),
+                            ),
+                            color,
+                        );
+                    });
+                    let ellipse = |cx: f32, cy: f32, rx: f32, ry: f32| {
+                        Path::new(|b| {
+                            b.ellipse(canvas::path::arc::Elliptical {
+                                center: at(x(cx), cy),
+                                radii: Vector::new(rx * u, ry * u),
+                                rotation: (side * -20f32.to_radians()).into(),
+                                start_angle: 0.0.into(),
+                                end_angle: std::f32::consts::TAU.into(),
+                            })
+                        })
+                    };
+                    frame.fill(&ellipse(22.6, 8.6, 5.0, 4.6), color);
+                    frame.fill(
+                        &ellipse(19.4, 9.6, 1.25, 1.9),
+                        Color::from_rgba(0.0, 0.0, 0.0, 0.4 * color.a),
                     );
                 }
             }

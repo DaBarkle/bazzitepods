@@ -603,7 +603,10 @@ async fn default_restored_by_a_new_guard_after_reconnect() {
     handle2.link_up();
     wait_health(&handle2, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
     let w = lock(&world);
-    assert_eq!(w.snap.default_sink.as_deref(), Some(bt_sink_name().as_str()));
+    assert_eq!(
+        w.snap.default_sink.as_deref(),
+        Some(bt_sink_name().as_str())
+    );
     assert_eq!(w.snap.sink_inputs[0].sink, BT_SINK);
 }
 

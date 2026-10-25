@@ -27,7 +27,9 @@ pub enum LinkState {
     /// Control channel is up; battery and controls are live.
     Connected,
     /// Bluetooth link is up but the control channel dropped; retrying.
-    Reconnecting { attempt: u32 },
+    Reconnecting {
+        attempt: u32,
+    },
     /// Bluetooth link is up but the control channel could not be opened.
     /// Audio may still work; battery falls back to BLE adverts.
     Limited,
@@ -51,6 +53,11 @@ pub struct DeviceSnapshot {
     /// Human readable audio state from the audio guard (e.g. "AAC", "Recovering").
     pub audio: Option<String>,
     pub last_seen: Option<SystemTime>,
+    /// Whether this PC has the AirPods' audio route. `Some(false)` means another Apple
+    /// device took it (the AirPods stay connected here, but play on that device).
+    pub owns_audio: Option<bool>,
+    /// Other devices currently connected to the AirPods besides this PC.
+    pub other_devices: usize,
 }
 
 impl DeviceSnapshot {
@@ -68,11 +75,18 @@ impl DeviceSnapshot {
             in_ear: (None, None),
             audio: None,
             last_seen: Some(SystemTime::now()),
+            owns_audio: None,
+            other_devices: 0,
         }
     }
 
     pub fn is_connected(&self) -> bool {
         !matches!(self.link, LinkState::Disconnected)
+    }
+
+    /// Connected here, but another device has the audio.
+    pub fn in_use_elsewhere(&self) -> bool {
+        self.is_connected() && self.owns_audio == Some(false)
     }
 }
 
@@ -139,6 +153,11 @@ impl Hub {
     pub fn set_link(&self, mac: &str, link: LinkState) {
         self.tx.send_if_modified(|s| match s.devices.get_mut(mac) {
             Some(d) if d.link != link => {
+                if link == LinkState::Disconnected {
+                    // Routing state belongs to the session that just ended.
+                    d.owns_audio = None;
+                    d.other_devices = 0;
+                }
                 d.link = link;
                 d.last_seen = Some(SystemTime::now());
                 true

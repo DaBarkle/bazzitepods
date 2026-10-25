@@ -39,3 +39,8 @@ lto = true
 codegen-units = 8
 panic = "abort"
 strip = true
+
+# iced_wgpu with one change: prefer 8-bit-alpha surface formats (see the patch comment in
+# third_party/iced_wgpu/src/window/compositor.rs). Drop this once upstream does the same.
+[patch.crates-io]
+iced_wgpu = { path = "third_party/iced_wgpu" }

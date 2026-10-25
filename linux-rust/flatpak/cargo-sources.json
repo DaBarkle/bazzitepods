@@ -2524,19 +2524,6 @@
     {
         "type": "archive",
         "archive-type": "tar-gzip",
-        "url": "https://static.crates.io/crates/iced_wgpu/iced_wgpu-0.14.0.crate",
-        "sha256": "ff144a999b0ca0f8a10257934500060240825c42e950ec0ebee9c8ae30561c13",
-        "dest": "cargo/vendor/iced_wgpu-0.14.0"
-    },
-    {
-        "type": "inline",
-        "contents": "{\"package\": \"ff144a999b0ca0f8a10257934500060240825c42e950ec0ebee9c8ae30561c13\", \"files\": {}}",
-        "dest": "cargo/vendor/iced_wgpu-0.14.0",
-        "dest-filename": ".cargo-checksum.json"
-    },
-    {
-        "type": "archive",
-        "archive-type": "tar-gzip",
         "url": "https://static.crates.io/crates/iced_widget/iced_widget-0.14.2.crate",
         "sha256": "b1596afa0d3109c2618e8bc12bae6c11d3064df8f95c42dfce570397dbe957ab",
         "dest": "cargo/vendor/iced_widget-0.14.2"

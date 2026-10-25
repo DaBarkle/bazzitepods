@@ -650,7 +650,9 @@ impl AACPManager {
                 // Keys are secrets: log only their types and lengths.
                 info!(
                     "Received Proximity Keys Response: {:?}",
-                    keys.iter().map(|(kt, kd)| (kt, kd.len())).collect::<Vec<_>>()
+                    keys.iter()
+                        .map(|(kt, kd)| (kt, kd.len()))
+                        .collect::<Vec<_>>()
                 );
                 let mut irk = None;
                 let mut enc_key = None;
@@ -1255,11 +1257,13 @@ fn airpods_entry<'a>(
     devices: &'a mut HashMap<String, DeviceData>,
     mac: &str,
 ) -> &'a mut DeviceData {
-    let entry = devices.entry(mac.to_string()).or_insert_with(|| DeviceData {
-        name: mac.to_string(),
-        type_: DeviceType::AirPods,
-        information: None,
-    });
+    let entry = devices
+        .entry(mac.to_string())
+        .or_insert_with(|| DeviceData {
+            name: mac.to_string(),
+            type_: DeviceType::AirPods,
+            information: None,
+        });
     if !matches!(entry.information, Some(DeviceInformation::AirPods(_))) {
         entry.type_ = DeviceType::AirPods;
         entry.information = Some(DeviceInformation::AirPods(empty_airpods_information()));
@@ -1405,20 +1409,20 @@ async fn send_thread(mut rx: mpsc::Receiver<Vec<u8>>, sp: Arc<SeqPacket>) {
     while let Some(data) = rx.recv().await {
         let mut attempts = 0;
         loop {
-          match sp.send(&data).await {
-            Ok(_) => {
-              debug!("Sent {} bytes: {}", data.len(), hex::encode(&data));
-              break;
+            match sp.send(&data).await {
+                Ok(_) => {
+                    debug!("Sent {} bytes: {}", data.len(), hex::encode(&data));
+                    break;
+                }
+                Err(e) if e.raw_os_error() == Some(107) && attempts < 10 => {
+                    attempts += 1;
+                    sleep(Duration::from_millis(100)).await;
+                }
+                Err(e) => {
+                    error!("Failed to send data: {}", e);
+                    return;
+                }
             }
-            Err(e) if e.raw_os_error() == Some(107) && attempts < 10 => {
-              attempts += 1;
-              sleep(Duration::from_millis(100)).await;
-            }
-            Err(e) => {
-              error!("Failed to send data: {}", e);
-              return;
-            }
-          }
         }
     }
     info!("Send thread finished.");
@@ -1497,18 +1501,27 @@ mod tests {
 
     #[test]
     fn battery_headphone() {
-        let pkt = [0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01, 0x01, 0x01, 0x40, 0x01, 0x01];
+        let pkt = [
+            0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01, 0x01, 0x01, 0x40, 0x01, 0x01,
+        ];
         let b = parse_battery_info(payload(&pkt)).unwrap();
-        assert_eq!(b, vec![bi(BatteryComponent::Headphone, 64, BatteryStatus::Charging)]);
+        assert_eq!(
+            b,
+            vec![bi(BatteryComponent::Headphone, 64, BatteryStatus::Charging)]
+        );
     }
 
     #[test]
     fn battery_rejects_bad_packets() {
         // count says 2 but only one record
-        let short = [0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x02, 0x02, 0x01, 0x64, 0x02, 0x01];
+        let short = [
+            0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x02, 0x02, 0x01, 0x64, 0x02, 0x01,
+        ];
         assert!(parse_battery_info(payload(&short)).is_none());
         // bad spacer
-        let spacer = [0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01, 0x02, 0x00, 0x64, 0x02, 0x01];
+        let spacer = [
+            0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x01, 0x02, 0x00, 0x64, 0x02, 0x01,
+        ];
         assert!(parse_battery_info(payload(&spacer)).is_none());
         // implausible count
         let mut big = vec![0x04, 0x00, 0x04, 0x00, 0x04, 0x00, 0x09];
@@ -1618,7 +1631,9 @@ mod tests {
 
     fn le_keys_of(devices: &HashMap<String, DeviceData>, mac: &str) -> (String, String) {
         match &devices[mac].information {
-            Some(DeviceInformation::AirPods(i)) => (i.le_keys.irk.clone(), i.le_keys.enc_key.clone()),
+            Some(DeviceInformation::AirPods(i)) => {
+                (i.le_keys.irk.clone(), i.le_keys.enc_key.clone())
+            }
             _ => panic!("no airpods info"),
         }
     }
@@ -1705,7 +1720,9 @@ mod tests {
             }
         }
         // connected devices: count 1 but only 8 bytes after count (needs 10)
-        let p = [0x04, 0x00, 0x04, 0x00, 0x2E, 0x00, 0x01, 1, 2, 3, 4, 5, 6, 7, 8];
+        let p = [
+            0x04, 0x00, 0x04, 0x00, 0x2E, 0x00, 0x01, 1, 2, 3, 4, 5, 6, 7, 8,
+        ];
         m.receive_packet(&p).await;
     }
 }
