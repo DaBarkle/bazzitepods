@@ -30,7 +30,8 @@ All notable changes to BazzitePods are documented here. The format follows
   the PC takes them back about a second after the iPhone lets go. ([#6])
 - The PC reconnects to the AirPods by itself after they drop it: within about 20 seconds
   when they made room for an iPhone (so the PC can take them back when the iPhone lets
-  go), and when they come out of the case after being put away, as a Mac does. Before,
+  go), and when they come out of the case after being put away, as a Mac does, however
+  long they were away (also after a reboot or sleep). Before,
   the drop often went unnoticed and the AirPods stayed off the PC until connected by
   hand. ([#6])
 - Audio no longer plays through the speakers for a moment while the AirPods' output is

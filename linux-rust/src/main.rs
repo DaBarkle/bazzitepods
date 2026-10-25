@@ -292,11 +292,15 @@ const RECONNECT_INTERVAL: Duration = Duration::from_secs(20);
 /// AirPods here keeps them disconnected.
 /// - They dropped this PC to make room for an iPhone: it can't hear the iPhone let go.
 const PEER_DROP_WINDOW: Duration = Duration::from_secs(3 * 60);
-/// - They went into the case: come back when they come out, as on a Mac.
-const CASE_DROP_WINDOW: Duration = Duration::from_secs(30 * 60);
-/// Retry every RECONNECT_INTERVAL for this long, then every SLOW_RECONNECT_INTERVAL.
+/// - They went into the case: come back when they come out, as on a Mac, however long
+///   they were away.
+const CASE_DROP_WINDOW: Duration = Duration::MAX;
+/// Retry every RECONNECT_INTERVAL at first, every minute after FAST_RECONNECT_PERIOD and
+/// every few minutes after SLOW_RECONNECT_PERIOD.
 const FAST_RECONNECT_PERIOD: Duration = Duration::from_secs(3 * 60);
 const SLOW_RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
+const SLOW_RECONNECT_PERIOD: Duration = Duration::from_secs(30 * 60);
+const IDLE_RECONNECT_INTERVAL: Duration = Duration::from_secs(3 * 60);
 /// Upper bound on waiting for a cancelled device task to finish.
 const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -372,6 +376,22 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
     if let Ok(addrs) = adapter.device_addresses().await {
         for addr in addrs {
             watch_device(adapter, addr, &mut watched, &ctx.kick_tx).await;
+            // AirPods away when the app starts (after a reboot, say) come back like ones
+            // that went into the case while it ran.
+            if let Ok(device) = adapter.device(addr)
+                && device.is_paired().await.unwrap_or(false)
+                && !device.is_connected().await.unwrap_or(true)
+                && device
+                    .uuids()
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|u| u.contains(&AIRPODS_UUID))
+            {
+                let now = Instant::now();
+                st.lost_link.insert(addr, now);
+                st.eager.insert(addr, (now, CASE_DROP_WINDOW));
+            }
         }
     }
 
@@ -409,7 +429,9 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     // device tasks so they reconnect fresh instead of waiting on a dead socket.
                     for (addr, dev) in st.running.drain() {
                         if dev.is_airpods {
-                            st.lost_link.insert(addr, Instant::now());
+                            let now = Instant::now();
+                            st.lost_link.insert(addr, now);
+                            st.eager.insert(addr, (now, CASE_DROP_WINDOW));
                         }
                         stop_task(dev).await;
                     }
@@ -426,10 +448,10 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     .eager
                     .iter()
                     .filter(|(addr, (t, _))| {
-                        let every = if t.elapsed() < FAST_RECONNECT_PERIOD {
-                            RECONNECT_INTERVAL
-                        } else {
-                            SLOW_RECONNECT_INTERVAL
+                        let every = match t.elapsed() {
+                            e if e < FAST_RECONNECT_PERIOD => RECONNECT_INTERVAL,
+                            e if e < SLOW_RECONNECT_PERIOD => SLOW_RECONNECT_INTERVAL,
+                            _ => IDLE_RECONNECT_INTERVAL,
                         };
                         st.last_reconnect.get(addr).is_none_or(|l| l.elapsed() >= every)
                     })
@@ -463,7 +485,7 @@ async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mu
     let Some(lost_at) = st.lost_link.get(&addr).copied() else {
         return;
     };
-    if lost_at.elapsed() > AUTO_RECONNECT_WINDOW {
+    if lost_at.elapsed() > AUTO_RECONNECT_WINDOW && !st.eager.contains_key(&addr) {
         st.lost_link.remove(&addr);
         return;
     }
