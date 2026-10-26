@@ -89,15 +89,17 @@ def wait_enter(prompt):
 
 # ---------------------------------------------------------------- safety checks
 
+# Steam's own web helper also runs inside pressure-vessel, so that alone is not a game:
+# every Steam game launch goes through a "reaper SteamLaunch" process.
 GAME_PATTERNS = [r"SteamLaunch", r"steam-launch-wrapper", r"\bgamescope\b", r"wine(server|64)?\b",
-                 r"\.exe\b", r"proton\b", r"pressure-vessel"]
+                 r"\.exe\b", r"\bproton\b"]
 
 
 def running_games():
     out = run(["ps", "-eo", "pid,args"])
     hits = []
     for line in out.splitlines()[1:]:
-        if "mic-test.py" in line:
+        if "mic-test.py" in line or "mic-abtest.py" in line or "steamwebhelper" in line:
             continue
         if any(re.search(p, line) for p in GAME_PATTERNS):
             hits.append(line.strip()[:160])
