@@ -1,6 +1,6 @@
 //! Fake states for `--demo`, so the design can be tried without AirPods.
 
-use crate::overlay_protocol::{ComponentState, OverlayState};
+use crate::overlay_protocol::{ComponentState, OverlayCommand, OverlayState};
 
 fn c(level: u8, charging: bool, present: bool) -> Option<ComponentState> {
     Some(ComponentState {
@@ -74,4 +74,53 @@ pub fn states() -> Vec<(&'static str, OverlayState)> {
         ("elsewhere", elsewhere),
         ("max", max),
     ]
+}
+
+/// A scripted run through every island state, for recordings: (seconds from start,
+/// command). Starts in compact mode.
+pub fn story() -> Vec<(f32, OverlayCommand)> {
+    use crate::overlay_protocol::ListeningMode;
+    let mut s = buds("AirPods 4", "airpods4_anc");
+    s.listening_mode = Some(ListeningMode::NoiseCancellation);
+    let mut out = vec![];
+    let mut at = |t: f32, state: &OverlayState| {
+        out.push((
+            t,
+            OverlayCommand::State {
+                state: state.clone(),
+            },
+        ))
+    };
+    // Connect: the full card opens, then folds into the compact island.
+    at(0.6, &s);
+    // The case goes on the charger.
+    s.case = c(46, true, true);
+    at(6.4, &s);
+    // Noise control changes on the AirPods.
+    s.listening_mode = Some(ListeningMode::Transparency);
+    at(10.6, &s);
+    // A level ticks down: the number rolls.
+    s.left = c(81, false, true);
+    at(13.4, &s);
+    // The right pod drops into the low band.
+    s.right = c(19, false, true);
+    at(15.0, &s);
+    // The iPhone takes the audio, then gives it back.
+    s.elsewhere = true;
+    s.elsewhere_name = Some("iPhone".into());
+    at(21.0, &s);
+    s.elsewhere = false;
+    s.elsewhere_name = None;
+    at(25.4, &s);
+    // Disconnect.
+    s.connected = false;
+    at(36.0, &s);
+    out.push((
+        29.0,
+        OverlayCommand::Show {
+            reason: "demo".into(),
+        },
+    ));
+    out.sort_by(|a, b| a.0.total_cmp(&b.0));
+    out
 }

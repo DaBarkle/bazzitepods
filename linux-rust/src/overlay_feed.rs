@@ -5,7 +5,9 @@
 use crate::core::battery::ComponentBattery;
 use crate::hub::{AppSnapshot, DeviceSnapshot, Hub, LinkState};
 use crate::overlay_client::OverlayClient;
-use crate::overlay_protocol::{ComponentState, OverlayConfig, OverlayMode, OverlayState};
+use crate::overlay_protocol::{
+    ComponentState, ListeningMode, OverlayConfig, OverlayMode, OverlayState,
+};
 use crate::utils::get_app_settings_path;
 use log::{debug, info};
 use std::sync::{Arc, OnceLock};
@@ -162,6 +164,11 @@ pub fn to_overlay_state(snap: &AppSnapshot) -> Option<OverlayState> {
             .in_use_elsewhere()
             .then(|| d.elsewhere_name.clone())
             .flatten(),
+        listening_mode: if info.has_anc {
+            d.listening_mode.and_then(ListeningMode::from_byte)
+        } else {
+            None
+        },
     })
 }
 

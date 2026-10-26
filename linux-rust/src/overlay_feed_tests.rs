@@ -189,7 +189,7 @@ fn overlay_config_defaults_to_compact() {
     for json in ["", "garbage", "[]", "{}"] {
         let cfg = config_from_json(json);
         assert_eq!(cfg.mode, OverlayMode::Compact, "for {json:?}");
-        assert_eq!(cfg.position, OverlayPosition::TopRight);
+        assert_eq!(cfg.position, OverlayPosition::TopCenter);
         assert_eq!(cfg.opacity, 1.0);
     }
 }
@@ -209,7 +209,7 @@ fn overlay_config_reads_and_clamps_values() {
         r#"{"overlay_mode":"sideways","overlay_position":7,"overlay_opacity":"x","overlay_glass":-1}"#,
     );
     assert_eq!(cfg.mode, OverlayMode::Compact);
-    assert_eq!(cfg.position, OverlayPosition::TopRight);
+    assert_eq!(cfg.position, OverlayPosition::TopCenter);
     assert_eq!(cfg.opacity, 1.0);
     assert_eq!(cfg.glass, 0.0);
 
@@ -305,4 +305,17 @@ fn switching_to_another_pair_announces_it() {
     other.mac = "11:11:11:11:11:11".into();
     other.name = "Gym Pods".into();
     assert_eq!(summaries(n.observe(Some(&other))), ["Gym Pods connected"]);
+}
+
+#[test]
+fn listening_mode_is_sent_only_for_models_with_noise_control() {
+    use crate::overlay_protocol::ListeningMode;
+    let mut d = airpods4(80, 80, 40);
+    d.model = ModelKind::AirPods4Anc;
+    d.listening_mode = Some(0x02);
+    let s = to_overlay_state(&snap_of(vec![d.clone()])).unwrap();
+    assert_eq!(s.listening_mode, Some(ListeningMode::NoiseCancellation));
+    d.model = ModelKind::AirPods4;
+    let s = to_overlay_state(&snap_of(vec![d])).unwrap();
+    assert_eq!(s.listening_mode, None);
 }

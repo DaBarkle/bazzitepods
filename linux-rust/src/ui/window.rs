@@ -947,9 +947,9 @@ impl App {
             setting_block(
                 "Overlay in games",
                 Some(match s.overlay_mode {
-                    OverlayMode::Auto => "Shows briefly on changes",
-                    OverlayMode::Always => "Always on screen",
-                    OverlayMode::Compact => "Mini widget, expands on changes",
+                    OverlayMode::Auto => "Island opens on changes, then hides",
+                    OverlayMode::Always => "Full island always on screen",
+                    OverlayMode::Compact => "Slim island, opens on changes",
                     OverlayMode::Off => "Never shown",
                 }),
                 mode,
@@ -977,7 +977,7 @@ impl App {
             divider(),
             setting_row(
                 "Glass",
-                Some("Smoked to clear"),
+                Some("Island black to clear glass"),
                 row![
                     slider(0.0..=1.0, s.overlay_glass, Message::SetOverlayGlass)
                         .step(0.05_f32)
