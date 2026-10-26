@@ -95,6 +95,27 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.2.2" date="2026-10-25">
+      <description>
+        <p>Reliable switching with an iPhone for every app, with overlay feedback.</p>
+        <ul>
+          <li>The AirPods return to the PC about a second after playback starts in apps that do not report playback to the system, such as the Plex desktop app</li>
+          <li>Idle voice-chat streams, audio effects and notification sounds no longer count as playback</li>
+          <li>The overlay shows which device has the AirPods and when they are back on the PC</li>
+          <li>Phone calls on the iPhone are never interrupted</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.2.1" date="2026-10-25">
+      <description>
+        <p>Faster, more reliable switching between an iPhone and the PC.</p>
+        <ul>
+          <li>The PC takes the AirPods back about a second after playback starts</li>
+          <li>iPhone notifications no longer take the AirPods while the PC is playing</li>
+          <li>Short status messages from the iPhone no longer pause playback on the PC</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.0" date="2026-10-25">
       <description>
         <p>First release of the Bazzite edition.</p>

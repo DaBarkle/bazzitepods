@@ -275,11 +275,13 @@ impl Overlay {
     }
 
     fn view(&self, _id: Id) -> Element<'_, Message> {
-        let Some(state) = self.ctl.display_state(Instant::now()) else {
+        let now = Instant::now();
+        let Some(state) = self.ctl.display_state(now) else {
             return iced::widget::Space::new().into();
         };
         canvas(view::Pill {
             state,
+            route_label: self.ctl.route_label(now),
             visual: self.ctl.visual(),
             expand: self.ctl.expansion(),
             opacity: self.ctl.effective_opacity(),

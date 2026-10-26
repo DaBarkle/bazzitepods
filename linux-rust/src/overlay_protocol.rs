@@ -108,6 +108,9 @@ pub struct OverlayState {
     pub headphone: Option<ComponentState>,
     /// Connected here, but another Apple device has the audio.
     pub elsewhere: bool,
+    /// The name of the device that has the audio while `elsewhere`, e.g. "iPhone".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub elsewhere_name: Option<String>,
 }
 
 /// One line of the protocol.

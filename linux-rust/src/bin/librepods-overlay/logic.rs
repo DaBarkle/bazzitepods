@@ -113,6 +113,8 @@ pub struct Controller {
     fullscreen: bool,
     /// Preview started from the opacity slider: show the fullscreen look.
     opacity_preview: bool,
+    /// The audio just came back from another device: say so until this instant.
+    back_until: Option<Instant>,
 }
 
 impl Default for Controller {
@@ -135,6 +137,7 @@ impl Controller {
             expand: 1.0,
             fullscreen: false,
             opacity_preview: false,
+            back_until: None,
         }
     }
 
@@ -165,6 +168,15 @@ impl Controller {
                 let reason = meaningful_change(self.state.as_ref(), &state);
                 if !state.connected {
                     self.hide_at = None;
+                }
+                let came_back = self.state.as_ref().is_some_and(|p| p.elsewhere)
+                    && !state.elsewhere
+                    && state.connected;
+                if came_back {
+                    let secs = self.config.auto_hide_secs.clamp(2.0, 10.0);
+                    self.back_until = Some(now + Duration::from_secs_f32(secs));
+                } else if state.elsewhere || !state.connected {
+                    self.back_until = None;
                 }
                 self.state = Some(state);
                 if reason.is_some() {
@@ -203,6 +215,21 @@ impl Controller {
             None if self.previewing(now) || self.mapped => Some(placeholder()),
             None => None,
         }
+    }
+
+    /// The headline that replaces the device name while the audio is away or has just
+    /// come back, so a switch is visible at a glance.
+    pub fn route_label(&self, now: Instant) -> Option<String> {
+        let state = self.state.as_ref()?;
+        if state.elsewhere {
+            return Some(match state.elsewhere_name.as_deref().map(str::trim) {
+                Some(name) if !name.is_empty() => format!("Playing on {name}"),
+                _ => "On another device".to_string(),
+            });
+        }
+        self.back_until
+            .is_some_and(|t| now < t)
+            .then(|| "Back on this PC".to_string())
     }
 
     /// The user's opacity applies while a fullscreen window is in front (or while
@@ -346,6 +373,7 @@ mod tests {
             case: comp(c, false, true),
             headphone: None,
             elsewhere: false,
+            elsewhere_name: None,
         }
     }
 
@@ -635,5 +663,26 @@ mod tests {
         b.elsewhere = true;
         assert_eq!(meaningful_change(Some(&a), &b), Some("route"));
         assert_eq!(meaningful_change(Some(&b), &b), None);
+    }
+
+    #[test]
+    fn route_label_names_the_device_then_says_back() {
+        let t0 = Instant::now();
+        let mut c = Controller::new(OverlayConfig::default());
+        let mut s = buds(80, 80, 60);
+        c.apply(OverlayCommand::State { state: s.clone() }, t0);
+        assert_eq!(c.route_label(t0), None);
+        s.elsewhere = true;
+        s.elsewhere_name = Some("iPhone".into());
+        c.apply(OverlayCommand::State { state: s.clone() }, t0);
+        assert_eq!(c.route_label(t0).as_deref(), Some("Playing on iPhone"));
+        s.elsewhere_name = None;
+        c.apply(OverlayCommand::State { state: s.clone() }, t0);
+        assert_eq!(c.route_label(t0).as_deref(), Some("On another device"));
+        s.elsewhere = false;
+        c.apply(OverlayCommand::State { state: s.clone() }, t0);
+        assert_eq!(c.route_label(t0).as_deref(), Some("Back on this PC"));
+        assert!(c.wants_visible(t0));
+        assert_eq!(c.route_label(t0 + Duration::from_secs(30)), None);
     }
 }

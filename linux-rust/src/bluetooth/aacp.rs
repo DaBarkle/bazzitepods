@@ -329,6 +329,8 @@ pub struct AACPManagerState {
     pub audio_source: Option<AudioSource>,
     /// Whether another device last said it is streaming media (Smart Routing).
     pub peer_streaming: bool,
+    /// Names other devices gave themselves in Smart Routing messages, by address.
+    pub peer_names: HashMap<String, String>,
     pub battery_info: Vec<BatteryInfo>,
     pub conversational_awareness_status: u8,
     pub old_ear_detection_status: Vec<EarDetectionStatus>,
@@ -353,6 +355,7 @@ impl AACPManagerState {
             connected_devices: Vec::new(),
             audio_source: None,
             peer_streaming: false,
+            peer_names: HashMap::new(),
             battery_info: Vec::new(),
             conversational_awareness_status: 0,
             old_ear_detection_status: Vec::new(),
@@ -780,6 +783,9 @@ impl AACPManager {
             opcodes::SMART_ROUTING_RESP => {
                 let packet_string = String::from_utf8_lossy(payload.get(2..).unwrap_or(&[]));
                 info!("Received Smart Routing Response: {}", packet_string);
+                if let Some((mac, name)) = peer_identity(&packet_string) {
+                    self.state.lock().await.peer_names.insert(mac, name);
+                }
                 if let Some(streaming) = peer_streaming_state(&packet_string) {
                     let mut state = self.state.lock().await;
                     state.peer_streaming = streaming;
@@ -1286,6 +1292,25 @@ pub fn peer_streaming_state(packet: &str) -> Option<bool> {
     }
 }
 
+/// Reads `btAddress` and `btName` from a Smart Routing message another device sent, e.g.
+/// ("10:A2:D3:BF:3D:76", "iPhone").
+pub fn peer_identity(packet: &str) -> Option<(String, String)> {
+    let mac = opack_string_after(packet, "btAddress")?;
+    let name = opack_string_after(packet, "btName")?;
+    (mac.len() == 17 && !name.is_empty()).then(|| (mac.to_ascii_uppercase(), name))
+}
+
+/// The OPACK short string that follows `key`: one type byte (0x40 + length), then the text.
+fn opack_string_after(packet: &str, key: &str) -> Option<String> {
+    let rest = &packet[packet.find(key)? + key.len()..];
+    let mut chars = rest.chars();
+    let len = (chars.next()? as u32)
+        .checked_sub(0x40)
+        .filter(|&l| l > 0 && l < 0x20)?;
+    let value: String = chars.take(len as usize).collect();
+    (value.chars().count() == len as usize).then_some(value)
+}
+
 pub fn mac_to_reversed_bytes(mac: &str) -> Result<[u8; 6]> {
     let addr: Address = mac.trim().parse().map_err(|_| {
         Error::from(std::io::Error::new(
@@ -1506,6 +1531,11 @@ mod tests {
         assert_eq!(peer_streaming_state(yes), Some(true));
         assert_eq!(peer_streaming_state(no), Some(false));
         assert_eq!(peer_streaming_state(blip), None);
+        assert_eq!(
+            peer_identity(yes),
+            Some(("10:A2:D3:BF:3D:76".into(), "iPhone".into()))
+        );
+        assert_eq!(peer_identity("btNameFiPh"), None);
         assert_eq!(
             peer_streaming_state("audioRoutingSetOwnershipToFalse"),
             None
@@ -1809,3 +1839,7 @@ mod tests {
         m.receive_packet(&p).await;
     }
 }
+
+#[cfg(test)]
+#[path = "aacp_tests.rs"]
+mod packet_tests;

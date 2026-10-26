@@ -42,6 +42,7 @@ impl World {
             mac: None,
             state: SinkState::Idle,
             codec: None,
+            muted: false,
         });
         w.snap.default_sink = Some(SPEAKERS_NAME.into());
         w
@@ -110,6 +111,7 @@ impl World {
                 mac: Some(MAC.into()),
                 state,
                 codec,
+                muted: false,
             });
             if self.playing && !self.snap.sink_inputs.iter().any(|i| i.sink == BT_SINK) {
                 self.snap.sink_inputs.push(SinkInputInfo {
@@ -117,6 +119,7 @@ impl World {
                     sink: BT_SINK,
                     corked: false,
                     app: None,
+                    role: None,
                 });
             }
         } else if have {
@@ -192,6 +195,15 @@ impl PulseApi for FakePulse {
         }
         Ok(())
     }
+
+    async fn set_sink_mute(&self, sink_index: u32, mute: bool) -> Result<(), PulseError> {
+        let mut w = lock(&self.0);
+        w.log.push(format!("mute:{sink_index}:{mute}"));
+        for s in w.snap.sinks.iter_mut().filter(|s| s.index == sink_index) {
+            s.muted = mute;
+        }
+        Ok(())
+    }
 }
 
 impl BluezApi for FakeBluez {
@@ -230,6 +242,7 @@ fn fast() -> GuardConfig {
         max_ladders_per_link: 3,
         retry_after_failure: Duration::from_secs(30),
         max_ensure_attempts: 3,
+        fresh_link: Duration::ZERO,
     }
 }
 
@@ -447,6 +460,34 @@ async fn stall_recovered_by_toggle_stops_ladder() {
 }
 
 #[tokio::test]
+async fn speakers_are_muted_while_the_output_is_rebuilt() {
+    // While the output is gone, streams fall back to the speakers: keep those silent.
+    // Streams themselves are never muted: apps re-create them and the mute would stick.
+    let mut w = stalled_world();
+    w.transport_after_toggle = Some("active".into());
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "recovering", |h| {
+        matches!(h, AudioHealth::Recovering { .. })
+    })
+    .await;
+    wait_health(&handle, "ready again", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    let w = lock(&world);
+    let at = |entry: &str| w.log.iter().position(|l| l == entry);
+    let muted = at(&format!("mute:{SPEAKERS}:true")).expect("speakers muted");
+    let off = at("profile:off").expect("toggled");
+    let unmuted = at(&format!("mute:{SPEAKERS}:false")).expect("speakers unmuted");
+    assert!(muted < off && off < unmuted, "log: {:?}", w.log);
+    assert!(!w.snap.sinks.iter().any(|s| s.muted));
+    assert!(
+        !w.log
+            .iter()
+            .any(|l| l.starts_with(&format!("mute:{BT_SINK}")))
+    );
+}
+
+#[tokio::test]
 async fn headset_with_active_recording_is_left_alone() {
     let mut w = World::new();
     w.add_card("headset-head-unit");
@@ -517,6 +558,52 @@ async fn route_back_repairs_without_waiting_for_the_cooldown() {
 }
 
 #[tokio::test]
+async fn repair_rebuilds_an_idle_output_without_a_stall() {
+    // The iPhone had the audio and broke the transport; nothing plays here, so there is
+    // no stall to notice. Taking the audio back rebuilds the output anyway.
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    assert_eq!(lock(&world).count("profile:off"), 0);
+
+    handle.repair();
+    settle(1500).await;
+    let w = lock(&world);
+    assert_eq!(w.count("profile:off"), 1, "log: {:?}", w.log);
+    assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"));
+}
+
+#[tokio::test]
+async fn no_stall_recovery_while_another_device_plays() {
+    // The iPhone is playing on the AirPods. An app here that can't be paused keeps writing
+    // into the dead output; rebuilding it would take the AirPods back, so leave it alone.
+    let mut w = World::new();
+    w.playing = true;
+    w.add_card("a2dp-sink-aac");
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    handle.route_away();
+    lock(&world).transports = vec!["idle".into()];
+    settle(1500).await;
+    assert_eq!(
+        lock(&world).count("profile:off"),
+        0,
+        "log: {:?}",
+        lock(&world).log
+    );
+
+    // Once the audio is back here, a stall is a real fault again.
+    handle.route_back();
+    settle(1500).await;
+    let w = lock(&world);
+    assert!(w.count("profile:off") >= 1, "log: {:?}", w.log);
+}
+
+#[tokio::test]
 async fn recovery_ladders_per_link_are_bounded() {
     let mut cfg = fast();
     cfg.ladder_cooldown = Duration::from_millis(30);
@@ -563,6 +650,7 @@ async fn default_sink_and_streams_restored_after_range_loss() {
         sink: BT_SINK,
         corked: true,
         app: None,
+        role: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -634,6 +722,7 @@ async fn default_restored_by_a_new_guard_after_reconnect() {
         sink: BT_SINK,
         corked: true,
         app: None,
+        role: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -808,6 +897,7 @@ fn codec_names() {
         mac: None,
         state: SinkState::Idle,
         codec: Some("aac".into()),
+        muted: false,
     };
     assert_eq!(codec_for("a2dp-sink", Some(&sink)).as_deref(), Some("aac"));
 }

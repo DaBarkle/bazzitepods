@@ -77,3 +77,7 @@ pub fn app_setting_bool(key: &str) -> Option<bool> {
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get(key).and_then(|b| b.as_bool()))
 }
+
+#[cfg(test)]
+#[path = "utils_tests.rs"]
+mod hash_tests;

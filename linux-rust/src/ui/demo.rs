@@ -75,6 +75,7 @@ pub fn seed(hub: &Hub, scenario: &str) {
             "elsewhere" => {
                 d.owns_audio = Some(false);
                 d.other_devices = 1;
+                d.elsewhere_name = Some("iPhone".into());
             }
             "disconnected" => {
                 d.link = LinkState::Disconnected;

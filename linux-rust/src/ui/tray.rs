@@ -579,3 +579,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tray_tests.rs"]
+mod menu_tests;

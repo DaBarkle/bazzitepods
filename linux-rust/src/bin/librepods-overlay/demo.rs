@@ -54,6 +54,7 @@ pub fn states() -> Vec<(&'static str, OverlayState)> {
 
     let mut elsewhere = normal.clone();
     elsewhere.elsewhere = true;
+    elsewhere.elsewhere_name = Some("iPhone".into());
 
     let max = OverlayState {
         name: "AirPods Max".into(),
