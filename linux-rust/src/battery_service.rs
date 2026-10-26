@@ -99,6 +99,13 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
                     }
                     BatteryInput::Ble(mac, reading) => {
                         let product = reading.product_id;
+                        let in_case = reading.left_in_case && reading.right_in_case;
+                        let mac_s = mac.to_string();
+                        hub.update_device(&mac_s, &known_name(&mac_s), |d| {
+                            if d.link == LinkState::Disconnected {
+                                d.in_case = in_case;
+                            }
+                        });
                         tracker_for(&mut trackers, &case_cache, mac).apply_ble(&reading, now);
                         if let Some(kind) = product
                             .map(|id| ModelInfo::from_ble_product_id(id).kind)

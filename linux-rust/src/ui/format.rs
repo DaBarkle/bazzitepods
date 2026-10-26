@@ -86,7 +86,9 @@ pub fn connection_label(d: &DeviceSnapshot) -> (&'static str, PillTone) {
         LinkState::Connected | LinkState::Limited => ("Connected", PillTone::Good),
         LinkState::Connecting => ("Connecting…", PillTone::Busy),
         LinkState::Reconnecting { .. } => ("Reconnecting…", PillTone::Busy),
+        LinkState::Disconnected if d.in_case && is_nearby(d) => ("In case", PillTone::Info),
         LinkState::Disconnected if is_nearby(d) => ("Nearby", PillTone::Info),
+        LinkState::Disconnected if d.in_case => ("In case", PillTone::Idle),
         LinkState::Disconnected => ("Not connected", PillTone::Idle),
     }
 }
@@ -151,7 +153,12 @@ pub fn gauges(d: &DeviceSnapshot, now: SystemTime) -> Vec<Gauge> {
     ];
     if d.model.info().has_case_battery {
         // A stale case (both pods out) keeps its last level, dimmed, with a "last seen" caption.
-        out.push(gauge("Case", &b.case, connected, now));
+        let mut case = gauge("Case", &b.case, connected, now);
+        // Put away with the lid shut, the case says nothing until it is opened again.
+        if !connected && d.in_case && case.dimmed && case.level.is_some() {
+            case.caption = Some("open the lid to update".to_string());
+        }
+        out.push(case);
     }
     out
 }
@@ -368,6 +375,8 @@ pub fn tooltip(snap: &AppSnapshot, now: SystemTime) -> (String, String) {
     let model = model_name(d.model);
     let body = if d.is_connected() || is_nearby(d) {
         format!("{model} — {}", battery_line(d, now))
+    } else if d.in_case {
+        format!("{model} — In case")
     } else {
         format!("{model} — Not connected")
     };
@@ -557,6 +566,34 @@ mod tests {
         )));
         assert_eq!(toggle_byte(true), 0x01);
         assert_eq!(toggle_byte(false), 0x02);
+    }
+
+    #[test]
+    fn put_away_in_the_case() {
+        let mut d = device(ModelKind::AirPods4Anc, LinkState::Disconnected);
+        for c in [
+            &mut d.battery.left,
+            &mut d.battery.right,
+            &mut d.battery.case,
+        ] {
+            c.present = false;
+            c.stale = true;
+        }
+        assert_eq!(connection_label(&d).0, "Not connected");
+        assert_eq!(gauges(&d, now())[2].caption, None);
+
+        d.in_case = true;
+        assert_eq!(connection_label(&d), ("In case", PillTone::Idle));
+        let g = gauges(&d, now());
+        assert_eq!(g[2].caption.as_deref(), Some("open the lid to update"));
+        assert_eq!(g[2].text, "40%");
+        assert!(g[0].caption.is_none());
+
+        // Lid open nearby: the adverts are live, no hint needed.
+        d.battery.case = comp(41, true);
+        assert_eq!(connection_label(&d), ("In case", PillTone::Info));
+        let g = gauges(&d, now());
+        assert!(g[2].caption.is_none() && g[2].charging);
     }
 
     #[test]

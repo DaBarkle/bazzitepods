@@ -52,6 +52,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
     ctx.hub.update_device(&mac_s, &name, |d| {
         d.name = name.clone();
         d.link = LinkState::Connecting;
+        d.in_case = false;
         d.last_seen = Some(std::time::SystemTime::now());
     });
 
@@ -145,6 +146,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
 
     ctx.hub.update_device(&mac_s, &name, |d| {
         d.link = LinkState::Disconnected;
+        d.in_case = dropped_in_case(&mac_s);
         d.in_ear = (None, None);
         d.audio = None;
         d.last_seen = Some(std::time::SystemTime::now());
