@@ -11,11 +11,11 @@ All notable changes to BazzitePods are documented here. The format follows
   switch* in More options, then hold the **left stem** to swap between your desk mic and the
   AirPods' mic, and hold it again to swap back. Music keeps playing in full quality instead
   of dropping to phone-call sound, because the AirPods send their mic over a separate
-  high-quality stream, the way they do for an iPhone or Mac. ([#14])
+  high-quality stream, the way they do for an iPhone or Mac. ([#15])
 - **Hold the right stem to change noise control** (models with noise cancellation), cycling
-  through the modes enabled for the AirPods. ([#14])
+  through the modes enabled for the AirPods. ([#15])
 - The overlay shows *Desk Mic* or *AirPods Mic* when you swap, and *AirPods Mic Unavailable*
-  if the AirPods mic stops. The window and tray have a *Use AirPods mic* switch too. ([#14])
+  if the AirPods mic stops. The window and tray have a *Use AirPods mic* switch too. ([#15])
 
 ### Changed
 - Apps follow the swap on their own: the AirPods mic becomes the default while selected,
@@ -158,6 +158,6 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
-[#14]: https://github.com/DaBarkle/bazzitepods/pull/14
+[#15]: https://github.com/DaBarkle/bazzitepods/pull/15
 [#12]: https://github.com/DaBarkle/bazzitepods/pull/12
 [#11]: https://github.com/DaBarkle/bazzitepods/pull/11
