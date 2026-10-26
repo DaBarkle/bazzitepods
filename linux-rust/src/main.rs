@@ -7,6 +7,7 @@ mod devices;
 mod fullscreen_watch;
 mod hub;
 mod media_controller;
+mod mic;
 mod overlay_client;
 mod overlay_feed;
 mod overlay_protocol;

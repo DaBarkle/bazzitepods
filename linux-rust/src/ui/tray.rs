@@ -200,6 +200,18 @@ impl ksni::Tray for LibreTray {
                         .into(),
                     );
                 }
+                if let Some(mic) = d.mic.filter(|_| d.is_connected()) {
+                    items.push(
+                        CheckmarkItem {
+                            label: "Use AirPods Mic".into(),
+                            checked: mic == crate::hub::MicRoute::AirPods,
+                            enabled,
+                            activate: Box::new(|_| crate::mic::request_toggle()),
+                            ..Default::default()
+                        }
+                        .into(),
+                    );
+                }
             }
             None => {
                 let (_, body) = format::tooltip(&self.snap, SystemTime::now());

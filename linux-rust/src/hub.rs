@@ -5,6 +5,7 @@
 
 use crate::core::battery::BatterySnapshot;
 use crate::core::models::ModelKind;
+pub use crate::mic::MicRoute;
 use serde::Serialize;
 use std::collections::BTreeMap;
 use std::time::SystemTime;
@@ -67,6 +68,12 @@ pub struct DeviceSnapshot {
     /// Both pods were in the case when the AirPods last left this PC (or their adverts say
     /// so). The case then only reports again once its lid opens.
     pub in_case: bool,
+    /// Which mic the PC uses, while the AirPods mic switch is on (`None` when it is off).
+    pub mic: Option<MicRoute>,
+    /// Why the AirPods mic last failed or ended on its own, if it did.
+    pub mic_problem: Option<String>,
+    /// Counts those failures, so the overlay can say so each time.
+    pub mic_failures: u32,
 }
 
 impl DeviceSnapshot {
@@ -89,6 +96,9 @@ impl DeviceSnapshot {
             elsewhere_name: None,
             controls: BTreeMap::new(),
             in_case: false,
+            mic: None,
+            mic_problem: None,
+            mic_failures: 0,
         }
     }
 
@@ -170,6 +180,7 @@ impl Hub {
                     d.owns_audio = None;
                     d.other_devices = 0;
                     d.elsewhere_name = None;
+                    d.mic = None;
                 }
                 d.link = link;
                 d.last_seen = Some(SystemTime::now());

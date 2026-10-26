@@ -706,6 +706,8 @@ fn paint_alert(f: &mut Frame, alert: &Alert, w: f32, h: f32, ctx: &Ctx) {
         Alert::Listening(mode) => {
             draw_listening_glyph(f, icon_at, 1.1 * pop, *mode, white(0.95 * ink))
         }
+        Alert::Mic(_) => draw_mic_glyph(f, icon_at, pop, white(0.95 * ink), false),
+        Alert::MicUnavailable => draw_mic_glyph(f, icon_at, pop, white(0.6 * ink), true),
         Alert::Disconnected => {
             if ctx.state.headphone.is_some() {
                 draw_headphone_glyph(f, icon_at, 1.0, white(0.55 * ink));

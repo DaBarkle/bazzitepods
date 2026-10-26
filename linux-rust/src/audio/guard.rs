@@ -91,6 +91,10 @@ pub(crate) enum Cmd {
     /// Another device is playing on the AirPods. This PC's output is dead until they come
     /// back, and that is expected: rebuilding it then would take the AirPods back.
     Away,
+    /// Rebuild the output once, now, whatever its state: the AirPods mic stream just
+    /// stopped, after which AirPods 4 ANC keep playing on one pod only although the
+    /// transport looks healthy. Not rate limited and not counted as a recovery.
+    Rebuild,
     Shutdown,
 }
 
@@ -299,6 +303,8 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     fast_until: Option<Instant>,
     /// Rebuild the output at the next monitor pass, stall or not.
     repair_pending: bool,
+    /// One plain rebuild (`Cmd::Rebuild`) at the next monitor pass.
+    rebuild_pending: bool,
     last_repair: Option<Instant>,
     linked_at: Option<Instant>,
     /// Another device has the AirPods: leave the dead output alone until they come back.
@@ -339,6 +345,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             wearing: false,
             fast_until: None,
             repair_pending: false,
+            rebuild_pending: false,
             last_repair: None,
             linked_at: None,
             away: false,
@@ -470,6 +477,14 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 self.away = true;
                 self.stall_since = None;
                 self.repair_pending = false;
+            }
+            Cmd::Rebuild => {
+                if self.linked && !self.away {
+                    self.rebuild_pending = true;
+                    if self.ready {
+                        self.next_monitor = Some(now);
+                    }
+                }
             }
             Cmd::Shutdown => self.shutdown = true,
         }
@@ -940,6 +955,14 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             self.lose_ready(now);
             return;
         }
+        if std::mem::take(&mut self.rebuild_pending) && is_a2dp(&active) {
+            info!(
+                "[audio {}] rebuilding the output (mic stream stopped)",
+                self.mac_str
+            );
+            self.rebuild().await;
+            return;
+        }
         if std::mem::take(&mut self.repair_pending) && is_a2dp(&active) {
             info!(
                 "[audio {}] audio came back from another device, rebuilding the output",
@@ -1069,6 +1092,49 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         // Monitoring continues (next_monitor is already set); rate limits bound it.
         if self.ready && self.next_monitor.is_none() {
             self.next_monitor = Some(Instant::now() + self.cfg.monitor_interval);
+        }
+    }
+
+    /// One profile toggle (the first ladder step), outside the ladder's limits.
+    async fn rebuild(&mut self) {
+        let Some(card) = self.current_card().await else {
+            return;
+        };
+        let mut order = a2dp_candidates(&card);
+        if let Some(current) = card.active_profile.clone().filter(|p| is_a2dp(p))
+            && !order.contains(&current)
+        {
+            order.push(current);
+        }
+        if order.is_empty() {
+            return;
+        }
+        let streams = self.our_streams().await;
+        self.set_health(AudioHealth::Recovering { step: 1 });
+        self.hush().await;
+        if let Err(e) = self.pulse.set_card_profile(card.index, "off").await {
+            warn!("[audio {}] toggle to off failed: {}", self.mac_str, e);
+        }
+        sleep(self.cfg.toggle_gap).await;
+        let result = self.apply_profile(&order).await;
+        self.restore_streams(&streams).await;
+        self.ensure_not_off().await;
+        self.unhush().await;
+        self.last_repair = Some(Instant::now());
+        self.stall_since = None;
+        match result {
+            Ok(profile) => {
+                let sink = self.pulse.snapshot().await.ok().and_then(|snap| {
+                    let card = snap.card_for(&self.mac_str)?;
+                    snap.sink_for_card(card).cloned()
+                });
+                self.set_health(AudioHealth::Ready {
+                    codec: codec_for(&profile, sink.as_ref()),
+                    profile,
+                });
+            }
+            Err(Abort::Failed(reason)) => self.set_health(AudioHealth::Failed { reason }),
+            Err(Abort::Interrupted) => {}
         }
     }
 

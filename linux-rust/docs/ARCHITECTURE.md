@@ -26,6 +26,7 @@ and keeps audio working across range loss. No user input should ever be required
 | `bluetooth/aacp.rs` | battery | AACP L2CAP protocol. Parsing must be bounds-checked. |
 | `bluetooth/le.rs` | battery | BLE proximity adverts -> `BleBatteryReading`. No auto-connect via `bluetoothctl`. |
 | `audio/` | audio | `AudioGuard`: per-device state machine that keeps A2DP alive (reconnect bug fix). |
+| `mic/` | audio | The AirPods mic switch: the AACP 0x58 AAC-ELD mic stream, its FFmpeg decoder (loaded at run time), the virtual "AirPods mic" and the desk/AirPods state machine. See "AirPods mic switch" below. |
 | `media_controller.rs` | audio | MPRIS pause/resume, conversational awareness volume. Never sets the card to `off`. |
 | `devices/airpods.rs`, `main.rs` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. |
 | `overlay_client.rs` + `src/bin/librepods-overlay.rs` | overlay | Spawns and feeds the overlay process over stdin (JSON lines). |
@@ -64,7 +65,7 @@ BLE adverts ──> le.rs ──BleBatteryReading──────────�
   "left":{"level":80,"charging":false,"present":true,"stale":false},
   "right":{"level":75,"charging":false,"present":true,"stale":false},
   "case":{"level":40,"charging":true,"present":true,"stale":false},
-  "headphone":null, "listening_mode":"noise_cancellation" }}
+  "headphone":null, "listening_mode":"noise_cancellation", "mic":"desk" }}
 {"type":"show","reason":"connected"}
 {"type":"hide"}
 {"type":"quit"}
@@ -75,11 +76,43 @@ it opens on changes), `always` (Full: the card stays), `off`.
 
 `listening_mode` (optional): `off`, `noise_cancellation`, `transparency`, `adaptive`.
 
+`mic` (optional, only while the AirPods mic switch is on): `desk` or `airpods`.
+`mic_failures` (optional, left out when 0) counts AirPods mic failures; each new one shows
+an *AirPods Mic Unavailable* alert.
+
 What the island shows (`src/bin/librepods-overlay/logic.rs`, `event`): connecting or a pod
 coming or going opens the card; the audio moving to or from another device, a battery
-dropping to 20% or 10%, charging starting, and a noise control change each show a one-line
+dropping to 20% or 10%, charging starting, a mic switch and a noise control change each show a one-line
 alert; disconnecting shows a short goodbye. Shapes move on damped springs
 (`spring.rs`, SwiftUI's duration/bounce mapping) and contents cross-fade (`island.rs`).
 The overlay redraws only while something moves, paced by the compositor's frame callbacks,
 and sleeps on a single timer until the next deadline otherwise.
 Exit code 3 from the overlay means no layer-shell (e.g. GNOME); the client then falls back to desktop notifications.
+
+## AirPods mic switch (mic/)
+
+Off by default ("AirPods mic switch" in More options). When on, holding the left stem swaps
+the PC's mic between the desk mic and the AirPods, and holding the right stem cycles noise
+control (ANC models). The presses are claimed with control 0x39 (`gestures::stem_claims`)
+and released again when the setting is turned off.
+
+* **Why not the headset profile:** it drops music to phone quality. Apple devices instead
+  ask for a separate AAC-ELD mic stream over AACP (opcode 0x58, START/STOP in
+  `mic/packets.rs`), found in LibrePods PR #655. Music stays on A2DP AAC.
+* **Decode:** `mic/eld.rs` opens the runtime's FFmpeg (`libavcodec.so.58`-`62`) with
+  `dlopen` and decodes with its native `aac` decoder; the stream is 64 kHz mono, 480-sample
+  frames. Gain control (`agc.rs`), then s16 into a FIFO (`stream.rs`).
+* **Virtual mic:** pipewire-pulse `module-pipe-source` named `bazzitepods_airpods_mic`
+  ("AirPods mic"), reading that FIFO from the app's runtime directory.
+* **Switching (`switch.rs`):** the desk mic is remembered on disk (`mic_switch.json`, for
+  crash recovery), the virtual mic becomes the default, and recordings pinned to the desk
+  mic are moved after 1.5 s. Going back reverses it in order: desk mic default, move those
+  apps back, STOP, unload, restore Conversation Awareness (paused while the mic runs), then
+  `AudioGuardHandle::rebuild`.
+* **The rebuild is required:** after STOP the right pod goes silent while the transport
+  still looks healthy (measured 2026-10-27). One off -> A2DP toggle fixes it.
+* **The stream runs only while the AirPods mic is selected,** because the AirPods lower the
+  music quality themselves while they record (the PC kept sending full quality).
+* **Back to the desk mic on its own** when the AirPods go to another device, a call starts,
+  both pods leave the ears, the link drops, or no mic audio arrives for 3 s. It never
+  restarts the stream by itself.
