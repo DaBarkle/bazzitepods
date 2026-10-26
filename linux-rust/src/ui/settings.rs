@@ -262,3 +262,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[cfg(test)]
+#[path = "settings_tests.rs"]
+mod store_tests;

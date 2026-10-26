@@ -16,14 +16,17 @@ static CLIENT: OnceLock<Arc<OverlayClient>> = OnceLock::new();
 /// Overlay settings as stored in app_settings.json (`overlay_mode`, `overlay_position`,
 /// `overlay_opacity`). A missing mode means compact, the app's default.
 pub fn load_config() -> OverlayConfig {
+    let json = std::fs::read_to_string(get_app_settings_path()).unwrap_or_default();
+    config_from_json(&json)
+}
+
+/// [`load_config`] without the disk: missing, broken or out-of-range values fall back.
+fn config_from_json(json: &str) -> OverlayConfig {
     let mut cfg = OverlayConfig {
         mode: OverlayMode::Compact,
         ..OverlayConfig::default()
     };
-    let Some(v) = std::fs::read_to_string(get_app_settings_path())
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-    else {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
         return cfg;
     };
     if let Some(mode) = v
@@ -100,7 +103,9 @@ async fn run(hub: Hub, client: Arc<OverlayClient>) {
             last = state.clone();
         }
         if client.unsupported() && load_config().mode != OverlayMode::Off {
-            notifier.observe(snap.primary());
+            for (summary, body) in notifier.observe(snap.primary()) {
+                notify(summary, body);
+            }
         }
         if rx.changed().await.is_err() {
             client.shutdown();
@@ -153,6 +158,10 @@ pub fn to_overlay_state(snap: &AppSnapshot) -> Option<OverlayState> {
             None
         },
         elsewhere: d.in_use_elsewhere(),
+        elsewhere_name: d
+            .in_use_elsewhere()
+            .then(|| d.elsewhere_name.clone())
+            .flatten(),
     })
 }
 
@@ -174,36 +183,39 @@ struct Notifier {
 }
 
 impl Notifier {
-    fn observe(&mut self, d: Option<&DeviceSnapshot>) {
+    /// The notifications (summary, body) this snapshot calls for, in order.
+    fn observe(&mut self, d: Option<&DeviceSnapshot>) -> Vec<(String, String)> {
+        let mut out = Vec::new();
         let Some(d) = d else {
             self.connected = None;
-            return;
+            return out;
         };
         // Only a real disconnect resets; control-channel blips (Reconnecting) must not
         // produce another "connected" notification.
         if d.link == LinkState::Disconnected {
             self.connected = None;
-            return;
+            return out;
         }
         if d.link != LinkState::Connected {
-            return;
+            return out;
         }
         if !d.battery.has_any() {
-            return;
+            return out;
         }
         let summary = battery_line(d);
         if self.connected.as_deref() != Some(d.mac.as_str()) {
             self.connected = Some(d.mac.clone());
             self.low_warned = false;
-            notify(format!("{} connected", display_name(d)), summary.clone());
+            out.push((format!("{} connected", display_name(d)), summary.clone()));
         }
         let low = d.battery.is_low(15);
         if low && !self.low_warned {
             self.low_warned = true;
-            notify(format!("{} battery low", display_name(d)), summary);
+            out.push((format!("{} battery low", display_name(d)), summary));
         } else if !low {
             self.low_warned = false;
         }
+        out
     }
 }
 
@@ -302,3 +314,7 @@ mod tests {
         assert_eq!(line, "L 80%  ·  R —  ·  Case 40% ⚡");
     }
 }
+
+#[cfg(test)]
+#[path = "overlay_feed_tests.rs"]
+mod feed_tests;

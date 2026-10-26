@@ -214,7 +214,9 @@ async fn session(
 
     let (command_tx, mut command_rx) = mpsc::unbounded_channel();
     *ctx.active_commands.lock().await = Some(command_tx.clone());
+    let route = RouteWatch::default();
     {
+        let route = route.clone();
         let aacp = aacp.clone();
         let hub = ctx.hub.clone();
         let local = ctx.local_mac.clone();
@@ -231,9 +233,10 @@ async fn session(
                     let had = owns_audio(&hub, &mac);
                     hub.update_device(&mac, &name, |d| d.owns_audio = Some(owns));
                     if owns {
+                        route.lock().claimed_at = Some(Instant::now());
                         claim_audio_route(&aacp, &local).await;
                         if had != Some(true) {
-                            route_regained(audio.as_ref());
+                            route_regained(audio.as_ref(), had == Some(false));
                         }
                     }
                 }
@@ -241,7 +244,7 @@ async fn session(
         });
     }
 
-    subscribe_controls(aacp, ctx, &mac_s, name, media, audio, &mut tasks).await;
+    subscribe_controls(aacp, ctx, &mac_s, name, media, audio, &route, &mut tasks).await;
 
     {
         let controller = media.lock().await;
@@ -257,7 +260,6 @@ async fn session(
         .send(BluetoothUIMessage::DeviceConnected(mac_s.clone()));
 
     let stem_control = setting_bool("stem_control");
-    let route = RouteWatch::default();
     let mut route_watch = tokio::time::interval(ROUTE_WATCH_INTERVAL);
     let mut health = tokio::time::interval(HEALTH_INTERVAL);
     let mut model_known = false;
@@ -286,6 +288,50 @@ async fn session(
     while tasks.join_next().await.is_some() {}
 }
 
+/// When another device last joined each AirPods (by AirPods MAC).
+static PEER_JOINED: std::sync::Mutex<Option<HashMap<String, Instant>>> =
+    std::sync::Mutex::new(None);
+
+fn note_peer_joined(mac: &str) {
+    if let Ok(mut joined) = PEER_JOINED.lock() {
+        joined
+            .get_or_insert_with(HashMap::new)
+            .insert(mac.to_ascii_uppercase(), Instant::now());
+    }
+}
+
+/// Whether each AirPods' last ear report had them put away: in the case, none in an ear.
+static PUT_AWAY: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);
+
+fn note_ear_status(mac: &str, status: &[EarDetectionStatus]) {
+    let away = status.contains(&EarDetectionStatus::InCase)
+        && !status.contains(&EarDetectionStatus::InEar);
+    if let Ok(mut put_away) = PUT_AWAY.lock() {
+        put_away
+            .get_or_insert_with(HashMap::new)
+            .insert(mac.to_ascii_uppercase(), away);
+    }
+}
+
+/// Whether these AirPods were put in the case when they dropped this PC.
+pub fn dropped_in_case(mac: &str) -> bool {
+    PUT_AWAY
+        .lock()
+        .ok()
+        .and_then(|away| away.as_ref()?.get(&mac.to_ascii_uppercase()).copied())
+        .unwrap_or(false)
+}
+
+/// Whether another device joined these AirPods just before they dropped this PC: they
+/// keep a limited number of links and let go of this one to make room.
+pub fn dropped_for_peer(mac: &str) -> bool {
+    PEER_JOINED
+        .lock()
+        .ok()
+        .and_then(|joined| joined.as_ref()?.get(&mac.to_ascii_uppercase()).copied())
+        .is_some_and(|t| t.elapsed() < Duration::from_secs(10))
+}
+
 fn owns_audio(hub: &crate::hub::Hub, mac: &str) -> Option<bool> {
     hub.snapshot().devices.get(mac).and_then(|d| d.owns_audio)
 }
@@ -294,12 +340,18 @@ fn owns_audio(hub: &crate::hub::Hub, mac: &str) -> Option<bool> {
 /// the A2DP transport to this PC, so have the audio guard check at once and repair it.
 /// The repair rebuilds the output, which makes players pause; resume the ones that were
 /// playing when the audio came back, so one press of play is enough.
-fn route_regained(audio: Option<&AudioGuardHandle>) {
+fn route_regained(audio: Option<&AudioGuardHandle>, from_other_device: bool) {
     info!("Audio route is back on this PC; re-checking the audio setup");
     let Some(audio) = audio.cloned() else {
         return;
     };
-    audio.route_back();
+    // While another device had the audio, the AirPods broke this PC's transport and the
+    // output node went into an error state that never stalls, so rebuild it now.
+    if from_other_device {
+        audio.repair();
+    } else {
+        audio.route_back();
+    }
     tokio::spawn(async move {
         let playing = MediaController::playing_players().await;
         if playing.is_empty() {
@@ -335,15 +387,17 @@ fn route_regained(audio: Option<&AudioGuardHandle>) {
 /// Runs after `OwnsConnection = 1` was sent, whether from playback starting or from the
 /// "Use on this PC" button.
 async fn claim_audio_route(aacp: &AACPManager, local: &str) {
-    let others: Vec<String> = aacp
-        .state
-        .lock()
-        .await
+    let mut state = aacp.state.lock().await;
+    // Whatever the other device said it was playing is over once we take the AirPods.
+    state.peer_streaming = false;
+    let others: Vec<String> = state
         .connected_devices
         .iter()
         .filter(|d| !d.mac.eq_ignore_ascii_case(local))
         .map(|d| d.mac.clone())
         .collect();
+    // Sending takes the same lock.
+    drop(state);
     for peer in others {
         if let Err(e) = aacp.send_media_information(local, &peer, true).await {
             warn!("Failed to send media information to {peer}: {e}");
@@ -392,6 +446,7 @@ async fn subscribe_controls(
     name: &str,
     media: &Arc<Mutex<MediaController>>,
     audio: Option<&AudioGuardHandle>,
+    route: &RouteWatch,
     tasks: &mut JoinSet<()>,
 ) {
     let watch = [
@@ -430,6 +485,8 @@ async fn subscribe_controls(
     let media = media.clone();
     let hub = ctx.hub.clone();
     let audio = audio.cloned();
+    let route = route.clone();
+    let aacp = aacp.clone();
     let (mac, name) = (mac_s.to_string(), name.to_string());
     tasks.spawn(async move {
         while let Some(value) = rx.recv().await {
@@ -438,9 +495,17 @@ async fn subscribe_controls(
             hub.update_device(&mac, &name, |d| d.owns_audio = Some(owns));
             if had == Some(true) && !owns {
                 info!("Another device took the AirPods; pausing local media");
+                // Picked in the iPhone's Control Center, this is the only sign of the
+                // switch, so record it like any other: the PC takes the AirPods back when
+                // the iPhone lets go, and leaves the dead output alone until then.
+                let streaming = aacp.state.lock().await.peer_streaming;
+                route.lost(!streaming);
+                if let Some(audio) = &audio {
+                    audio.route_away();
+                }
                 media.lock().await.pause_all_media().await;
             } else if had == Some(false) && owns {
-                route_regained(audio.as_ref());
+                route_regained(audio.as_ref(), true);
             }
         }
     });
@@ -465,6 +530,7 @@ async fn handle_event(
             ctx.battery.send(BatteryInput::Aacp(mac, info.clone()));
         }
         AACPEvent::EarDetection(old, new) => {
+            note_ear_status(&mac_s, new);
             // A pod just went into the case. The first battery report then often says
             // "case unknown" (255) and the real level may never follow, so ask the AirPods
             // to resend their state a little later.
@@ -489,11 +555,14 @@ async fn handle_event(
             if let Some(audio) = audio {
                 audio.wearing_changed(new.contains(&EarDetectionStatus::InEar));
             }
-            media
-                .lock()
-                .await
-                .handle_ear_detection(old.clone(), new.clone())
-                .await;
+            // The AirPods repeat their status; only a change means something moved.
+            if old != new {
+                media
+                    .lock()
+                    .await
+                    .handle_ear_detection(old.clone(), new.clone())
+                    .await;
+            }
         }
         AACPEvent::ConversationalAwareness(status) => {
             media
@@ -515,6 +584,7 @@ async fn handle_event(
                 .filter(|n| n.mac != local && old_devices.iter().all(|o| o.mac != n.mac))
             {
                 info!("New device on AirPods: {}", device.mac);
+                note_peer_joined(&mac_s);
                 let aacp = aacp.clone();
                 let local = local.clone();
                 let peer = device.mac.clone();
@@ -533,10 +603,11 @@ async fn handle_event(
                         .audio_source
                         .as_ref()
                         .and_then(|s| route_owner(s, &local));
-                    if ours == Some(true) && !MediaController::playing_players().await.is_empty() {
-                        if let Err(e) = aacp.send_media_information(&local, &peer, true).await {
-                            debug!("send_media_information failed: {}", e);
-                        }
+                    if ours == Some(true)
+                        && !MediaController::playing_players().await.is_empty()
+                        && let Err(e) = aacp.send_media_information(&local, &peer, true).await
+                    {
+                        debug!("send_media_information failed: {}", e);
                     }
                 });
             }
@@ -546,10 +617,12 @@ async fn handle_event(
             // never sends OwnsConnection = 0, so this is the reliable signal.
             let had = owns_audio(&ctx.hub, &mac_s);
             match route_owner(source, &ctx.local_mac) {
-                // Nobody is playing. If another device just let go while something here is
-                // still playing (a notification took the AirPods for a moment), take them
-                // back now instead of waiting for the AirPods to drift back.
-                None if had == Some(false) => {
+                // Nobody is playing. If another device let go while something here is still
+                // playing, take the AirPods back now instead of waiting for them to drift
+                // back. Only after a notification borrowed them or the other device stopped
+                // its media: the gap during a hand-over to an iPhone that starts playing
+                // looks the same, and taking them back then makes the two fight.
+                None if had == Some(false) && route.may_reclaim() => {
                     let worn = aacp
                         .state
                         .lock()
@@ -571,24 +644,62 @@ async fn handle_event(
                     ctx.hub
                         .update_device(&mac_s, name, |d| d.owns_audio = Some(true));
                     if had == Some(false) {
-                        route_regained(audio);
+                        route_regained(audio, true);
                     }
                 }
+                // We just took the AirPods; this report is from before the switch.
+                Some(false) if route.just_claimed() => {
+                    debug!(
+                        "Ignoring Audio Source {} right after taking the AirPods",
+                        source.mac
+                    );
+                }
                 Some(false) => {
-                    ctx.hub
-                        .update_device(&mac_s, name, |d| d.owns_audio = Some(false));
+                    let peer = aacp
+                        .state
+                        .lock()
+                        .await
+                        .peer_names
+                        .get(&source.mac.to_ascii_uppercase())
+                        .cloned();
+                    ctx.hub.update_device(&mac_s, name, |d| {
+                        d.owns_audio = Some(false);
+                        d.elsewhere_name = peer;
+                    });
                     if had != Some(false) {
-                        route_lost(source, aacp, ctx, &mac_s, media, route).await;
+                        route_lost(source, aacp, ctx, &mac_s, media, route, audio).await;
                     }
                 }
             }
+            route.lock().call = source.r#type == AudioSourceType::Call
+                && route_owner(source, &ctx.local_mac) == Some(false);
         }
-        AACPEvent::PeerStreaming(true) if owns_audio(&ctx.hub, &mac_s) == Some(false) => {
-            info!("The other device started playing media; pausing local media");
-            media.lock().await.pause_all_media().await;
+        AACPEvent::PeerStreaming(streaming) => {
+            {
+                let mut state = route.lock();
+                state.peer_stopped = !streaming;
+                // Playing media is not a borrow, whatever the switch first looked like.
+                if *streaming {
+                    state.lost_to_borrow = false;
+                }
+            }
+            if *streaming && owns_audio(&ctx.hub, &mac_s) == Some(false) {
+                info!("The other device started playing media; pausing local media");
+                if let Some(audio) = audio {
+                    audio.route_away();
+                }
+                media.lock().await.pause_all_media().await;
+            }
+        }
+        AACPEvent::OwnershipToFalseRequest if route.just_claimed() => {
+            debug!("Ignoring a release request right after taking the AirPods");
         }
         AACPEvent::OwnershipToFalseRequest => {
             info!("AirPods asked us to release ownership; pausing local media");
+            route.lost(false);
+            if let Some(audio) = audio {
+                audio.route_away();
+            }
             let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x00]));
             media.lock().await.pause_all_media().await;
         }
@@ -622,7 +733,22 @@ async fn route_lost(
     mac_s: &str,
     media: &Arc<Mutex<MediaController>>,
     route: &RouteWatch,
+    audio: Option<&AudioGuardHandle>,
 ) {
+    let borrowed =
+        source.r#type != AudioSourceType::Call && !aacp.state.lock().await.peer_streaming;
+    route.lost(borrowed);
+    if let Some(audio) = audio {
+        audio.route_away();
+    }
+    if source.r#type == AudioSourceType::Call {
+        info!(
+            "{} has a call on the AirPods; pausing local media",
+            source.mac
+        );
+        media.lock().await.pause_all_media().await;
+        return;
+    }
     if aacp.state.lock().await.peer_streaming {
         info!(
             "{} is playing media on the AirPods; pausing local media",
@@ -657,6 +783,15 @@ struct RouteState {
     streams: StreamTracker,
     /// Whether something plays here, as of the last tick.
     local_playing: bool,
+    /// When this PC last took the AirPods.
+    claimed_at: Option<Instant>,
+    /// Another device has a phone call on the AirPods: never take them back mid-call.
+    call: bool,
+    /// When this PC last lost the AirPods, and whether only to a notification.
+    lost_at: Option<Instant>,
+    lost_to_borrow: bool,
+    /// The other device said its media stopped.
+    peer_stopped: bool,
 }
 
 /// Follows playing audio streams between ticks. A stream counts once it has played for
@@ -665,27 +800,30 @@ struct RouteState {
 #[derive(Default)]
 struct StreamTracker {
     started: bool,
-    /// Stream index -> (ticks seen playing, capped at 2; was playing when tracking began).
-    seen: HashMap<u32, (u8, bool)>,
+    /// Stream index -> ticks seen playing, capped at 2.
+    seen: HashMap<u32, u8>,
 }
 
 impl StreamTracker {
-    /// Feeds the streams playing now. Returns (a real stream is playing, one just started).
+    /// Feeds the streams playing now. Returns (a stream is playing, one just started).
+    /// Streams already playing when tracking begins count as playing, but never as just
+    /// started: media that was playing before the iPhone joined still brings the AirPods
+    /// back when the iPhone stops, without counting as a fresh press of play.
     fn update(&mut self, playing: &[u32]) -> (bool, bool) {
         let baseline = !std::mem::replace(&mut self.started, true);
         let mut seen = HashMap::with_capacity(playing.len());
         let (mut active, mut started) = (false, false);
         for &index in playing {
-            let (count, background) = match self.seen.get(&index) {
-                _ if baseline => (2, true),
-                Some(&(count, background)) => ((count + 1).min(2), background),
-                None => (1, false),
+            let count = match self.seen.get(&index) {
+                _ if baseline => 2,
+                Some(&count) => (count + 1).min(2),
+                None => 1,
             };
-            if !background && count == 2 {
+            if count == 2 {
                 active = true;
-                started |= self.seen.get(&index).is_some_and(|&(c, _)| c == 1);
+                started |= self.seen.get(&index) == Some(&1);
             }
-            seen.insert(index, (count, background));
+            seen.insert(index, count);
         }
         self.seen = seen;
         (active, started)
@@ -703,7 +841,38 @@ impl RouteWatch {
     fn lock(&self) -> std::sync::MutexGuard<'_, RouteState> {
         self.0.lock().unwrap_or_else(|e| e.into_inner())
     }
+
+    /// Records that another device took the AirPods; `borrowed` when it plays no media
+    /// (a notification).
+    fn lost(&self, borrowed: bool) {
+        let mut state = self.lock();
+        state.lost_at = Some(Instant::now());
+        state.lost_to_borrow = borrowed;
+        state.peer_stopped = false;
+    }
+
+    /// Whether "the other device let go" may be taken as a cue to take the AirPods back:
+    /// it only borrowed them or has stopped its media, and the hand-over gap is over.
+    fn may_reclaim(&self) -> bool {
+        let state = self.lock();
+        let settled = state.lost_at.is_none_or(|t| t.elapsed() >= HANDOVER_GAP);
+        settled && !state.call && (state.lost_to_borrow || state.peer_stopped)
+    }
+
+    /// True for a moment after this PC took the AirPods, while reports from before the
+    /// switch may still arrive.
+    fn just_claimed(&self) -> bool {
+        self.lock()
+            .claimed_at
+            .is_some_and(|t| t.elapsed() < CLAIM_GRACE)
+    }
 }
+
+/// How long after taking the AirPods to ignore reports that say another device has them.
+const CLAIM_GRACE: Duration = Duration::from_secs(3);
+
+/// A hand-over to another device can pass through "nobody" for a moment; ignore that.
+const HANDOVER_GAP: Duration = Duration::from_secs(2);
 
 /// How often to compare local playback with who has the AirPods.
 const ROUTE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
@@ -767,7 +936,11 @@ async fn watch_route(
         // MPRIS players were paused when the other device took over, so one playing now
         // was started here. A player without MPRIS can't be paused, so only a stream
         // that just started counts for those.
-        Some(false) if mpris || stream_started => {
+        // Not right after pausing for the other device: that playback is the tail end of
+        // what was paused, not a fresh press of play.
+        Some(false)
+            if (mpris || stream_started) && !crate::media_controller::auto_paused_recently() =>
+        {
             route.lock().announced = None;
             let borrowed = route
                 .lock()
@@ -779,7 +952,8 @@ async fn watch_route(
                 .await
                 .ear_detection_status
                 .contains(&EarDetectionStatus::InEar);
-            if worn && !borrowed {
+            let call = route.lock().call;
+            if worn && !borrowed && !call {
                 info!(
                     "Media is playing here while another device has the AirPods; taking them back"
                 );
@@ -902,26 +1076,51 @@ mod tests {
     }
 
     #[test]
-    fn stream_tracker_ignores_background_and_short_sounds() {
+    fn take_back_on_let_go_only_after_a_borrow_or_a_stop() {
+        let route = RouteWatch::default();
+        let settle = |route: &RouteWatch| {
+            route.lock().lost_at = Instant::now().checked_sub(HANDOVER_GAP * 2);
+        };
+        // The iPhone took the AirPods to play media: its hand-over gap and its media
+        // never count as letting go.
+        route.lost(false);
+        assert!(!route.may_reclaim());
+        settle(&route);
+        assert!(!route.may_reclaim());
+        // It stopped playing: letting go now means the PC may have them back.
+        route.lock().peer_stopped = true;
+        assert!(route.may_reclaim());
+        // A notification borrowed them: once the hand-over gap is over.
+        route.lost(true);
+        assert!(!route.may_reclaim());
+        settle(&route);
+        assert!(route.may_reclaim());
+        // Never during a call.
+        route.lock().call = true;
+        assert!(!route.may_reclaim());
+    }
+
+    #[test]
+    fn stream_tracker_counts_playback_and_ignores_short_sounds() {
         let mut t = StreamTracker::default();
-        // Idle voice chat streams already playing: background.
-        assert_eq!(t.update(&[1, 2]), (false, false));
-        assert_eq!(t.update(&[1, 2]), (false, false));
+        // Plex was already playing when tracking began: playing, but not a fresh start.
+        assert_eq!(t.update(&[1]), (true, false));
+        assert_eq!(t.update(&[1]), (true, false));
+        // Paused (corked): nothing plays.
+        assert_eq!(t.update(&[]), (false, false));
         // A notification sound for a single tick doesn't count.
-        assert_eq!(t.update(&[1, 2, 3]), (false, false));
-        assert_eq!(t.update(&[1, 2]), (false, false));
-        // Plex starts playing: counts on its second tick, once.
-        assert_eq!(t.update(&[1, 2, 4]), (false, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, true));
-        assert_eq!(t.update(&[1, 2, 4]), (true, false));
-        // Paused (corked) and resumed: a fresh start.
-        assert_eq!(t.update(&[1, 2]), (false, false));
-        assert_eq!(t.update(&[1, 2, 4]), (false, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, true));
-        // A background stream that stops and starts again is real playback.
-        assert_eq!(t.update(&[2, 4]), (true, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, false));
-        assert_eq!(t.update(&[1, 2, 4]), (true, true));
+        assert_eq!(t.update(&[3]), (false, false));
+        assert_eq!(t.update(&[]), (false, false));
+        // Plex resumes: counts on its second tick, as a start once.
+        assert_eq!(t.update(&[1]), (false, false));
+        assert_eq!(t.update(&[1]), (true, true));
+        assert_eq!(t.update(&[1]), (true, false));
+        // A second app starting while one plays is a fresh start too.
+        assert_eq!(t.update(&[1, 4]), (true, false));
+        assert_eq!(t.update(&[1, 4]), (true, true));
+        // After a reset (the iPhone left and came back), playing streams are a baseline.
+        t.reset();
+        assert_eq!(t.update(&[1, 4]), (true, false));
     }
 
     #[test]

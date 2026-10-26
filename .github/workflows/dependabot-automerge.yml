@@ -3,10 +3,11 @@
 #   * the PR was opened by Dependabot,
 #   * it only touches the Rust (Cargo) dependency files under linux-rust/,
 #   * every crate version it changes is a semver-compatible bump (no major bumps,
-#     which for 0.x crates means no 0.x -> 0.y), and it adds no new crates, and
-#   * the Flatpak build for that exact commit passed.
-# Everything else (major bumps, new crates, non-Cargo updates, failed builds) is
-# left open for the daily Dependabot check and for David.
+#     which for 0.x crates means no 0.x -> 0.y), and it adds no new crates,
+#   * the Flatpak build for that exact commit passed, and
+#   * the test suite for that exact commit passed (tests.yml, "Run tests").
+# Everything else (major bumps, new crates, non-Cargo updates, failed builds or
+# tests) is left open for the daily Dependabot check and for David.
 #
 # The bump size is read from Cargo.lock itself rather than from Dependabot's
 # metadata, because grouped security updates (the only kind enabled here) report
@@ -93,9 +94,9 @@ jobs:
                   if compat(version) not in {compat(v) for v in old}:
                       decide(False, f"{name} {sorted(old)} -> {version} is a major bump; leaving it for review.")
                   print(f"{name}: {sorted(old)} -> {version} (compatible)")
-          decide(True, "Only semver-compatible bumps; waiting for the Flatpak build.")
+          decide(True, "Only semver-compatible bumps; waiting for the Flatpak build and tests.")
 
-      - name: Wait for the Flatpak build of this commit
+      - name: Wait for the Flatpak build and the tests of this commit
         id: build
         if: steps.eligible.outputs.ok == 'true'
         env:
@@ -103,24 +104,32 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # Poll the "Build Flatpak bundle" check on the PR's head commit until it
-          # finishes (it can take a while on a cold cache).
+          # Poll both required checks on the PR's head commit until each finishes (the
+          # Flatpak build can take a while on a cold cache). Every one must succeed.
+          state() {
+            gh api "repos/$REPO/commits/$SHA/check-runs?check_name=$1" \
+              --jq '.check_runs | sort_by(.started_at) | last | "\(.status) \(.conclusion)"'
+          }
           for _ in $(seq 1 110); do
-            run="$(gh api "repos/$REPO/commits/$SHA/check-runs?check_name=Build%20Flatpak%20bundle" \
-              --jq '.check_runs | sort_by(.started_at) | last | "\(.status) \(.conclusion)"')"
-            echo "Flatpak build: ${run:-not started yet}"
-            case "$run" in
-              "completed success")
-                echo "passed=true" >> "$GITHUB_OUTPUT"
-                exit 0 ;;
-              completed*)
-                echo "Flatpak build did not pass; leaving the PR open."
-                echo "passed=false" >> "$GITHUB_OUTPUT"
-                exit 0 ;;
-            esac
+            flatpak="$(state 'Build%20Flatpak%20bundle')"
+            tests="$(state 'Run%20tests')"
+            echo "Flatpak build: ${flatpak:-not started yet}; tests: ${tests:-not started yet}"
+            for run in "$flatpak" "$tests"; do
+              case "$run" in
+                "completed success") ;;
+                completed*)
+                  echo "A required check did not pass; leaving the PR open."
+                  echo "passed=false" >> "$GITHUB_OUTPUT"
+                  exit 0 ;;
+              esac
+            done
+            if [ "$flatpak" = "completed success" ] && [ "$tests" = "completed success" ]; then
+              echo "passed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             sleep 60
           done
-          echo "Timed out waiting for the Flatpak build; leaving the PR open."
+          echo "Timed out waiting for the Flatpak build and tests; leaving the PR open."
           echo "passed=false" >> "$GITHUB_OUTPUT"
 
       - name: Merge
@@ -130,5 +139,5 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          # --match-head-commit: only merge the exact commit that was built.
+          # --match-head-commit: only merge the exact commit that was built and tested.
           gh pr merge "$PR_URL" --squash --delete-branch --match-head-commit "$SHA"

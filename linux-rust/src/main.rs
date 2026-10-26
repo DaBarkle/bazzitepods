@@ -259,11 +259,48 @@ struct AdapterState_ {
     lost_link: HashMap<Address, Instant>,
     /// Last time we asked BlueZ to reconnect a device.
     last_reconnect: HashMap<Address, Instant>,
+    /// AirPods worth reconnecting without waiting for their adverts: when they dropped
+    /// this PC, and for how long to keep trying.
+    eager: HashMap<Address, (Instant, Duration)>,
+}
+
+impl AdapterState_ {
+    fn note_lost(&mut self, addr: Address) {
+        let now = Instant::now();
+        self.lost_link.entry(addr).or_insert(now);
+        let mac = addr.to_string();
+        if devices::airpods::dropped_for_peer(&mac) {
+            info!("AirPods {} dropped this PC for another device", addr);
+            self.eager.entry(addr).or_insert((now, PEER_DROP_WINDOW));
+        } else if devices::airpods::dropped_in_case(&mac) {
+            info!(
+                "AirPods {} went into the case; reconnecting when they come out",
+                addr
+            );
+            self.eager.entry(addr).or_insert((now, CASE_DROP_WINDOW));
+        }
+    }
 }
 
 /// How long after losing the link we still reconnect automatically when the AirPods come back.
 const AUTO_RECONNECT_WINDOW: Duration = Duration::from_secs(4 * 60 * 60);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(20);
+/// Reconnecting without adverts. Out of the case, or busy with an iPhone, AirPods often
+/// advertise only Find My beacons this PC can't match to them, so after these drops keep
+/// asking BlueZ to connect: a failed attempt costs nothing, and connecting never takes
+/// the audio from an iPhone that is playing. Not after other drops, so disconnecting the
+/// AirPods here keeps them disconnected.
+/// - They dropped this PC to make room for an iPhone: it can't hear the iPhone let go.
+const PEER_DROP_WINDOW: Duration = Duration::from_secs(3 * 60);
+/// - They went into the case: come back when they come out, as on a Mac, however long
+///   they were away.
+const CASE_DROP_WINDOW: Duration = Duration::MAX;
+/// Retry every RECONNECT_INTERVAL at first, every minute after FAST_RECONNECT_PERIOD and
+/// every few minutes after SLOW_RECONNECT_PERIOD.
+const FAST_RECONNECT_PERIOD: Duration = Duration::from_secs(3 * 60);
+const SLOW_RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
+const SLOW_RECONNECT_PERIOD: Duration = Duration::from_secs(30 * 60);
+const IDLE_RECONNECT_INTERVAL: Duration = Duration::from_secs(3 * 60);
 /// Upper bound on waiting for a cancelled device task to finish.
 const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -339,6 +376,22 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
     if let Ok(addrs) = adapter.device_addresses().await {
         for addr in addrs {
             watch_device(adapter, addr, &mut watched, &ctx.kick_tx).await;
+            // AirPods away when the app starts (after a reboot, say) come back like ones
+            // that went into the case while it ran.
+            if let Ok(device) = adapter.device(addr)
+                && device.is_paired().await.unwrap_or(false)
+                && !device.is_connected().await.unwrap_or(true)
+                && device
+                    .uuids()
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some_and(|u| u.contains(&AIRPODS_UUID))
+            {
+                let now = Instant::now();
+                st.lost_link.insert(addr, now);
+                st.eager.insert(addr, (now, CASE_DROP_WINDOW));
+            }
         }
     }
 
@@ -376,7 +429,9 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     // device tasks so they reconnect fresh instead of waiting on a dead socket.
                     for (addr, dev) in st.running.drain() {
                         if dev.is_airpods {
-                            st.lost_link.insert(addr, Instant::now());
+                            let now = Instant::now();
+                            st.lost_link.insert(addr, now);
+                            st.eager.insert(addr, (now, CASE_DROP_WINDOW));
                         }
                         stop_task(dev).await;
                     }
@@ -387,7 +442,25 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     }
                 }
             }
-            _ = sweep.tick() => {}
+            _ = sweep.tick() => {
+                st.eager.retain(|_, (t, window)| t.elapsed() < *window);
+                let due: Vec<Address> = st
+                    .eager
+                    .iter()
+                    .filter(|(addr, (t, _))| {
+                        let every = match t.elapsed() {
+                            e if e < FAST_RECONNECT_PERIOD => RECONNECT_INTERVAL,
+                            e if e < SLOW_RECONNECT_PERIOD => SLOW_RECONNECT_INTERVAL,
+                            _ => IDLE_RECONNECT_INTERVAL,
+                        };
+                        st.last_reconnect.get(addr).is_none_or(|l| l.elapsed() >= every)
+                    })
+                    .map(|(addr, _)| *addr)
+                    .collect();
+                for addr in due {
+                    maybe_reconnect(adapter, addr, true, &mut st).await;
+                }
+            }
         }
     }
 
@@ -399,10 +472,12 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
     }
 }
 
-/// Bring AirPods back after a range loss. BlueZ gives up reconnecting after ~2 minutes, so
-/// when we see the AirPods advertising again (case open / pods out) we ask BlueZ to connect.
-/// Only for AirPods that dropped off this PC on their own, so we never steal them from a phone
-/// the user deliberately switched to.
+/// Bring AirPods back after they dropped the link: out of range, or dropped to make room
+/// for an iPhone. BlueZ doesn't reconnect by itself, so when we see the AirPods advertising
+/// (case open / pods out), or shortly after the drop, we ask BlueZ to connect. Connecting
+/// doesn't take the audio from an iPhone that is playing; it only lets this PC hear when
+/// the iPhone lets go. Only for AirPods that dropped off this PC, never ones the user
+/// disconnected here.
 async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mut AdapterState_) {
     if !in_use || st.running.contains_key(&addr) {
         return;
@@ -410,7 +485,7 @@ async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mu
     let Some(lost_at) = st.lost_link.get(&addr).copied() else {
         return;
     };
-    if lost_at.elapsed() > AUTO_RECONNECT_WINDOW {
+    if lost_at.elapsed() > AUTO_RECONNECT_WINDOW && !st.eager.contains_key(&addr) {
         st.lost_link.remove(&addr);
         return;
     }
@@ -431,12 +506,12 @@ async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mu
         return;
     }
     st.last_reconnect.insert(addr, Instant::now());
-    info!("AirPods {} are back in range; reconnecting", addr);
+    info!("Reconnecting to AirPods {}", addr);
     tokio::spawn(async move {
         match tokio::time::timeout(Duration::from_secs(15), device.connect()).await {
             Ok(Ok(())) => info!("Reconnected {}", addr),
-            Ok(Err(e)) => debug!("Reconnect to {} failed: {}", addr, e),
-            Err(_) => debug!("Reconnect to {} timed out", addr),
+            Ok(Err(e)) => info!("Reconnect to {} failed: {}", addr, e),
+            Err(_) => info!("Reconnect to {} timed out", addr),
         }
     });
 }
@@ -496,8 +571,22 @@ async fn reconcile(
         AdapterState::Off
     });
 
-    // Drop tasks that ended on their own (e.g. Nothing device setup failure).
-    st.running.retain(|_, d| !d.handle.is_finished());
+    // Drop tasks that ended on their own (e.g. Nothing device setup failure). An AirPods
+    // task ends by itself when the AirPods drop the link, often before BlueZ reports the
+    // disconnect: remember that, or they are never reconnected.
+    let mut ended = Vec::new();
+    st.running.retain(|addr, d| {
+        let done = d.handle.is_finished();
+        if done && d.is_airpods {
+            ended.push(*addr);
+        }
+        !done
+    });
+    if powered {
+        for addr in ended {
+            st.note_lost(addr);
+        }
+    }
     st.stopping.retain(|_, h| !h.is_finished());
 
     let addrs = adapter.device_addresses().await.unwrap_or_default();
@@ -522,7 +611,7 @@ async fn reconcile(
             if let Some(dev) = st.running.remove(&addr) {
                 info!("{} disconnected", addr);
                 if dev.is_airpods && powered {
-                    st.lost_link.insert(addr, Instant::now());
+                    st.note_lost(addr);
                 }
                 dev.cancel.cancel();
                 // The task publishes its own Disconnected state when it exits.
@@ -547,6 +636,7 @@ async fn reconcile(
         let handle = if is_airpods {
             info!("AirPods connected: {} ({})", name, addr);
             st.lost_link.remove(&addr);
+            st.eager.remove(&addr);
             let dctx = DeviceContext {
                 hub: ctx.hub.clone(),
                 battery: ctx.battery.clone(),

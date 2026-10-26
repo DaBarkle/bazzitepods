@@ -815,7 +815,7 @@ impl App {
 
         let mut body = column![header].spacing(22);
         if d.in_use_elsewhere() {
-            body = body.push(self.elsewhere_banner());
+            body = body.push(self.elsewhere_banner(d.elsewhere_name.as_deref()));
         }
         container(body.push(ring_row))
             .padding(Padding {
@@ -831,7 +831,11 @@ impl App {
 
     /// Shown while another Apple device has the audio: the AirPods are still connected
     /// here, and one press brings the sound back to this PC.
-    fn elsewhere_banner<'a>(&self) -> Element<'a, Message> {
+    fn elsewhere_banner<'a>(&self, device: Option<&str>) -> Element<'a, Message> {
+        let headline = match device {
+            Some(name) => format!("Playing on {name}"),
+            None => "Playing on another device".to_string(),
+        };
         let switching = self
             .taking_audio
             .is_some_and(|t| t.elapsed() < Duration::from_secs(6));
@@ -854,9 +858,7 @@ impl App {
         container(
             row![
                 column![
-                    text("Playing on another device")
-                        .size(13)
-                        .font(style::INTER_SEMIBOLD),
+                    text(headline).size(13).font(style::INTER_SEMIBOLD),
                     text("Still connected here. Starting playback also switches back.")
                         .size(12)
                         .style(dim_text),

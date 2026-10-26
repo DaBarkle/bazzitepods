@@ -832,3 +832,7 @@ mod tests {
         assert!(keys[0].enc_key.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "le_tests.rs"]
+mod advert_tests;
