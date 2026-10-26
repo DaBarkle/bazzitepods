@@ -1,6 +1,6 @@
 //! `--ui-demo[=scenario]`: seeds the hub with fake state so the UI can be previewed and
 //! screenshotted without Bluetooth. Scenarios: airpods4 (default), pro, max, low, disconnected,
-//! empty, btoff.
+//! incase, empty, btoff.
 
 use crate::core::battery::ComponentBattery;
 use crate::core::models::ModelKind;
@@ -45,6 +45,10 @@ pub fn seed(hub: &Hub, scenario: &str) {
         d.battery.left = comp(80, false);
         d.battery.right = comp(75, false);
         d.battery.case = comp(40, true);
+        // Settings as the AirPods report them over the control channel.
+        for (id, value) in [(0x0A, 0x01), (0x26, 0x01), (0x01, 0x00), (0x20, 0x02)] {
+            d.controls.insert(id, value);
+        }
         match scenario {
             "pro" => {
                 d.name = "David's AirPods Pro".into();
@@ -53,6 +57,8 @@ pub fn seed(hub: &Hub, scenario: &str) {
                 d.listening_mode = Some(0x04);
                 d.allow_off_mode = Some(false);
                 d.conversation_awareness = Some(true);
+                d.controls.insert(0x2E, 50);
+                d.controls.insert(0x1B, 0x01);
                 d.battery.left = comp(64, false);
                 d.battery.right = comp(18, false);
                 d.battery.case = stale(52, 5);
@@ -76,6 +82,16 @@ pub fn seed(hub: &Hub, scenario: &str) {
                 d.owns_audio = Some(false);
                 d.other_devices = 1;
                 d.elsewhere_name = Some("iPhone".into());
+            }
+            "incase" => {
+                // In the case on a charger, away from this PC: the adverts are live.
+                d.model = ModelKind::AirPods4Anc;
+                d.link = LinkState::Disconnected;
+                d.audio = None;
+                d.controls.clear();
+                d.battery.left = comp(71, true);
+                d.battery.right = comp(73, true);
+                d.battery.case = comp(46, true);
             }
             "disconnected" => {
                 d.link = LinkState::Disconnected;

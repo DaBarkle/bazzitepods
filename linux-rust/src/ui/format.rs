@@ -221,6 +221,114 @@ pub fn controls_enabled(d: &DeviceSnapshot) -> bool {
     d.link == LinkState::Connected
 }
 
+/// AACP control command identifiers the window offers as settings.
+pub mod control {
+    pub const MIC_MODE: u8 = 0x01;
+    pub const EAR_DETECTION: u8 = 0x0A;
+    pub const ONE_BUD_ANC: u8 = 0x1B;
+    pub const AUTO_CONNECT: u8 = 0x20;
+    pub const ADAPTIVE_VOLUME: u8 = 0x26;
+    pub const ADAPTIVE_STRENGTH: u8 = 0x2E;
+}
+
+/// Toggles use 0x01 for on and 0x02 for off, as an iPhone sends them.
+pub fn toggle_byte(on: bool) -> u8 {
+    if on { 0x01 } else { 0x02 }
+}
+
+/// One AirPods setting as the window draws it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeviceSetting {
+    Toggle {
+        id: u8,
+        title: &'static str,
+        caption: &'static str,
+        on: bool,
+    },
+    Choice {
+        id: u8,
+        title: &'static str,
+        caption: &'static str,
+        options: &'static [(&'static str, u8)],
+        selected: u8,
+    },
+}
+
+const MIC_OPTIONS: &[(&str, u8)] = &[("Automatic", 0x00), ("Left", 0x02), ("Right", 0x01)];
+/// Apple's three Adaptive Audio steps: how much noise the AirPods filter out (0..=100).
+const STRENGTH_OPTIONS: &[(&str, u8)] = &[("More noise", 0), ("Default", 50), ("Less noise", 100)];
+
+/// The AirPods' own settings, built only from values they reported over the control
+/// channel: a model that lacks a setting never reports it, so it is never offered.
+pub fn device_settings(d: &DeviceSnapshot) -> Vec<DeviceSetting> {
+    let info = d.model.info();
+    let get = |id: u8| d.controls.get(&id).copied();
+    let toggle = |id, title, caption| {
+        get(id).map(|v| DeviceSetting::Toggle {
+            id,
+            title,
+            caption,
+            on: v == 0x01,
+        })
+    };
+    let mut out = Vec::new();
+    out.extend(toggle(
+        control::EAR_DETECTION,
+        "Automatic ear detection",
+        "Plays when you put them in, pauses when you take one out",
+    ));
+    if info.has_adaptive_volume {
+        out.extend(toggle(
+            control::ADAPTIVE_VOLUME,
+            "Personalized volume",
+            "Adjusts volume to your surroundings",
+        ));
+    }
+    if info.has_adaptive
+        && let Some(v) = get(control::ADAPTIVE_STRENGTH)
+    {
+        // The AirPods accept any value; show the nearest of Apple's three steps.
+        let selected = STRENGTH_OPTIONS
+            .iter()
+            .map(|&(_, o)| o)
+            .min_by_key(|o| o.abs_diff(v))
+            .unwrap_or(50);
+        out.push(DeviceSetting::Choice {
+            id: control::ADAPTIVE_STRENGTH,
+            title: "Adaptive audio",
+            caption: "How much outside noise Adaptive lets in",
+            options: STRENGTH_OPTIONS,
+            selected,
+        });
+    }
+    if info.has_anc {
+        out.extend(toggle(
+            control::ONE_BUD_ANC,
+            "Noise cancellation with one AirPod",
+            "Keeps noise control on when only one AirPod is in",
+        ));
+    }
+    if let Some(v) = get(control::MIC_MODE) {
+        out.push(DeviceSetting::Choice {
+            id: control::MIC_MODE,
+            title: "Microphone",
+            caption: "Which AirPod picks up your voice",
+            options: MIC_OPTIONS,
+            selected: if MIC_OPTIONS.iter().any(|&(_, o)| o == v) {
+                v
+            } else {
+                0x00
+            },
+        });
+    }
+    out.extend(toggle(
+        control::AUTO_CONNECT,
+        "Connect to this PC automatically",
+        "Otherwise they come back here only if this PC was used last",
+    ));
+    out
+}
+
 fn short(label: &str) -> &str {
     match label {
         "Left" => "L",
@@ -358,7 +466,11 @@ mod tests {
     #[test]
     fn disconnected_keeps_last_levels_greyed() {
         let mut d = device(ModelKind::AirPods4, LinkState::Disconnected);
-        for c in [&mut d.battery.left, &mut d.battery.right, &mut d.battery.case] {
+        for c in [
+            &mut d.battery.left,
+            &mut d.battery.right,
+            &mut d.battery.case,
+        ] {
             c.present = false;
             c.stale = true;
         }
@@ -377,10 +489,74 @@ mod tests {
         d.battery.left = comp(64, true);
         d.battery.right = comp(66, true);
         let g = gauges(&d, now());
-        assert!(g.iter().all(|g| !g.dimmed && g.charging && g.caption.is_none()));
+        assert!(
+            g.iter()
+                .all(|g| !g.dimmed && g.charging && g.caption.is_none())
+        );
         assert_eq!(g[2].text, "40%");
         assert_eq!(connection_label(&d).0, "Nearby");
         assert_eq!(battery_line(&d, now()), "L 64% ⚡ · R 66% ⚡ · Case 40% ⚡");
+    }
+
+    #[test]
+    fn settings_only_for_what_the_airpods_report() {
+        let mut d = device(ModelKind::AirPods4Anc, LinkState::Connected);
+        assert!(device_settings(&d).is_empty());
+
+        d.controls.insert(control::EAR_DETECTION, 0x01);
+        d.controls.insert(control::ADAPTIVE_VOLUME, 0x02);
+        d.controls.insert(control::ADAPTIVE_STRENGTH, 60);
+        d.controls.insert(control::MIC_MODE, 0x02);
+        d.controls.insert(control::AUTO_CONNECT, 0x01);
+        let s = device_settings(&d);
+        let ids: Vec<u8> = s
+            .iter()
+            .map(|s| match s {
+                DeviceSetting::Toggle { id, .. } | DeviceSetting::Choice { id, .. } => *id,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                control::EAR_DETECTION,
+                control::ADAPTIVE_VOLUME,
+                control::ADAPTIVE_STRENGTH,
+                control::MIC_MODE,
+                control::AUTO_CONNECT
+            ]
+        );
+        assert!(matches!(s[0], DeviceSetting::Toggle { on: true, .. }));
+        assert!(matches!(s[1], DeviceSetting::Toggle { on: false, .. }));
+        assert!(matches!(s[2], DeviceSetting::Choice { selected: 50, .. }));
+        assert!(matches!(s[3], DeviceSetting::Choice { selected: 0x02, .. }));
+
+        // Capability gates still apply: no Adaptive Audio strength without Adaptive.
+        d.model = ModelKind::AirPods4;
+        d.controls.insert(control::ONE_BUD_ANC, 0x01);
+        let s = device_settings(&d);
+        assert!(!s.iter().any(|s| matches!(
+            s,
+            DeviceSetting::Choice {
+                id: control::ADAPTIVE_STRENGTH,
+                ..
+            } | DeviceSetting::Toggle {
+                id: control::ONE_BUD_ANC,
+                ..
+            }
+        )));
+
+        // An unknown microphone value reads as Automatic.
+        d.controls.insert(control::MIC_MODE, 0x07);
+        assert!(device_settings(&d).iter().any(|s| matches!(
+            s,
+            DeviceSetting::Choice {
+                id: control::MIC_MODE,
+                selected: 0x00,
+                ..
+            }
+        )));
+        assert_eq!(toggle_byte(true), 0x01);
+        assert_eq!(toggle_byte(false), 0x02);
     }
 
     #[test]

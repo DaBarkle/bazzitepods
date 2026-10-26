@@ -229,6 +229,15 @@ async fn session(
                     warn!("Failed to send control command {:?}: {}", id, e);
                     continue;
                 }
+                // Settings the AirPods reported: show the new value at once; their own echo
+                // (if any) confirms it a moment later.
+                if let Some(&byte) = value.first() {
+                    hub.update_device(&mac, &name, |d| {
+                        if let Some(v) = d.controls.get_mut(&(id as u8)) {
+                            *v = byte;
+                        }
+                    });
+                }
                 if id == ControlCommandIdentifiers::OwnsConnection {
                     let owns = value.first().copied().unwrap_or(0) != 0;
                     let had = owns_audio(&hub, &mac);
@@ -563,6 +572,14 @@ async fn handle_event(
                     .await
                     .handle_ear_detection(old.clone(), new.clone())
                     .await;
+            }
+        }
+        AACPEvent::ControlCommand(status) => {
+            if let Some(&value) = status.value.first() {
+                let id = status.identifier as u8;
+                ctx.hub.update_device(&mac_s, name, |d| {
+                    d.controls.insert(id, value);
+                });
             }
         }
         AACPEvent::ConversationalAwareness(status) => {

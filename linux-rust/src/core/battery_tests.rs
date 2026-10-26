@@ -320,7 +320,11 @@ fn link_lost_turns_control_channel_levels_into_last_seen() {
     t.set_aacp_connected(true);
     aacp.send(
         &mut t,
-        &[(LEFT, 70, CHARGING), (RIGHT, 72, CHARGING), (CASE, 40, CHARGING)],
+        &[
+            (LEFT, 70, CHARGING),
+            (RIGHT, 72, CHARGING),
+            (CASE, 40, CHARGING),
+        ],
         t0,
     );
     t.link_lost();
@@ -333,7 +337,10 @@ fn link_lost_turns_control_channel_levels_into_last_seen() {
     assert!(!t.aacp_connected());
 
     // The case advertises while the lid is open: its adverts are live again at once.
-    t.apply_ble(&advert(0x20 | 0x40 | 0x04, 0x80 | 71, 0x80 | 72, 0x80 | 39), secs(t0, 5));
+    t.apply_ble(
+        &advert(0x20 | 0x40 | 0x04, 0x80 | 71, 0x80 | 72, 0x80 | 39),
+        secs(t0, 5),
+    );
     let s = t.snapshot();
     assert!(s.case.is_live() && s.case.charging);
     assert_eq!(s.case.level, Some(39));
