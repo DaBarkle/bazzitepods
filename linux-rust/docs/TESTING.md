@@ -23,9 +23,14 @@ Uninstall: append `--uninstall` instead of the file path.
 2. Click the tray icon. The window shows Left, Right and Case. Put one pod in the case: that
    pod shows charging and the case shows a value; take both out: the case keeps its last
    value marked "last seen".
-3. Settings → Overlay → Preview: a pill appears top-right over everything for ~4 s and vanishes.
-4. Start a fullscreen game (Steam, desktop mode). Take a pod out and back in: the pill should
-   appear briefly over the game and disappear. It must never take mouse clicks or keyboard focus.
+3. Settings → Overlay → Preview: the island opens into its card at the chosen position over
+   everything for ~4 s, then folds away (Compact: folds into the slim island).
+4. Start a fullscreen game (Steam, desktop mode). Take a pod out and back in: the island
+   should open over the game and fold back. It must never take mouse clicks or keyboard focus.
+5. Change the noise control mode (press and hold a stem, or use the window): a short
+   *Noise Cancellation* / *Transparency* alert appears. Put the case on a charger: *Case
+   charging* with a green ring.
+6. With the island at rest, `top -p $(pgrep -f librepods-overlay)` shows 0.0% CPU.
 
 ## 3. The walk-away bug
 

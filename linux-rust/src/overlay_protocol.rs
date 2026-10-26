@@ -15,13 +15,13 @@ use serde::{Deserialize, Serialize};
 /// retrying and the app falls back to desktop notifications.
 pub const EXIT_UNSUPPORTED: i32 = 3;
 
-/// Where on the screen the pill sits.
+/// Where on the screen the island sits. Top center is where the Dynamic Island lives.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum OverlayPosition {
     TopLeft,
-    TopCenter,
     #[default]
+    TopCenter,
     TopRight,
     BottomLeft,
     BottomCenter,
@@ -67,12 +67,44 @@ pub struct OverlayConfig {
 impl Default for OverlayConfig {
     fn default() -> Self {
         Self {
-            position: OverlayPosition::TopRight,
-            margin: 16,
+            position: OverlayPosition::TopCenter,
+            margin: 12,
             auto_hide_secs: 4.0,
             mode: OverlayMode::Auto,
             opacity: 1.0,
             glass: 0.7,
+        }
+    }
+}
+
+/// The AirPods' noise control mode, for models that have one.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ListeningMode {
+    Off,
+    NoiseCancellation,
+    Transparency,
+    Adaptive,
+}
+
+impl ListeningMode {
+    /// The AACP listening mode byte (0x01 off, 0x02 ANC, 0x03 transparency, 0x04 adaptive).
+    pub fn from_byte(b: u8) -> Option<Self> {
+        Some(match b {
+            0x01 => Self::Off,
+            0x02 => Self::NoiseCancellation,
+            0x03 => Self::Transparency,
+            0x04 => Self::Adaptive,
+            _ => return None,
+        })
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Noise Control Off",
+            Self::NoiseCancellation => "Noise Cancellation",
+            Self::Transparency => "Transparency",
+            Self::Adaptive => "Adaptive Audio",
         }
     }
 }
@@ -111,6 +143,9 @@ pub struct OverlayState {
     /// The name of the device that has the audio while `elsewhere`, e.g. "iPhone".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub elsewhere_name: Option<String>,
+    /// Noise control mode, for models with one. A change pops a short alert.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub listening_mode: Option<ListeningMode>,
 }
 
 /// One line of the protocol.
@@ -160,7 +195,7 @@ mod tests {
     #[test]
     fn parses_architecture_examples() {
         let c = OverlayCommand::parse_line(
-            r#"{"type":"config","position":"top-right","margin":16,"auto_hide_secs":4,"mode":"auto"}"#,
+            r#"{"type":"config","position":"top-center","margin":12,"auto_hide_secs":4,"mode":"auto"}"#,
         )
         .unwrap()
         .unwrap();
@@ -234,6 +269,29 @@ mod tests {
     }
 
     #[test]
+    fn listening_modes() {
+        assert_eq!(
+            ListeningMode::from_byte(0x02),
+            Some(ListeningMode::NoiseCancellation)
+        );
+        assert_eq!(
+            ListeningMode::from_byte(0x04),
+            Some(ListeningMode::Adaptive)
+        );
+        assert_eq!(ListeningMode::from_byte(0x09), None);
+        let c = OverlayCommand::parse_line(
+            r#"{"type":"state","state":{"connected":true,"listening_mode":"transparency"}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let OverlayCommand::State { state } = c else {
+            panic!()
+        };
+        assert_eq!(state.listening_mode, Some(ListeningMode::Transparency));
+        assert_eq!(ListeningMode::Transparency.label(), "Transparency");
+    }
+
+    #[test]
     fn roundtrip() {
         let cmds = [
             OverlayCommand::Config(OverlayConfig::default()),
@@ -247,6 +305,13 @@ mod tests {
                         present: true,
                         ..Default::default()
                     }),
+                    ..Default::default()
+                },
+            },
+            OverlayCommand::State {
+                state: OverlayState {
+                    connected: true,
+                    listening_mode: Some(ListeningMode::Adaptive),
                     ..Default::default()
                 },
             },

@@ -1,5 +1,6 @@
-//! `librepods-overlay`: a tiny, click-through battery pill drawn on its own
-//! wlr-layer-shell surface (Layer::Overlay, above fullscreen windows on KWin).
+//! `librepods-overlay`: a click-through battery island, in the manner of the iPhone's
+//! Dynamic Island, drawn on its own wlr-layer-shell surface (Layer::Overlay, above
+//! fullscreen windows on KWin).
 //!
 //! Anti-cheat safety: this is an ordinary Wayland client. It never touches,
 //! inspects or injects into other processes; it only draws its own surface.
@@ -9,17 +10,25 @@
 //! 1 runtime error, 3 no layer-shell / no Wayland display.
 //!
 //! While hidden the layer surface is destroyed (not just made transparent), so
-//! nothing sits over a fullscreen game and direct scanout keeps working.
+//! nothing sits over a fullscreen game and direct scanout keeps working. While shown
+//! it redraws only during a transition, paced by the compositor's frame callbacks, and
+//! otherwise sleeps until the next thing it has to do (no polling).
 
 #[path = "../overlay_protocol.rs"]
 mod overlay_protocol;
 
 #[path = "librepods-overlay/demo.rs"]
 mod demo;
+#[path = "librepods-overlay/glyphs.rs"]
+mod glyphs;
+#[path = "librepods-overlay/island.rs"]
+mod island;
 #[path = "librepods-overlay/logic.rs"]
 mod logic;
 #[path = "librepods-overlay/probe.rs"]
 mod probe;
+#[path = "librepods-overlay/spring.rs"]
+mod spring;
 #[path = "librepods-overlay/view.rs"]
 mod view;
 
@@ -52,6 +61,8 @@ struct Args {
     demo_auto: bool,
     demo_compact: bool,
     demo_step: Option<usize>,
+    story: bool,
+    mode: Option<OverlayMode>,
     position: Option<OverlayPosition>,
 }
 
@@ -61,7 +72,9 @@ fn usage() -> &'static str {
        --demo              cycle through sample states (always visible)\n  \
        --demo-auto         like --demo, but in auto mode (pops up, then unmaps)\n  \
        --demo-compact      like --demo, but in compact mode (expands on changes)\n  \
-       --step N            with --demo: show only sample N (0-6)\n  \
+       --step N            with --demo: show only sample N (0-7)\n  \
+       --demo-story        play a scripted tour of every island state (for recordings)\n  \
+       --mode M            with --demo-story: auto|compact|always (default compact)\n  \
        --position P        top-left|top-center|top-right|bottom-left|bottom-center|bottom-right\n  \
        --probe             check for layer-shell support and exit (0 or 3)\n"
 }
@@ -72,6 +85,8 @@ enum Message {
     Cmd(OverlayCommand),
     StdinClosed,
     Tick(Instant),
+    /// A scheduled deadline arrived.
+    Wake(Instant),
     DemoStep,
     WindowClosed(Id),
 }
@@ -79,10 +94,14 @@ enum Message {
 struct Overlay {
     ctl: Controller,
     window: Option<Id>,
-    /// Surface size of the current window, to resize when the layout changes.
+    /// Surface size of the current window.
     size: (u32, u32),
     demo: Option<DemoState>,
     last_lost: Option<Instant>,
+    /// The deadline a wake-up is already scheduled for.
+    wake_at: Option<Instant>,
+    /// Playing `--demo-story`: stdin is not the protocol.
+    story: bool,
 }
 
 struct DemoState {
@@ -132,12 +151,22 @@ impl Overlay {
         let mut me = Self {
             ctl: Controller::new(cfg),
             window: None,
-            size: view::surface_size(None),
+            size: (0, 0),
             demo,
             last_lost: None,
+            wake_at: None,
+            story: args.story,
         };
         let task = if me.demo.is_some() {
             me.demo_apply()
+        } else if args.story {
+            me.ctl.config.mode = args.mode.unwrap_or(OverlayMode::Compact);
+            Task::batch(demo::story().into_iter().map(|(secs, cmd)| {
+                Task::perform(
+                    tokio::time::sleep(Duration::from_secs_f32(secs)),
+                    move |_| Message::Cmd(cmd.clone()),
+                )
+            }))
         } else {
             Task::none()
         };
@@ -181,29 +210,48 @@ impl Overlay {
         }
     }
 
-    /// Advances the controller and maps/unmaps the layer surface as needed.
+    /// Advances the controller, maps/unmaps the layer surface, and schedules the next
+    /// wake-up.
     fn sync(&mut self, now: Instant) -> Task<Message> {
+        let mut tasks = vec![];
         match self.ctl.tick(now) {
             SurfaceAction::Map => {
-                self.size = view::surface_size(self.ctl.display_state(now).as_ref());
+                self.size = view::surface_size(self.ctl.extent());
                 let id = Id::unique();
                 self.window = Some(id);
                 debug!("mapping layer surface {id:?}");
-                Task::done(Message::NewLayerShell {
+                tasks.push(Task::done(Message::NewLayerShell {
                     settings: self.layer_settings(),
                     id,
-                })
+                }));
             }
-            SurfaceAction::Unmap => match self.window.take() {
+            SurfaceAction::Unmap => {
                 // Destroys the zwlr_layer_surface_v1 and wl_surface; with no
                 // windows left iced_layershell also drops its renderer.
-                Some(id) => {
+                if let Some(id) = self.window.take() {
                     debug!("unmapping layer surface {id:?}");
-                    iced::window::close(id)
+                    tasks.push(iced::window::close(id));
                 }
-                None => Task::none(),
-            },
-            SurfaceAction::None => Task::none(),
+            }
+            SurfaceAction::None => {}
+        }
+        tasks.push(self.schedule_wake(now));
+        Task::batch(tasks)
+    }
+
+    /// One timer for the next deadline (a pop-up ending), instead of polling.
+    fn schedule_wake(&mut self, now: Instant) -> Task<Message> {
+        let next = self.ctl.next_deadline().filter(|t| *t > now);
+        if next == self.wake_at {
+            return Task::none();
+        }
+        self.wake_at = next;
+        match next {
+            Some(at) => Task::perform(
+                tokio::time::sleep_until(tokio::time::Instant::from_std(at)),
+                move |_| Message::Wake(at),
+            ),
+            None => Task::none(),
         }
     }
 
@@ -212,7 +260,7 @@ impl Overlay {
         match message {
             Message::Cmd(OverlayCommand::Quit) => iced::exit(),
             Message::StdinClosed => {
-                if self.demo.is_some() {
+                if self.demo.is_some() || self.story {
                     Task::none()
                 } else {
                     info!("stdin closed, exiting");
@@ -237,16 +285,17 @@ impl Overlay {
                             margin: margin_for(cfg),
                         }));
                     }
-                    let size = view::surface_size(self.ctl.display_state(now).as_ref());
-                    if size != self.size {
-                        self.size = size;
-                        tasks.push(Task::done(Message::SizeChange { id, size }));
-                    }
                 }
                 tasks.push(self.sync(now));
                 Task::batch(tasks)
             }
             Message::Tick(at) => self.sync(at.max(now)),
+            Message::Wake(at) => {
+                if self.wake_at == Some(at) {
+                    self.wake_at = None;
+                }
+                self.sync(now)
+            }
             Message::DemoStep => {
                 if let Some(d) = &mut self.demo {
                     d.step = d.step.wrapping_add(1);
@@ -276,17 +325,12 @@ impl Overlay {
 
     fn view(&self, _id: Id) -> Element<'_, Message> {
         let now = Instant::now();
-        let Some(state) = self.ctl.display_state(now) else {
+        if self.ctl.display_state(now).is_none() {
             return iced::widget::Space::new().into();
-        };
-        canvas(view::Pill {
-            state,
-            route_label: self.ctl.route_label(now),
-            visual: self.ctl.visual(),
-            expand: self.ctl.expansion(),
-            opacity: self.ctl.effective_opacity(),
-            glass: self.ctl.config.glass,
-            position: self.ctl.config.position,
+        }
+        canvas(view::Island {
+            ctl: &self.ctl,
+            now,
         })
         .width(Length::Fill)
         .height(Length::Fill)
@@ -296,13 +340,17 @@ impl Overlay {
     fn subscription(&self) -> Subscription<Message> {
         let now = Instant::now();
         let mut subs = vec![iced::window::close_events().map(Message::WindowClosed)];
-        if self.demo.is_none() {
+        if self.demo.is_none() && !self.story {
             subs.push(Subscription::run(stdin_stream));
         }
         if self.ctl.is_animating(now) {
-            subs.push(iced::time::every(Duration::from_millis(16)).map(Message::Tick));
-        } else if self.ctl.has_deadline() {
-            subs.push(iced::time::every(Duration::from_millis(200)).map(Message::Tick));
+            // Paced by the compositor: one step per displayed frame, at the monitor's
+            // refresh rate, and none while nothing moves. The slow timer only keeps a
+            // transition going if frame callbacks stall (e.g. the output turned off).
+            if self.window.is_some() {
+                subs.push(iced::window::frames().map(Message::Tick));
+            }
+            subs.push(iced::time::every(Duration::from_millis(100)).map(Message::Tick));
         }
         if let Some(d) = &self.demo
             && !d.fixed
@@ -370,6 +418,13 @@ fn parse_args() -> Result<(Args, bool), String> {
             "--demo-compact" => {
                 args.demo = true;
                 args.demo_compact = true;
+            }
+            "--demo-story" => args.story = true,
+            "--mode" => {
+                let m = it.next().ok_or("--mode needs a value")?;
+                let m: OverlayMode = serde_json::from_value(serde_json::Value::String(m))
+                    .map_err(|_| "bad --mode value".to_string())?;
+                args.mode = Some(m);
             }
             "--step" => {
                 let n = it
