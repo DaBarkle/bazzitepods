@@ -89,7 +89,7 @@ pub enum ControlCommandIdentifiers {
 }
 
 impl ControlCommandIdentifiers {
-    fn from_u8(value: u8) -> Option<Self> {
+    pub fn from_u8(value: u8) -> Option<Self> {
         match value {
             0x01 => Some(Self::MicMode),
             0x05 => Some(Self::ButtonSendMode),

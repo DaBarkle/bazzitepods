@@ -3,13 +3,13 @@
 //! Rules: `view` and `update` never block, never touch the disk, never panic. Device commands go
 //! through `active_commands` from an async task; settings are written by a background task.
 
-use crate::bluetooth::aacp::{AACPEvent, ControlCommandIdentifiers};
+use crate::bluetooth::aacp::ControlCommandIdentifiers;
 use crate::bluetooth::att::ATTHandles;
 use crate::bluetooth::managers::DeviceManagers;
 use crate::devices::airpods::CommandSender;
 use crate::devices::enums::{DeviceData, DeviceInformation};
 use crate::hub::{AdapterState, AppSnapshot, DeviceSnapshot, Hub};
-use crate::ui::format::{self, Gauge, ListeningMode, PillTone};
+use crate::ui::format::{self, DeviceSetting, Gauge, ListeningMode, PillTone};
 use crate::ui::messages::BluetoothUIMessage;
 use crate::ui::settings::{
     Appearance, OVERLAY_POSITIONS, OverlayMode, OverlayPosition, Settings, SettingsStore,
@@ -149,7 +149,8 @@ pub enum Message {
     SetMode(ListeningMode),
     SetConversation(bool),
     SetAllowOff(bool),
-    SetAdaptiveVolume(bool),
+    /// An AirPods setting: (AACP control command identifier, value byte).
+    SetControl(u8, u8),
     SetOverlayMode(OverlayMode),
     PreviewOverlay,
     SetOverlayPosition(OverlayPosition),
@@ -243,7 +244,6 @@ pub struct App {
     pending_ca: Option<(bool, Instant)>,
     /// "Use on this PC" was pressed; shows "Switching…" until the AirPods answer.
     taking_audio: Option<Instant>,
-    adaptive_volume: HashMap<String, bool>,
     rename: String,
     /// Bluetooth adapter reports Apple's vendor id (DeviceID spoofing); None = unknown.
     apple_mode: Option<bool>,
@@ -293,7 +293,6 @@ impl App {
             pending_mode: None,
             pending_ca: None,
             taking_audio: None,
-            adaptive_volume: HashMap::new(),
             rename: String::new(),
             apple_mode: demo.then_some(false),
             apple_copied: false,
@@ -379,7 +378,9 @@ impl App {
             }
             ControlCommandIdentifiers::AllowOffOption => d.allow_off_mode = Some(value == 0x01),
             ControlCommandIdentifiers::OwnsConnection => d.owns_audio = Some(value == 0x01),
-            _ => {}
+            other => {
+                d.controls.insert(other as u8, value);
+            }
         });
     }
 
@@ -485,15 +486,10 @@ impl App {
                 ControlCommandIdentifiers::AllowOffOption,
                 if on { 0x01 } else { 0x02 },
             ),
-            Message::SetAdaptiveVolume(on) => {
-                if let Some(mac) = self.primary().map(|d| d.mac.clone()) {
-                    self.adaptive_volume.insert(mac, on);
-                }
-                self.send(
-                    ControlCommandIdentifiers::AdaptiveVolumeConfig,
-                    if on { 0x01 } else { 0x02 },
-                )
-            }
+            Message::SetControl(id, value) => match ControlCommandIdentifiers::from_u8(id) {
+                Some(id) => self.send(id, value),
+                None => Task::none(),
+            },
             Message::SetOverlayMode(m) => self.save_overlay(|s| s.overlay_mode = m),
             Message::SetOverlayPosition(p) => self.save_overlay(|s| s.overlay_position = p),
             Message::SetOverlayOpacity(v) => {
@@ -667,14 +663,6 @@ impl App {
             }
             BluetoothUIMessage::DeviceDisconnected(mac) => {
                 self.nothing.remove(&mac);
-                Task::none()
-            }
-            BluetoothUIMessage::AACPUIEvent(mac, AACPEvent::ControlCommand(status))
-                if status.identifier == ControlCommandIdentifiers::AdaptiveVolumeConfig =>
-            {
-                if let Some(&b) = status.value.first() {
-                    self.adaptive_volume.insert(mac, b == 0x01);
-                }
                 Task::none()
             }
             _ => Task::none(),
@@ -1128,15 +1116,8 @@ impl App {
                     ),
                 ));
             }
-            if info.has_adaptive_volume {
-                col = col.push(divider()).push(setting_row(
-                    "Personalized volume",
-                    Some("Adjusts volume to your surroundings"),
-                    switch(
-                        self.adaptive_volume.get(&d.mac).copied().unwrap_or(false),
-                        enabled.then_some(Message::SetAdaptiveVolume as fn(bool) -> Message),
-                    ),
-                ));
+            for setting in format::device_settings(d) {
+                col = col.push(divider()).push(device_setting(setting, enabled));
             }
 
             let can_rename = enabled && !self.rename.trim().is_empty();
@@ -1381,6 +1362,46 @@ fn setting_row<'a>(
         .spacing(12)
         .align_y(Center)
         .into()
+}
+
+/// One of the AirPods' own settings (see [`format::device_settings`]).
+fn device_setting<'a>(setting: DeviceSetting, enabled: bool) -> Element<'a, Message> {
+    match setting {
+        DeviceSetting::Toggle {
+            id,
+            title,
+            caption,
+            on,
+        } => setting_row(
+            title,
+            Some(caption),
+            toggler(on)
+                .on_toggle_maybe(
+                    enabled.then_some(move |v| Message::SetControl(id, format::toggle_byte(v))),
+                )
+                .size(22)
+                .spacing(0)
+                .style(style::toggle)
+                .into(),
+        ),
+        DeviceSetting::Choice {
+            id,
+            title,
+            caption,
+            options,
+            selected,
+        } => {
+            let options: Vec<(&str, (u8, u8))> =
+                options.iter().map(|&(label, v)| (label, (id, v))).collect();
+            setting_block(
+                title,
+                Some(caption),
+                segmented_wide(&options, (id, selected), enabled, |(id, v)| {
+                    Message::SetControl(id, v)
+                }),
+            )
+        }
+    }
 }
 
 fn switch<'a>(on: bool, msg: Option<fn(bool) -> Message>) -> Element<'a, Message> {
