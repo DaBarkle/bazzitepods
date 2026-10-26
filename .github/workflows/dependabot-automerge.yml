@@ -1,12 +1,17 @@
 # Merges Dependabot security updates for the BazzitePods app by itself, but only
 # when they are safe to take without a human look:
 #   * the PR was opened by Dependabot,
-#   * it updates a Rust crate (Cargo) under linux-rust/,
-#   * it is a patch or minor version bump (major bumps can break things),
+#   * it only touches the Rust (Cargo) dependency files under linux-rust/,
+#   * every crate version it changes is a semver-compatible bump (no major bumps,
+#     which for 0.x crates means no 0.x -> 0.y), and it adds no new crates,
 #   * the Flatpak build for that exact commit passed, and
 #   * the test suite for that exact commit passed (tests.yml, "Run tests").
-# Everything else (major bumps, non-Cargo updates, failed builds or tests) is left open
-# for the daily Dependabot check and for David.
+# Everything else (major bumps, new crates, non-Cargo updates, failed builds or
+# tests) is left open for the daily Dependabot check and for David.
+#
+# The bump size is read from Cargo.lock itself rather than from Dependabot's
+# metadata, because grouped security updates (the only kind enabled here) report
+# no update type.
 #
 # Note: a Cargo.lock bump also needs flatpak/cargo-sources.json regenerated, or the
 # offline Flatpak build fails. When the daily check pushes that fix, this workflow
@@ -32,29 +37,64 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - name: Read Dependabot metadata
-        id: meta
-        uses: dependabot/fetch-metadata@v2
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Decide whether this update can merge by itself
         id: eligible
         env:
-          ECOSYSTEM: ${{ steps.meta.outputs.package-ecosystem }}
-          DIRECTORY: ${{ steps.meta.outputs.directory }}
-          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: python
         run: |
-          echo "ecosystem=$ECOSYSTEM directory=$DIRECTORY update-type=$UPDATE_TYPE"
-          if [ "$ECOSYSTEM" = "cargo" ] \
-             && [ "${DIRECTORY%/}" = "/linux-rust" ] \
-             && { [ "$UPDATE_TYPE" = "version-update:semver-patch" ] \
-                  || [ "$UPDATE_TYPE" = "version-update:semver-minor" ]; }; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "Not a patch/minor Cargo update for linux-rust; leaving it for review."
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-          fi
+          import json, os, subprocess, sys, tomllib
+
+          def gh(*args):
+              return subprocess.run(["gh", "api", *args], check=True,
+                                    capture_output=True, text=True).stdout
+
+          def decide(ok, why):
+              print(why)
+              with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+                  out.write(f"ok={'true' if ok else 'false'}\n")
+              sys.exit(0)
+
+          repo, pr = os.environ["REPO"], os.environ["PR"]
+          files = json.loads(gh("--paginate", "--slurp", f"repos/{repo}/pulls/{pr}/files"))
+          names = {f["filename"] for page in files for f in page}
+          allowed = {"linux-rust/Cargo.lock", "linux-rust/Cargo.toml",
+                     "linux-rust/flatpak/cargo-sources.json"}
+          print("Changed files:", ", ".join(sorted(names)))
+          if "linux-rust/Cargo.lock" not in names or not names <= allowed:
+              decide(False, "Not a linux-rust Cargo update; leaving it for review.")
+
+          def lock(sha):
+              raw = gh("-H", "Accept: application/vnd.github.raw",
+                       f"repos/{repo}/contents/linux-rust/Cargo.lock?ref={sha}")
+              versions = {}
+              for p in tomllib.loads(raw).get("package", []):
+                  versions.setdefault(p["name"], set()).add(p["version"])
+              return versions
+
+          def compat(version):
+              # Cargo's semver rule: 1.2.3 ~ 1.x, 0.2.3 ~ 0.2.x, 0.0.3 only itself.
+              major, minor, patch = (version.split("+")[0].split("-")[0].split(".") + ["0", "0"])[:3]
+              if major != "0":
+                  return (major,)
+              if minor != "0":
+                  return ("0", minor)
+              return ("0", "0", patch)
+
+          base, head = lock(os.environ["BASE_SHA"]), lock(os.environ["HEAD_SHA"])
+          for name, new in sorted(head.items()):
+              old = base.get(name, set())
+              for version in sorted(new - old):
+                  if not old:
+                      decide(False, f"Adds a new crate {name} {version}; leaving it for review.")
+                  if compat(version) not in {compat(v) for v in old}:
+                      decide(False, f"{name} {sorted(old)} -> {version} is a major bump; leaving it for review.")
+                  print(f"{name}: {sorted(old)} -> {version} (compatible)")
+          decide(True, "Only semver-compatible bumps; waiting for the Flatpak build and tests.")
 
       - name: Wait for the Flatpak build and the tests of this commit
         id: build
