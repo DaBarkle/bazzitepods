@@ -75,6 +75,8 @@ struct Segment<'a> {
 
 pub struct Pill {
     pub state: OverlayState,
+    /// Replaces the device name while the audio is away or has just come back.
+    pub route_label: Option<String>,
     /// Eased 0..1 appearance (opacity, slide, scale).
     pub visual: f32,
     /// Eased 0..1 morph: 0 = compact widget, 1 = full pill.
@@ -343,8 +345,8 @@ impl Pill {
             );
         }
         let name_x = INSET + 28.0;
-        let name = if self.state.elsewhere {
-            "On another device".to_string()
+        let name = if let Some(label) = &self.route_label {
+            truncate(label, w - name_x - INSET, 14.0)
         } else if self.state.name.trim().is_empty() {
             "AirPods".to_string()
         } else {

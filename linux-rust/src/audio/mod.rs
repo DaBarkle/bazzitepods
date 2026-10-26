@@ -112,6 +112,18 @@ impl AudioGuardHandle {
         self.send(Cmd::RouteBack);
     }
 
+    /// Like [`Self::route_back`], and rebuild the output right away: use it when the device
+    /// that had the audio was streaming, which breaks this PC's transport.
+    pub fn repair(&self) {
+        self.send(Cmd::Repair);
+    }
+
+    /// Another device is playing on the AirPods: its output here goes dead, so stop
+    /// treating that as a stall until [`Self::route_back`] or [`Self::repair`].
+    pub fn route_away(&self) {
+        self.send(Cmd::Away);
+    }
+
     pub fn health(&self) -> watch::Receiver<AudioHealth> {
         self.health_rx.clone()
     }

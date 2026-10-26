@@ -58,6 +58,8 @@ pub struct DeviceSnapshot {
     pub owns_audio: Option<bool>,
     /// Other devices currently connected to the AirPods besides this PC.
     pub other_devices: usize,
+    /// The name of the device that has the audio when `owns_audio` is `Some(false)`.
+    pub elsewhere_name: Option<String>,
 }
 
 impl DeviceSnapshot {
@@ -77,6 +79,7 @@ impl DeviceSnapshot {
             last_seen: Some(SystemTime::now()),
             owns_audio: None,
             other_devices: 0,
+            elsewhere_name: None,
         }
     }
 
@@ -157,6 +160,7 @@ impl Hub {
                     // Routing state belongs to the session that just ended.
                     d.owns_audio = None;
                     d.other_devices = 0;
+                    d.elsewhere_name = None;
                 }
                 d.link = link;
                 d.last_seen = Some(SystemTime::now());

@@ -158,6 +158,10 @@ pub fn to_overlay_state(snap: &AppSnapshot) -> Option<OverlayState> {
             None
         },
         elsewhere: d.in_use_elsewhere(),
+        elsewhere_name: d
+            .in_use_elsewhere()
+            .then(|| d.elsewhere_name.clone())
+            .flatten(),
     })
 }
 

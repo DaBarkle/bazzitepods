@@ -51,6 +51,9 @@ pub struct GuardConfig {
     pub retry_after_failure: Duration,
     /// Maximum setup attempts per link session (wearing/resume resets it).
     pub max_ensure_attempts: u8,
+    /// After the link comes up, the output was just built: a take-back this soon doesn't
+    /// rebuild it again (a stall is still repaired).
+    pub fresh_link: Duration,
 }
 
 impl Default for GuardConfig {
@@ -69,6 +72,7 @@ impl Default for GuardConfig {
             max_ladders_per_link: 3,
             retry_after_failure: Duration::from_secs(30),
             max_ensure_attempts: 3,
+            fresh_link: Duration::from_secs(10),
         }
     }
 }
@@ -80,6 +84,13 @@ pub(crate) enum Cmd {
     Wearing(bool),
     Resume,
     RouteBack,
+    /// The audio came back from a device that streamed while it had the route: the
+    /// AirPods broke this PC's transport, so rebuild the output now instead of waiting
+    /// for playback to stall on it.
+    Repair,
+    /// Another device is playing on the AirPods. This PC's output is dead until they come
+    /// back, and that is expected: rebuilding it then would take the AirPods back.
+    Away,
     Shutdown,
 }
 
@@ -91,6 +102,15 @@ pub(crate) enum Cmd {
 const FAST_WINDOW: Duration = Duration::from_secs(10);
 /// Stall threshold inside that window.
 const FAST_STALL: Duration = Duration::from_millis(800);
+/// Minimum time between forced output rebuilds on take-back.
+/// After a rebuild, how long to keep the speakers muted while WirePlumber moves the
+/// streams back onto the AirPods.
+const UNHUSH_WAIT: Duration = Duration::from_secs(2);
+const UNHUSH_MARGIN: Duration = Duration::from_millis(250);
+/// Two take-backs this close together share one rebuild. Bouncing between devices is
+/// prevented where it starts (devices/airpods.rs), so this only merges duplicates: a
+/// longer limit left the AirPods silent after a quick switch back.
+const REPAIR_COOLDOWN: Duration = Duration::from_secs(3);
 
 const PREFERRED_A2DP: [&str; 4] = [
     "a2dp-sink-aac",
@@ -277,6 +297,14 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     /// Until then, a stall is acted on almost at once: the audio route just came back
     /// from another device, and its transport was probably broken while it was away.
     fast_until: Option<Instant>,
+    /// Rebuild the output at the next monitor pass, stall or not.
+    repair_pending: bool,
+    last_repair: Option<Instant>,
+    linked_at: Option<Instant>,
+    /// Another device has the AirPods: leave the dead output alone until they come back.
+    away: bool,
+    /// Other outputs muted while ours is rebuilt, so nothing plays on the speakers.
+    hushed: Vec<u32>,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -310,6 +338,11 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             we_were_default: was_default(&mac.to_string().to_uppercase()),
             wearing: false,
             fast_until: None,
+            repair_pending: false,
+            last_repair: None,
+            linked_at: None,
+            away: false,
+            hushed: Vec::new(),
         }
     }
 
@@ -354,6 +387,8 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         debug!("[audio {}] command {:?}", self.mac_str, cmd);
         match cmd {
             Cmd::LinkUp => {
+                self.away = false;
+                self.linked_at = Some(now);
                 self.linked = true;
                 self.restart = self.busy;
                 self.ready = false;
@@ -365,6 +400,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 self.set_health(AudioHealth::Negotiating);
             }
             Cmd::LinkDown => {
+                self.away = false;
                 self.linked = false;
                 self.ready = false;
                 self.ensure_at = None;
@@ -396,6 +432,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 }
             }
             Cmd::RouteBack => {
+                self.away = false;
                 if self.linked {
                     // An explicit take-back: check right away, act on a stall within about
                     // a second, and don't let earlier recoveries rate-limit this one.
@@ -410,6 +447,29 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                         self.ensure_at = Some(now + self.cfg.poll);
                     }
                 }
+            }
+            Cmd::Repair => {
+                if self.linked {
+                    self.on_cmd(Cmd::RouteBack);
+                    let fresh = self
+                        .linked_at
+                        .is_some_and(|t| now - t < self.cfg.fresh_link);
+                    if !fresh && self.last_repair.is_none_or(|t| now - t >= REPAIR_COOLDOWN) {
+                        self.last_repair = Some(now);
+                        self.repair_pending = true;
+                    }
+                }
+            }
+            Cmd::Away => {
+                if !self.away {
+                    info!(
+                        "[audio {}] another device is playing on the AirPods; pausing stall checks",
+                        self.mac_str
+                    );
+                }
+                self.away = true;
+                self.stall_since = None;
+                self.repair_pending = false;
             }
             Cmd::Shutdown => self.shutdown = true,
         }
@@ -737,6 +797,63 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             .collect()
     }
 
+    /// Mutes the other hardware outputs (speakers, HDMI) for a rebuild: while ours is
+    /// gone, WirePlumber parks every stream on one of them. Outputs stay put while the
+    /// streams get re-created, so unmuting them afterwards is reliable, and no app's own
+    /// saved mute state is touched. Outputs already muted are left alone.
+    async fn hush(&mut self) {
+        let Ok(snap) = self.pulse.snapshot().await else {
+            return;
+        };
+        for sink in snap.sinks.iter().filter(|s| {
+            s.card.is_some() && s.mac.as_deref() != Some(self.mac_str.as_str()) && !s.muted
+        }) {
+            match self.pulse.set_sink_mute(sink.index, true).await {
+                Ok(()) => self.hushed.push(sink.index),
+                Err(e) => debug!(
+                    "[audio {}] mute output {} failed: {}",
+                    self.mac_str, sink.name, e
+                ),
+            }
+        }
+    }
+
+    /// Unmutes what [`Self::hush`] muted, once nothing plays on those outputs any more:
+    /// WirePlumber moves the streams back a moment after the new output appears, and
+    /// unmuting before that lets the tail end play on the speakers.
+    async fn unhush(&mut self) {
+        if self.hushed.is_empty() {
+            return;
+        }
+        let deadline = Instant::now() + UNHUSH_WAIT;
+        loop {
+            let busy = match self.pulse.snapshot().await {
+                Ok(snap) => snap
+                    .sinks
+                    .iter()
+                    .any(|s| self.hushed.contains(&s.index) && s.state == SinkState::Running),
+                Err(_) => false,
+            };
+            if !busy {
+                // A little longer for the last buffered audio on its way out.
+                sleep(UNHUSH_MARGIN).await;
+                break;
+            }
+            if Instant::now() >= deadline {
+                break;
+            }
+            sleep(self.cfg.poll).await;
+        }
+        for sink in std::mem::take(&mut self.hushed) {
+            if let Err(e) = self.pulse.set_sink_mute(sink, false).await {
+                debug!(
+                    "[audio {}] unmute output {} failed: {}",
+                    self.mac_str, sink, e
+                );
+            }
+        }
+    }
+
     /// A profile toggle recreates the sink and WirePlumber parks streams on the fallback
     /// (speakers). Move them back, and restore the default if it was ours.
     async fn restore_streams(&mut self, streams: &[u32]) {
@@ -823,6 +940,14 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             self.lose_ready(now);
             return;
         }
+        if std::mem::take(&mut self.repair_pending) && is_a2dp(&active) {
+            info!(
+                "[audio {}] audio came back from another device, rebuilding the output",
+                self.mac_str
+            );
+            self.maybe_run_ladder().await;
+            return;
+        }
         let Some(sink) = snap.sink_for_card(card).cloned() else {
             self.stall_since = None;
             return;
@@ -834,7 +959,8 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             profile: active.clone(),
         };
 
-        if !is_a2dp(&active)
+        if self.away
+            || !is_a2dp(&active)
             || sink.state != SinkState::Running
             || snap.uncorked_inputs_on(sink.index) == 0
         {
@@ -915,6 +1041,9 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         );
         let result = self.run_ladder().await;
         self.ensure_not_off().await;
+        self.unhush().await;
+        // A take-back reported right after this rebuild needs no second one.
+        self.last_repair = Some(Instant::now());
         match result {
             Ok(Some(step)) => {
                 info!("[audio {}] recovered at step {}", self.mac_str, step);
@@ -959,19 +1088,25 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         // Step 1: toggle off -> same A2DP profile. Done back-to-back without
         // interruption checks so we can never stop in between.
         self.set_health(AudioHealth::Recovering { step: 1 });
-        let mut order = vec![current.clone()];
-        order.extend(candidates.iter().filter(|c| **c != current).cloned());
+        // Best codec first (AAC), so a recovery never settles for SBC when AAC is offered
+        // just because an earlier attempt fell back to it.
+        let mut order = candidates.clone();
+        if !current.is_empty() && !order.contains(&current) {
+            order.push(current.clone());
+        }
         order.retain(|p| !p.is_empty());
         if order.is_empty() {
             // Never toggle to "off" without a profile to come back to.
             return Err(Abort::Failed("the device offers no A2DP profile".into()));
         }
+        self.hush().await;
         if let Err(e) = self.pulse.set_card_profile(card.index, "off").await {
             warn!("[audio {}] toggle to off failed: {}", self.mac_str, e);
         }
         sleep(self.cfg.toggle_gap).await;
         let step1 = self.apply_profile(&order).await;
         self.restore_streams(&streams).await;
+        self.unhush().await;
         self.check_interrupt()?;
         if step1.is_ok() && self.stall_resolved().await {
             return Ok(Some(1));

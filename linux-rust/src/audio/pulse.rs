@@ -58,6 +58,7 @@ pub struct SinkInfo {
     pub state: SinkState,
     /// `api.bluez5.codec` as published by PipeWire, if any.
     pub codec: Option<String>,
+    pub muted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -67,6 +68,8 @@ pub struct SinkInputInfo {
     pub corked: bool,
     /// `application.name` of the stream's client, if published.
     pub app: Option<String>,
+    /// `media.role`, e.g. "music", "event" (notification sounds), "phone".
+    pub role: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -132,13 +135,19 @@ impl PulseSnapshot {
             .count()
     }
 
-    /// Streams that are playing right now, leaving out background streams that never stop
-    /// (EasyEffects re-plays every app through its own stream; Discord keeps idle WebRTC
-    /// voice streams open) so only real players count.
+    /// Streams that are playing right now, leaving out system sounds and background
+    /// streams that never stop (EasyEffects re-plays every app through its own stream;
+    /// Discord keeps WebRTC voice streams open), so only real players count.
     pub fn playing_streams(&self) -> Vec<u32> {
         self.sink_inputs
             .iter()
             .filter(|i| !i.corked && !i.app.as_deref().is_some_and(is_background_app))
+            // Notification and other system sounds never mean "the user pressed play".
+            .filter(|i| {
+                !i.role
+                    .as_deref()
+                    .is_some_and(|r| r == "event" || r == "notification")
+            })
             .map(|i| i.index)
             .collect()
     }
@@ -189,6 +198,11 @@ pub trait PulseApi: Send + Sync + 'static {
         input_index: u32,
         sink_index: u32,
     ) -> impl Future<Output = Result<(), PulseError>> + Send;
+    fn set_sink_mute(
+        &self,
+        sink_index: u32,
+        mute: bool,
+    ) -> impl Future<Output = Result<(), PulseError>> + Send;
 }
 
 /// Real backend.
@@ -221,6 +235,10 @@ impl PulseApi for LibPulse {
     async fn move_sink_input(&self, input_index: u32, sink_index: u32) -> Result<(), PulseError> {
         blocking(move || move_sink_input_sync(input_index, sink_index, DEFAULT_DEADLINE)).await
     }
+
+    async fn set_sink_mute(&self, sink_index: u32, mute: bool) -> Result<(), PulseError> {
+        blocking(move || set_sink_mute_sync(sink_index, mute, DEFAULT_DEADLINE)).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -231,7 +249,7 @@ impl PulseApi for LibPulse {
 /// of a longer string) into upper-case colon form.
 fn is_background_app(app: &str) -> bool {
     let app = app.to_ascii_lowercase();
-    ["easyeffects", "pulseeffects", "webrtc"]
+    ["easyeffects", "pulseeffects", "webrtc", "discord"]
         .iter()
         .any(|a| app.contains(a))
 }
@@ -462,6 +480,7 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 mac,
                 state: convert_sink_state(item.state),
                 codec: item.proplist.get_str("api.bluez5.codec"),
+                muted: item.mute,
                 name,
             });
         }
@@ -474,6 +493,7 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 sink: item.sink,
                 corked: item.corked,
                 app: item.proplist.get_str("application.name"),
+                role: item.proplist.get_str("media.role"),
             });
         }
     });
@@ -553,6 +573,18 @@ pub fn move_sink_input_sync(
     conn.wait_success("move sink input", &slot)
 }
 
+pub fn set_sink_mute_sync(
+    sink_index: u32,
+    mute: bool,
+    timeout: Duration,
+) -> Result<(), PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let (slot, cb) = success_slot();
+    let mut introspect = conn.context.introspect();
+    let _op = introspect.set_sink_mute_by_index(sink_index, mute, Some(cb));
+    conn.wait_success("mute sink", &slot)
+}
+
 fn get_sink_volume(conn: &mut Conn, sink_name: &str) -> Result<ChannelVolumes, PulseError> {
     let introspect = conn.context.introspect();
     let volume: Rc<Cell<Option<ChannelVolumes>>> = Rc::default();
@@ -600,6 +632,28 @@ pub fn set_sink_volume_percent_sync(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn playing_streams_skip_background_and_system_sounds() {
+        let input = |index, corked, app: &str, role: Option<&str>| SinkInputInfo {
+            index,
+            sink: 1,
+            corked,
+            app: Some(app.into()),
+            role: role.map(Into::into),
+        };
+        let snap = PulseSnapshot {
+            sink_inputs: vec![
+                input(1, false, "Plex", Some("video")),
+                input(2, true, "Brave", Some("music")),
+                input(3, false, "easyeffects", None),
+                input(4, false, "WEBRTC VoiceEngine", Some("phone")),
+                input(5, false, "plasmashell", Some("event")),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(snap.playing_streams(), vec![1]);
+    }
 
     #[test]
     fn normalize_mac_variants() {

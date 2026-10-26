@@ -14,6 +14,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, mpsc, watch};
 
+/// When this app last paused players because another device took the AirPods.
+static LAST_AUTO_PAUSE: std::sync::Mutex<Option<Instant>> = std::sync::Mutex::new(None);
+
+/// After pausing, players and their streams can still report "playing" for a moment, and
+/// some (Brave) briefly resume by themselves when their audio output goes away. None of
+/// that is a press of play here.
+const AUTO_PAUSE_SETTLE: Duration = Duration::from_secs(4);
+
+fn note_auto_pause() {
+    if let Ok(mut last) = LAST_AUTO_PAUSE.lock() {
+        *last = Some(Instant::now());
+    }
+}
+
+/// True for a few seconds after this app paused players for another device.
+pub fn auto_paused_recently() -> bool {
+    LAST_AUTO_PAUSE
+        .lock()
+        .ok()
+        .and_then(|last| *last)
+        .is_some_and(|t| t.elapsed() < AUTO_PAUSE_SETTLE)
+}
+
 const DBUS_TIMEOUT: Duration = Duration::from_secs(2);
 const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_PLAYER: &str = "org.mpris.MediaPlayer2.Player";
@@ -187,6 +210,12 @@ impl MediaController {
                     .contains(&EarDetectionStatus::InEar);
                 if !any_in_ear {
                     info!("Media playback started but buds not in ear, skipping takeover");
+                    continue;
+                }
+                if auto_paused_recently() {
+                    info!(
+                        "Media playback started right after pausing it for another device; not taking over"
+                    );
                     continue;
                 }
                 info!("Media playback started, taking ownership and checking A2DP");
@@ -378,6 +407,7 @@ impl MediaController {
 
     pub async fn pause_all_media(&self) {
         debug!("Pausing all playing media (without tracking for resume)");
+        note_auto_pause();
         let paused_count = tokio::task::spawn_blocking(|| {
             mpris::with_players(|conn, players| {
                 let mut count = 0usize;
