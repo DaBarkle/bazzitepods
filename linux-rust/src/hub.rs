@@ -192,3 +192,7 @@ mod tests {
         assert_eq!(hub.snapshot().primary().map(|d| d.mac.as_str()), Some("BB"));
     }
 }
+
+#[cfg(test)]
+#[path = "hub_tests.rs"]
+mod state_tests;

@@ -1809,3 +1809,7 @@ mod tests {
         m.receive_packet(&p).await;
     }
 }
+
+#[cfg(test)]
+#[path = "aacp_tests.rs"]
+mod packet_tests;

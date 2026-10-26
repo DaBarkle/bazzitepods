@@ -40,15 +40,16 @@ pub struct CardInfo {
     pub active_profile: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SinkState {
     Running,
     Idle,
     Suspended,
+    #[default]
     Unknown,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SinkInfo {
     pub index: u32,
     pub name: String,
@@ -59,7 +60,7 @@ pub struct SinkInfo {
     pub codec: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SinkInputInfo {
     pub index: u32,
     pub sink: u32,
@@ -674,3 +675,7 @@ mod tests {
         assert!(!s2.is_recording_from_card(8));
     }
 }
+
+#[cfg(test)]
+#[path = "pulse_tests.rs"]
+mod snapshot_tests;
