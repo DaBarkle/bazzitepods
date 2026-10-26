@@ -312,3 +312,39 @@ fn low_battery_uses_the_threshold_inclusively() {
     };
     assert!(!with_case.is_low(15));
 }
+
+#[test]
+fn link_lost_turns_control_channel_levels_into_last_seen() {
+    let (mut t, t0, w0) = setup();
+    let mut aacp = Aacp::new();
+    t.set_aacp_connected(true);
+    aacp.send(
+        &mut t,
+        &[(LEFT, 70, CHARGING), (RIGHT, 72, CHARGING), (CASE, 40, CHARGING)],
+        t0,
+    );
+    t.link_lost();
+    let s = t.snapshot();
+    for c in [&s.left, &s.right, &s.case] {
+        assert!(c.stale && !c.present && !c.charging, "{c:?}");
+    }
+    assert_eq!(s.case.level, Some(40));
+    assert_eq!(s.case.last_seen, Some(w0));
+    assert!(!t.aacp_connected());
+
+    // The case advertises while the lid is open: its adverts are live again at once.
+    t.apply_ble(&advert(0x20 | 0x40 | 0x04, 0x80 | 71, 0x80 | 72, 0x80 | 39), secs(t0, 5));
+    let s = t.snapshot();
+    assert!(s.case.is_live() && s.case.charging);
+    assert_eq!(s.case.level, Some(39));
+    assert!(s.left.is_live() && s.left.charging);
+}
+
+#[test]
+fn link_lost_keeps_advert_levels_live() {
+    let (mut t, t0, _) = setup();
+    t.apply_ble(&advert(0x20 | 0x40 | 0x04, 50, 51, 0x80 | 30), t0);
+    t.link_lost();
+    assert!(t.snapshot().case.is_live());
+    assert!(t.snapshot().case.charging);
+}

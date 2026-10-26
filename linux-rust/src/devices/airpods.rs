@@ -123,6 +123,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         }
     }
 
+    ctx.battery.send(BatteryInput::LinkLost(mac));
     if let Some(audio) = &audio {
         audio.link_down();
         audio.shutdown();

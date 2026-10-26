@@ -18,6 +18,8 @@ use tokio::sync::mpsc;
 pub enum BatteryInput {
     Aacp(Address, Vec<BatteryInfo>),
     AacpLink(Address, bool),
+    /// The Bluetooth link to this PC is gone (the device task ended).
+    LinkLost(Address),
     Ble(Address, BleBatteryReading),
 }
 
@@ -89,6 +91,10 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
                     }
                     BatteryInput::AacpLink(mac, up) => {
                         tracker_for(&mut trackers, &case_cache, mac).set_aacp_connected(up);
+                        vec![mac]
+                    }
+                    BatteryInput::LinkLost(mac) => {
+                        tracker_for(&mut trackers, &case_cache, mac).link_lost();
                         vec![mac]
                     }
                     BatteryInput::Ble(mac, reading) => {

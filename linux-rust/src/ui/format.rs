@@ -108,7 +108,11 @@ fn gauge(label: &'static str, c: &ComponentBattery, connected: bool, now: System
     // Connected but the component isn't reported (pod out of range): show "—", never 0%.
     let hide_level = connected && !c.present && !c.stale;
     let level = if hide_level { None } else { c.level };
-    let dimmed = !connected || !c.present || c.stale || level.is_none();
+    // A fresh reading is shown as live whatever the link: the AirPods' own adverts report
+    // pods and case (and whether they charge) even while they are connected elsewhere or
+    // sitting in their case away from this PC.
+    let live = c.is_live() && level.is_some();
+    let dimmed = !live;
     // While disconnected the hero shows one "last seen" line instead of one per gauge.
     let caption = match (connected && (c.stale || !c.present), c.last_seen, level) {
         (true, Some(t), Some(_)) => Some(last_seen_text(t, now)),
@@ -118,7 +122,7 @@ fn gauge(label: &'static str, c: &ComponentBattery, connected: bool, now: System
         label,
         level,
         text: percent_text(level),
-        charging: connected && c.charging && !dimmed,
+        charging: live && c.charging,
         tone: if dimmed { Tone::Muted } else { tone_for(level) },
         dimmed,
         caption,
@@ -353,13 +357,30 @@ mod tests {
 
     #[test]
     fn disconnected_keeps_last_levels_greyed() {
-        let d = device(ModelKind::AirPods4, LinkState::Disconnected);
+        let mut d = device(ModelKind::AirPods4, LinkState::Disconnected);
+        for c in [&mut d.battery.left, &mut d.battery.right, &mut d.battery.case] {
+            c.present = false;
+            c.stale = true;
+        }
         let g = gauges(&d, now());
         assert_eq!(g[0].text, "80%");
         assert!(
             g.iter()
                 .all(|g| g.dimmed && !g.charging && g.caption.is_none())
         );
+    }
+
+    #[test]
+    fn nearby_adverts_show_live_levels_and_charging() {
+        // Pods in the case on a charger, away from this PC: the adverts are fresh.
+        let mut d = device(ModelKind::AirPods4Anc, LinkState::Disconnected);
+        d.battery.left = comp(64, true);
+        d.battery.right = comp(66, true);
+        let g = gauges(&d, now());
+        assert!(g.iter().all(|g| !g.dimmed && g.charging && g.caption.is_none()));
+        assert_eq!(g[2].text, "40%");
+        assert_eq!(connection_label(&d).0, "Nearby");
+        assert_eq!(battery_line(&d, now()), "L 64% ⚡ · R 66% ⚡ · Case 40% ⚡");
     }
 
     #[test]
