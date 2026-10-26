@@ -20,6 +20,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const HEADER_BYTES: [u8; 4] = [0x04, 0x00, 0x04, 0x00];
 
+// The AACP opcodes known so far, kept as a map of the protocol even where unused.
+#[allow(dead_code)]
 pub mod opcodes {
     pub const SET_FEATURE_FLAGS: u8 = 0x4D;
     pub const REQUEST_NOTIFICATIONS: u8 = 0x0F;
@@ -303,7 +305,7 @@ pub enum AACPEvent {
     ControlCommand(ControlCommandStatus),
     EarDetection(Vec<EarDetectionStatus>, Vec<EarDetectionStatus>),
     ConversationalAwareness(u8),
-    ProximityKeys(Vec<(u8, Vec<u8>)>),
+    ProximityKeys(#[allow(dead_code)] Vec<(u8, Vec<u8>)>),
     AudioSource(AudioSource),
     ConnectedDevices(Vec<ConnectedDevice>, Vec<ConnectedDevice>),
     OwnershipToFalseRequest,
@@ -977,6 +979,7 @@ impl AACPManager {
         self.send_data_packet(&packet).await
     }
 
+    #[allow(dead_code)]
     pub async fn send_hijack_reversed(&self, target_mac_address: &str) -> Result<()> {
         let opcode = [opcodes::SMART_ROUTING, 0x00];
         let mut buffer = Vec::with_capacity(97);

@@ -17,10 +17,12 @@ on:
       - bazzite
     paths:
       - 'linux-rust/**'
+      - '!linux-rust/**/*.md'
       - '.github/workflows/tests.yml'
   pull_request:
     paths:
       - 'linux-rust/**'
+      - '!linux-rust/**/*.md'
       - '.github/workflows/tests.yml'
   workflow_dispatch:
 
@@ -46,12 +48,15 @@ jobs:
       run:
         working-directory: linux-rust
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
+      # Cached between runs: a plain apt-get install took 2 to 5 minutes (a slow Ubuntu
+      # mirror), several times longer than building and running the tests.
       - name: Install system libraries
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1.6.3
+        with:
+          packages: pkg-config libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev
+          version: 1
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -63,15 +68,13 @@ jobs:
         with:
           tool: cargo-llvm-cov
 
+      # Keyed on the compiler version as well as Cargo.lock, and trimmed of our own crate's
+      # build output before saving, so the cache stays small and useful.
       - name: Cache Cargo
-        uses: actions/cache@v4
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            linux-rust/target
-          key: ${{ runner.os }}-tests-${{ hashFiles('linux-rust/Cargo.lock') }}
-          restore-keys: ${{ runner.os }}-tests-
+          workspaces: linux-rust
+          shared-key: tests
 
       - name: Run tests with coverage
         run: |

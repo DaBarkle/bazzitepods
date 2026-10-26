@@ -18,13 +18,14 @@ pub struct NothingInformation {
 
 pub struct NothingDevice {
     pub att_manager: ATTManager,
+    #[allow(dead_code)]
     pub information: NothingInformation,
 }
 
 impl NothingDevice {
     pub async fn new(
         mac_address: Address,
-        ui_tx: mpsc::UnboundedSender<BluetoothUIMessage>,
+        _ui_tx: mpsc::UnboundedSender<BluetoothUIMessage>,
     ) -> Option<Self> {
         let mut att_manager = ATTManager::new();
         if let Err(e) = att_manager.connect(mac_address).await {
