@@ -95,6 +95,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.3.1" date="2026-10-27">
+      <description>
+        <p>More of your AirPods, and clearer battery when they are away from the PC.</p>
+        <ul>
+          <li>New settings read from the AirPods: automatic ear detection, Adaptive Audio strength, noise cancellation with one AirPod, microphone choice and automatic connection</li>
+          <li>Charging and live levels show while the AirPods are nearby but not connected</li>
+          <li>Says "In case" when both pods are put away, with a hint to open the lid to update the case</li>
+          <li>Personalized Volume shows the AirPods' real setting</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.0" date="2026-10-27">
       <description>
         <p>The overlay becomes an island, modelled on the iPhone's Dynamic Island.</p>

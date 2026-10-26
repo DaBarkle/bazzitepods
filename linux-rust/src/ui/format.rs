@@ -86,7 +86,9 @@ pub fn connection_label(d: &DeviceSnapshot) -> (&'static str, PillTone) {
         LinkState::Connected | LinkState::Limited => ("Connected", PillTone::Good),
         LinkState::Connecting => ("Connecting…", PillTone::Busy),
         LinkState::Reconnecting { .. } => ("Reconnecting…", PillTone::Busy),
+        LinkState::Disconnected if d.in_case && is_nearby(d) => ("In case", PillTone::Info),
         LinkState::Disconnected if is_nearby(d) => ("Nearby", PillTone::Info),
+        LinkState::Disconnected if d.in_case => ("In case", PillTone::Idle),
         LinkState::Disconnected => ("Not connected", PillTone::Idle),
     }
 }
@@ -108,7 +110,11 @@ fn gauge(label: &'static str, c: &ComponentBattery, connected: bool, now: System
     // Connected but the component isn't reported (pod out of range): show "—", never 0%.
     let hide_level = connected && !c.present && !c.stale;
     let level = if hide_level { None } else { c.level };
-    let dimmed = !connected || !c.present || c.stale || level.is_none();
+    // A fresh reading is shown as live whatever the link: the AirPods' own adverts report
+    // pods and case (and whether they charge) even while they are connected elsewhere or
+    // sitting in their case away from this PC.
+    let live = c.is_live() && level.is_some();
+    let dimmed = !live;
     // While disconnected the hero shows one "last seen" line instead of one per gauge.
     let caption = match (connected && (c.stale || !c.present), c.last_seen, level) {
         (true, Some(t), Some(_)) => Some(last_seen_text(t, now)),
@@ -118,7 +124,7 @@ fn gauge(label: &'static str, c: &ComponentBattery, connected: bool, now: System
         label,
         level,
         text: percent_text(level),
-        charging: connected && c.charging && !dimmed,
+        charging: live && c.charging,
         tone: if dimmed { Tone::Muted } else { tone_for(level) },
         dimmed,
         caption,
@@ -147,7 +153,12 @@ pub fn gauges(d: &DeviceSnapshot, now: SystemTime) -> Vec<Gauge> {
     ];
     if d.model.info().has_case_battery {
         // A stale case (both pods out) keeps its last level, dimmed, with a "last seen" caption.
-        out.push(gauge("Case", &b.case, connected, now));
+        let mut case = gauge("Case", &b.case, connected, now);
+        // Put away with the lid shut, the case says nothing until it is opened again.
+        if !connected && d.in_case && case.dimmed && case.level.is_some() {
+            case.caption = Some("open the lid to update".to_string());
+        }
+        out.push(case);
     }
     out
 }
@@ -217,6 +228,114 @@ pub fn controls_enabled(d: &DeviceSnapshot) -> bool {
     d.link == LinkState::Connected
 }
 
+/// AACP control command identifiers the window offers as settings.
+pub mod control {
+    pub const MIC_MODE: u8 = 0x01;
+    pub const EAR_DETECTION: u8 = 0x0A;
+    pub const ONE_BUD_ANC: u8 = 0x1B;
+    pub const AUTO_CONNECT: u8 = 0x20;
+    pub const ADAPTIVE_VOLUME: u8 = 0x26;
+    pub const ADAPTIVE_STRENGTH: u8 = 0x2E;
+}
+
+/// Toggles use 0x01 for on and 0x02 for off, as an iPhone sends them.
+pub fn toggle_byte(on: bool) -> u8 {
+    if on { 0x01 } else { 0x02 }
+}
+
+/// One AirPods setting as the window draws it.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DeviceSetting {
+    Toggle {
+        id: u8,
+        title: &'static str,
+        caption: &'static str,
+        on: bool,
+    },
+    Choice {
+        id: u8,
+        title: &'static str,
+        caption: &'static str,
+        options: &'static [(&'static str, u8)],
+        selected: u8,
+    },
+}
+
+const MIC_OPTIONS: &[(&str, u8)] = &[("Automatic", 0x00), ("Left", 0x02), ("Right", 0x01)];
+/// Apple's three Adaptive Audio steps: how much noise the AirPods filter out (0..=100).
+const STRENGTH_OPTIONS: &[(&str, u8)] = &[("More noise", 0), ("Default", 50), ("Less noise", 100)];
+
+/// The AirPods' own settings, built only from values they reported over the control
+/// channel: a model that lacks a setting never reports it, so it is never offered.
+pub fn device_settings(d: &DeviceSnapshot) -> Vec<DeviceSetting> {
+    let info = d.model.info();
+    let get = |id: u8| d.controls.get(&id).copied();
+    let toggle = |id, title, caption| {
+        get(id).map(|v| DeviceSetting::Toggle {
+            id,
+            title,
+            caption,
+            on: v == 0x01,
+        })
+    };
+    let mut out = Vec::new();
+    out.extend(toggle(
+        control::EAR_DETECTION,
+        "Automatic ear detection",
+        "Plays when you put them in, pauses when you take one out",
+    ));
+    if info.has_adaptive_volume {
+        out.extend(toggle(
+            control::ADAPTIVE_VOLUME,
+            "Personalized volume",
+            "Adjusts volume to your surroundings",
+        ));
+    }
+    if info.has_adaptive
+        && let Some(v) = get(control::ADAPTIVE_STRENGTH)
+    {
+        // The AirPods accept any value; show the nearest of Apple's three steps.
+        let selected = STRENGTH_OPTIONS
+            .iter()
+            .map(|&(_, o)| o)
+            .min_by_key(|o| o.abs_diff(v))
+            .unwrap_or(50);
+        out.push(DeviceSetting::Choice {
+            id: control::ADAPTIVE_STRENGTH,
+            title: "Adaptive audio",
+            caption: "How much outside noise Adaptive lets in",
+            options: STRENGTH_OPTIONS,
+            selected,
+        });
+    }
+    if info.has_anc {
+        out.extend(toggle(
+            control::ONE_BUD_ANC,
+            "Noise cancellation with one AirPod",
+            "Keeps noise control on when only one AirPod is in",
+        ));
+    }
+    if let Some(v) = get(control::MIC_MODE) {
+        out.push(DeviceSetting::Choice {
+            id: control::MIC_MODE,
+            title: "Microphone",
+            caption: "Which AirPod picks up your voice",
+            options: MIC_OPTIONS,
+            selected: if MIC_OPTIONS.iter().any(|&(_, o)| o == v) {
+                v
+            } else {
+                0x00
+            },
+        });
+    }
+    out.extend(toggle(
+        control::AUTO_CONNECT,
+        "Connect to this PC automatically",
+        "Otherwise they come back here only if this PC was used last",
+    ));
+    out
+}
+
 fn short(label: &str) -> &str {
     match label {
         "Left" => "L",
@@ -256,6 +375,8 @@ pub fn tooltip(snap: &AppSnapshot, now: SystemTime) -> (String, String) {
     let model = model_name(d.model);
     let body = if d.is_connected() || is_nearby(d) {
         format!("{model} — {}", battery_line(d, now))
+    } else if d.in_case {
+        format!("{model} — In case")
     } else {
         format!("{model} — Not connected")
     };
@@ -353,13 +474,126 @@ mod tests {
 
     #[test]
     fn disconnected_keeps_last_levels_greyed() {
-        let d = device(ModelKind::AirPods4, LinkState::Disconnected);
+        let mut d = device(ModelKind::AirPods4, LinkState::Disconnected);
+        for c in [
+            &mut d.battery.left,
+            &mut d.battery.right,
+            &mut d.battery.case,
+        ] {
+            c.present = false;
+            c.stale = true;
+        }
         let g = gauges(&d, now());
         assert_eq!(g[0].text, "80%");
         assert!(
             g.iter()
                 .all(|g| g.dimmed && !g.charging && g.caption.is_none())
         );
+    }
+
+    #[test]
+    fn nearby_adverts_show_live_levels_and_charging() {
+        // Pods in the case on a charger, away from this PC: the adverts are fresh.
+        let mut d = device(ModelKind::AirPods4Anc, LinkState::Disconnected);
+        d.battery.left = comp(64, true);
+        d.battery.right = comp(66, true);
+        let g = gauges(&d, now());
+        assert!(
+            g.iter()
+                .all(|g| !g.dimmed && g.charging && g.caption.is_none())
+        );
+        assert_eq!(g[2].text, "40%");
+        assert_eq!(connection_label(&d).0, "Nearby");
+        assert_eq!(battery_line(&d, now()), "L 64% ⚡ · R 66% ⚡ · Case 40% ⚡");
+    }
+
+    #[test]
+    fn settings_only_for_what_the_airpods_report() {
+        let mut d = device(ModelKind::AirPods4Anc, LinkState::Connected);
+        assert!(device_settings(&d).is_empty());
+
+        d.controls.insert(control::EAR_DETECTION, 0x01);
+        d.controls.insert(control::ADAPTIVE_VOLUME, 0x02);
+        d.controls.insert(control::ADAPTIVE_STRENGTH, 60);
+        d.controls.insert(control::MIC_MODE, 0x02);
+        d.controls.insert(control::AUTO_CONNECT, 0x01);
+        let s = device_settings(&d);
+        let ids: Vec<u8> = s
+            .iter()
+            .map(|s| match s {
+                DeviceSetting::Toggle { id, .. } | DeviceSetting::Choice { id, .. } => *id,
+            })
+            .collect();
+        assert_eq!(
+            ids,
+            vec![
+                control::EAR_DETECTION,
+                control::ADAPTIVE_VOLUME,
+                control::ADAPTIVE_STRENGTH,
+                control::MIC_MODE,
+                control::AUTO_CONNECT
+            ]
+        );
+        assert!(matches!(s[0], DeviceSetting::Toggle { on: true, .. }));
+        assert!(matches!(s[1], DeviceSetting::Toggle { on: false, .. }));
+        assert!(matches!(s[2], DeviceSetting::Choice { selected: 50, .. }));
+        assert!(matches!(s[3], DeviceSetting::Choice { selected: 0x02, .. }));
+
+        // Capability gates still apply: no Adaptive Audio strength without Adaptive.
+        d.model = ModelKind::AirPods4;
+        d.controls.insert(control::ONE_BUD_ANC, 0x01);
+        let s = device_settings(&d);
+        assert!(!s.iter().any(|s| matches!(
+            s,
+            DeviceSetting::Choice {
+                id: control::ADAPTIVE_STRENGTH,
+                ..
+            } | DeviceSetting::Toggle {
+                id: control::ONE_BUD_ANC,
+                ..
+            }
+        )));
+
+        // An unknown microphone value reads as Automatic.
+        d.controls.insert(control::MIC_MODE, 0x07);
+        assert!(device_settings(&d).iter().any(|s| matches!(
+            s,
+            DeviceSetting::Choice {
+                id: control::MIC_MODE,
+                selected: 0x00,
+                ..
+            }
+        )));
+        assert_eq!(toggle_byte(true), 0x01);
+        assert_eq!(toggle_byte(false), 0x02);
+    }
+
+    #[test]
+    fn put_away_in_the_case() {
+        let mut d = device(ModelKind::AirPods4Anc, LinkState::Disconnected);
+        for c in [
+            &mut d.battery.left,
+            &mut d.battery.right,
+            &mut d.battery.case,
+        ] {
+            c.present = false;
+            c.stale = true;
+        }
+        assert_eq!(connection_label(&d).0, "Not connected");
+        assert_eq!(gauges(&d, now())[2].caption, None);
+
+        d.in_case = true;
+        assert_eq!(connection_label(&d), ("In case", PillTone::Idle));
+        let g = gauges(&d, now());
+        assert_eq!(g[2].caption.as_deref(), Some("open the lid to update"));
+        assert_eq!(g[2].text, "40%");
+        assert!(g[0].caption.is_none());
+
+        // Lid open nearby: the adverts are live, no hint needed.
+        d.battery.case = comp(41, true);
+        assert_eq!(connection_label(&d), ("In case", PillTone::Info));
+        let g = gauges(&d, now());
+        assert!(g[2].caption.is_none() && g[2].charging);
     }
 
     #[test]

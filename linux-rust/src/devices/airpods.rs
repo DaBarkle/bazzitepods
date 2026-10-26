@@ -52,6 +52,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
     ctx.hub.update_device(&mac_s, &name, |d| {
         d.name = name.clone();
         d.link = LinkState::Connecting;
+        d.in_case = false;
         d.last_seen = Some(std::time::SystemTime::now());
     });
 
@@ -123,6 +124,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         }
     }
 
+    ctx.battery.send(BatteryInput::LinkLost(mac));
     if let Some(audio) = &audio {
         audio.link_down();
         audio.shutdown();
@@ -144,6 +146,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
 
     ctx.hub.update_device(&mac_s, &name, |d| {
         d.link = LinkState::Disconnected;
+        d.in_case = dropped_in_case(&mac_s);
         d.in_ear = (None, None);
         d.audio = None;
         d.last_seen = Some(std::time::SystemTime::now());
@@ -227,6 +230,15 @@ async fn session(
                 if let Err(e) = aacp.send_control_command(id, &value).await {
                     warn!("Failed to send control command {:?}: {}", id, e);
                     continue;
+                }
+                // Settings the AirPods reported: show the new value at once; their own echo
+                // (if any) confirms it a moment later.
+                if let Some(&byte) = value.first() {
+                    hub.update_device(&mac, &name, |d| {
+                        if let Some(v) = d.controls.get_mut(&(id as u8)) {
+                            *v = byte;
+                        }
+                    });
                 }
                 if id == ControlCommandIdentifiers::OwnsConnection {
                     let owns = value.first().copied().unwrap_or(0) != 0;
@@ -562,6 +574,14 @@ async fn handle_event(
                     .await
                     .handle_ear_detection(old.clone(), new.clone())
                     .await;
+            }
+        }
+        AACPEvent::ControlCommand(status) => {
+            if let Some(&value) = status.value.first() {
+                let id = status.identifier as u8;
+                ctx.hub.update_device(&mac_s, name, |d| {
+                    d.controls.insert(id, value);
+                });
             }
         }
         AACPEvent::ConversationalAwareness(status) => {
