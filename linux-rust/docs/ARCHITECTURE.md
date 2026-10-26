@@ -59,16 +59,27 @@ BLE adverts ──> le.rs ──BleBatteryReading──────────�
 ## Overlay protocol (stdin JSON lines, one object per line)
 
 ```json
-{"type":"config","position":"top-right","margin":16,"auto_hide_secs":4,"mode":"auto"}
+{"type":"config","position":"top-center","margin":12,"auto_hide_secs":4,"mode":"auto"}
 {"type":"state","state":{ "name":"David's AirPods","kind":"airpods4","connected":true,
   "left":{"level":80,"charging":false,"present":true,"stale":false},
   "right":{"level":75,"charging":false,"present":true,"stale":false},
   "case":{"level":40,"charging":true,"present":true,"stale":false},
-  "headphone":null }}
+  "headphone":null, "listening_mode":"noise_cancellation" }}
 {"type":"show","reason":"connected"}
 {"type":"hide"}
 {"type":"quit"}
 ```
 
-`mode`: `auto` (show briefly on connect, on a pod going in/out, on low battery, on charge change), `always`, `off`.
+`mode`: `auto` (Pop-up: open on changes, then fold away), `compact` (the slim island stays;
+it opens on changes), `always` (Full: the card stays), `off`.
+
+`listening_mode` (optional): `off`, `noise_cancellation`, `transparency`, `adaptive`.
+
+What the island shows (`src/bin/librepods-overlay/logic.rs`, `event`): connecting or a pod
+coming or going opens the card; the audio moving to or from another device, a battery
+dropping to 20% or 10%, charging starting, and a noise control change each show a one-line
+alert; disconnecting shows a short goodbye. Shapes move on damped springs
+(`spring.rs`, SwiftUI's duration/bounce mapping) and contents cross-fade (`island.rs`).
+The overlay redraws only while something moves, paced by the compositor's frame callbacks,
+and sleeps on a single timer until the next deadline otherwise.
 Exit code 3 from the overlay means no layer-shell (e.g. GNOME); the client then falls back to desktop notifications.

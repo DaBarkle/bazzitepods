@@ -60,6 +60,13 @@ pub struct DeviceSnapshot {
     pub other_devices: usize,
     /// The name of the device that has the audio when `owns_audio` is `Some(false)`.
     pub elsewhere_name: Option<String>,
+    /// Settings the AirPods reported over the control channel: AACP control command
+    /// identifier -> first value byte. Only settings a model actually has show up here, so
+    /// the views offer exactly what these AirPods support.
+    pub controls: BTreeMap<u8, u8>,
+    /// Both pods were in the case when the AirPods last left this PC (or their adverts say
+    /// so). The case then only reports again once its lid opens.
+    pub in_case: bool,
 }
 
 impl DeviceSnapshot {
@@ -80,6 +87,8 @@ impl DeviceSnapshot {
             owns_audio: None,
             other_devices: 0,
             elsewhere_name: None,
+            controls: BTreeMap::new(),
+            in_case: false,
         }
     }
 

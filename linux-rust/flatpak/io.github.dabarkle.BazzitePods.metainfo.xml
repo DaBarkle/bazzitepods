@@ -21,7 +21,7 @@
     </p>
     <ul>
       <li>Accurate left, right and case battery levels, including charging state</li>
-      <li>A small on-screen overlay when your earbuds connect or their battery changes</li>
+      <li>An island overlay in the manner of the iPhone's Dynamic Island, with battery for each earbud and the case and short alerts for charging, low battery and noise control</li>
       <li>Noise control mode switching: noise cancellation, transparency and adaptive</li>
       <li>Ear detection: pauses and resumes your media when you take an earbud out</li>
       <li>Conversational awareness: lowers the volume while you speak</li>
@@ -69,7 +69,7 @@
       <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/window-dark.png</image>
     </screenshot>
     <screenshot>
-      <caption>The battery overlay shown when the earbuds connect</caption>
+      <caption>The island overlay shown when the earbuds connect</caption>
       <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/overlay-full.png</image>
     </screenshot>
     <screenshot>
@@ -95,6 +95,29 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.3.1" date="2026-10-27">
+      <description>
+        <p>More of your AirPods, and clearer battery when they are away from the PC.</p>
+        <ul>
+          <li>New settings read from the AirPods: automatic ear detection, Adaptive Audio strength, noise cancellation with one AirPod, microphone choice and automatic connection</li>
+          <li>Charging and live levels show while the AirPods are nearby but not connected</li>
+          <li>Says "In case" when both pods are put away, with a hint to open the lid to update the case</li>
+          <li>Personalized Volume shows the AirPods' real setting</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.3.0" date="2026-10-27">
+      <description>
+        <p>The overlay becomes an island, modelled on the iPhone's Dynamic Island.</p>
+        <ul>
+          <li>Opens into a card with a ring for each pod and the case, and rests as a slim island</li>
+          <li>Short alerts for charging, low battery, noise control changes, switching to and from an iPhone, and disconnecting</li>
+          <li>Spring animations, cross-fading contents, sweeping rings and rolling numbers</li>
+          <li>Sits at the top center by default; Glass at 0% is the island's pure black</li>
+          <li>Redraws only while it moves and uses no CPU at rest</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.2" date="2026-10-25">
       <description>
         <p>Reliable switching with an iPhone for every app, with overlay feedback.</p>

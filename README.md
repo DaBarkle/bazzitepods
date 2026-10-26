@@ -2,7 +2,7 @@
 
 AirPods on Linux, the way they work on an iPhone. You install it once, and from then on it
 just works: it starts with your session, finds your AirPods, shows accurate battery levels
-for each pod and the case, and shows a small glass overlay over your games.
+for each pod and the case, and shows a Dynamic Island style overlay over your games.
 
 Built for [Bazzite](https://bazzite.gg) (KDE Plasma, Wayland), and it works on any Flatpak
 desktop.
@@ -12,7 +12,7 @@ desktop.
 > zero-config desktop app on top of it. See [How it builds on LibrePods](#how-it-builds-on-librepods).
 
 <p align="center">
-  <img src="linux-rust/docs/screenshots/overlay-demo.gif" width="460" alt="The overlay over a game: the full card shows battery for each pod and the case, then shrinks into a compact widget, and expands again when the case starts charging or battery runs low">
+  <img src="linux-rust/docs/screenshots/overlay-demo.gif" width="460" alt="The island overlay: it opens into a card with battery for each pod and the case, folds into a slim island, and morphs into short alerts when the case starts charging, the noise control mode changes, battery runs low or an iPhone takes the audio">
 </p>
 <p align="center">
   <img src="linux-rust/docs/screenshots/window-dark.png" width="300" alt="BazzitePods window, dark theme">
@@ -42,13 +42,23 @@ up within a few seconds.
   out keeps its last value, dimmed, instead of showing 0%. The case shows its last known level
   after the pods come out. Like on an iPhone, the case reports its level while at least one pod
   is inside it.
-- **Game overlay** with four modes:
-  - **Compact** (default): a small widget that expands to the full card when something
-    changes, such as a pod going in or out, charging, or low battery.
-  - **Pop-up**: appears briefly on changes, then goes away.
-  - **Full**: always shows the full card while connected.
-  - **Off**.
-- **Liquid glass.** A **Glass** slider goes from smoked to clear glass. A **Game opacity**
+- **An island over your games**, modelled on the iPhone's Dynamic Island. It sits at the
+  top center of the screen (any corner works too) and changes shape to show what matters:
+  - a **card** with a ring for each pod and the case when the AirPods connect,
+  - a **slim island** with all three levels at rest,
+  - short **alerts** that name the one thing that just happened: *Case charging*,
+    *Right AirPod low*, *Noise Cancellation* / *Transparency* / *Adaptive Audio*,
+    *Playing on iPhone*, *Back on this PC*, *Disconnected*.
+
+  It moves on springs like the real thing: it grows out of a small pill with a little
+  bounce, contents cross-fade, rings sweep in, and percentages roll when they change. A
+  change that arrives mid-animation bends the motion instead of restarting it.
+  Modes: **Compact** (default, the slim island stays on screen), **Pop-up** (opens on
+  changes, then folds away), **Full** (the card stays, and news shows in its second line
+  with a small bounce) and **Off**.
+- **Light on your games.** The island only redraws while it moves, in step with your
+  monitor's refresh. At rest it draws nothing and uses no CPU.
+- **Liquid glass.** A **Glass** slider goes from the island's pure black to clear glass. A **Game opacity**
   slider makes the overlay see-through only while a fullscreen game or video is in front, and
   it stays solid on the desktop. Text and icons have a built-in contrast halo, so they stay
   readable on bright and dark scenes alike.
@@ -93,10 +103,11 @@ track control.
 
 ### The overlay
 
-| Full card | Compact widget |
+| Card | Slim island |
 | --- | --- |
-| <img src="linux-rust/docs/screenshots/overlay-full.png" width="380" alt="Full overlay card"> | <img src="linux-rust/docs/screenshots/overlay-compact.png" width="380" alt="Compact overlay widget"> |
-| <img src="linux-rust/docs/screenshots/overlay-low.png" width="380" alt="Overlay with low battery in amber and red"> | <img src="linux-rust/docs/screenshots/overlay-max.png" width="380" alt="Overlay for AirPods Max"> |
+| <img src="linux-rust/docs/screenshots/overlay-full.png" width="380" alt="The island's card: a ring for each pod and the case"> | <img src="linux-rust/docs/screenshots/overlay-compact.png" width="380" alt="The slim island with left, right and case levels"> |
+| <img src="linux-rust/docs/screenshots/overlay-low.png" width="380" alt="Low battery alert in amber"> | <img src="linux-rust/docs/screenshots/overlay-charging.png" width="380" alt="Case charging alert in green"> |
+| <img src="linux-rust/docs/screenshots/overlay-mode.png" width="380" alt="Noise control alert"> | <img src="linux-rust/docs/screenshots/overlay-elsewhere.png" width="380" alt="Playing on iPhone alert"> |
 
 ### Tray
 
@@ -151,7 +162,7 @@ around it.
 | --- | --- |
 | The AACP protocol implementation: handshake, battery, ear detection, listening modes, conversation awareness, rename, device-switching packets | Zero-config Flatpak packaging, a one-line installer, autostart and tray |
 | Decrypting AirPods Bluetooth LE adverts with the proximity keys | Battery logic: one value per pod and case, last seen, cached case level |
-| Media pause and resume on ear detection | The game overlay (compact, pop-up, full), liquid glass, fullscreen detection |
+| Media pause and resume on ear detection | The island overlay (compact, pop-up, full) with spring animations and alerts, liquid glass, fullscreen detection |
 | The Rust Bluetooth groundwork with BlueZ (`bluer`) | The audio guard that fixes the "connected but silent" bug, plus reconnect with backoff |
 | The first Rust desktop app for Linux (iced window and tray) | A new interface (window, tray, icons), multi-device switching UI, Apple device mode |
 

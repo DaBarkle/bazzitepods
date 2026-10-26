@@ -4,6 +4,53 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-27
+
+### Added
+- **More of your AirPods' settings**, read from the AirPods themselves: automatic ear
+  detection, Adaptive Audio strength, noise cancellation with one AirPod, which AirPod's
+  microphone to use, and whether to connect to this PC automatically. Each appears only when
+  your model reports it. ([#12])
+- **"In case".** With both pods put away in a closed case, the window and tray say *In case*
+  instead of *Not connected*, and the case's last reading carries the hint *open the lid to
+  update*. ([#12])
+
+### Fixed
+- **Charging now shows when the AirPods are away from this PC.** Readings broadcast by the
+  AirPods (for example pods charging in an open case nearby) were greyed out and their
+  charging bolt hidden whenever the AirPods weren't connected here. Fresh readings are now
+  shown live, charging included. ([#12])
+- When the AirPods disconnect, their last levels turn into *last seen* at once instead of
+  looking live for up to a minute. ([#12])
+- **Personalized Volume shows its real state.** The switch used to start Off after every
+  launch whatever the AirPods were set to. ([#12])
+
+## [0.3.0] - 2026-10-27
+
+### Added
+- **The overlay is now an island**, modelled on the iPhone's Dynamic Island. It opens into a
+  card with a ring for each pod and the case, rests as a slim island with all three levels,
+  and turns into a short alert that names what just happened: *Case charging*, *Right AirPod
+  low*, *Playing on iPhone*, *Back on this PC* and *Disconnected*. ([#11])
+- **Noise control alerts.** Changing between Noise Cancellation, Transparency, Adaptive Audio
+  and Off (on the AirPods or in the app) shows the new mode, like on an iPhone. ([#11])
+- **Spring animations throughout.** The island grows out of a small pill with a slight
+  bounce and folds back without one; contents cross-fade with a gentle scale; rings sweep in
+  when the card opens; percentages roll to their new value; in Full mode, news rolls into
+  the card's second line with a small bounce. A change that arrives mid-animation carries
+  the motion on instead of restarting it. ([#11])
+
+### Changed
+- The overlay now sits at the **top center** by default, where the Dynamic Island lives. A
+  position you already chose is kept. ([#11])
+- **Glass at 0% is now the island's pure black** (was dark smoked glass). ([#11])
+- The overlay no longer pops up when charging stops or a level climbs back out of the low
+  range; it alerts when charging starts and when a battery drops to 20% or 10%. ([#11])
+- **Lower resource use in games.** The overlay redraws only while it moves, in step with the
+  compositor's frames (so it is as smooth as your monitor's refresh rate). At rest it draws
+  nothing and wakes up only when it has something to do, instead of checking five times a
+  second. ([#11])
+
 ## [0.2.2] - 2026-10-25
 
 ### Added
@@ -76,6 +123,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.3.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/DaBarkle/bazzitepods/releases/tag/v0.2.0
@@ -83,3 +131,5 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
+[#12]: https://github.com/DaBarkle/bazzitepods/pull/12
+[#11]: https://github.com/DaBarkle/bazzitepods/pull/11
