@@ -4,6 +4,27 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-10-28
+
+### Added
+- **Purist island style.** Pick *Purist* under Island style for the iPhone's Dynamic Island
+  as it really is: solid flat black with a hairline edge, tinted to match the alert. When
+  something happens, light runs round the border in that event's colour: green for
+  charging, a slow amber or red breath for low battery, blue when the audio moves to or
+  from another device, orange when you swap to the AirPods mic, and a flowing spectrum when
+  the AirPods connect. Each glow lasts under two seconds, then the island is still again
+  and draws nothing. ([#20])
+- **Island size.** Small, Medium, Large or Extra large scales the whole island, for big or
+  high-resolution screens. ([#20])
+- In the purist style the island gives a quick head shake when the AirPods mic can't be
+  used, and its outline moves like liquid as it stretches. ([#20])
+
+### Notes
+- *Classic* stays the default and looks exactly as before; the Glass slider only applies to
+  it. *Opacity over games* applies to both styles.
+- The purist look is drawn by a small GPU shader on the overlay's own surface. It runs only
+  while the island moves, so a still island still costs nothing, and it never touches games.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added
@@ -161,6 +182,8 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.5.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.4.0
 [0.3.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.0...v0.2.1
@@ -170,6 +193,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
 [#16]: https://github.com/DaBarkle/bazzitepods/pull/16
+[#20]: https://github.com/DaBarkle/bazzitepods/pull/20
 [#15]: https://github.com/DaBarkle/bazzitepods/pull/15
 [#12]: https://github.com/DaBarkle/bazzitepods/pull/12
 [#11]: https://github.com/DaBarkle/bazzitepods/pull/11
