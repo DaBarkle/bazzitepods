@@ -55,7 +55,7 @@ jobs:
       - name: Install system libraries
         uses: awalsh128/cache-apt-pkgs-action@v1.6.3
         with:
-          packages: pkg-config libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev
+          packages: pkg-config libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev libavcodec-dev
           version: 1
 
       - name: Install Rust

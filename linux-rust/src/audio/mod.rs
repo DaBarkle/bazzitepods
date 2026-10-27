@@ -126,6 +126,11 @@ impl AudioGuardHandle {
         self.send(Cmd::Away);
     }
 
+    /// Rebuild the output once, right away (after the AirPods mic stream stops).
+    pub fn rebuild(&self) {
+        self.send(Cmd::Rebuild);
+    }
+
     pub fn health(&self) -> watch::Receiver<AudioHealth> {
         self.health_rx.clone()
     }

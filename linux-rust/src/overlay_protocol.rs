@@ -109,6 +109,24 @@ impl ListeningMode {
     }
 }
 
+/// Which mic the PC uses, while the AirPods mic switch is on.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MicChoice {
+    Desk,
+    #[serde(rename = "airpods")]
+    AirPods,
+}
+
+impl MicChoice {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Desk => "Desk Mic",
+            Self::AirPods => "AirPods Mic",
+        }
+    }
+}
+
 /// One battery component (left pod, right pod, case, or a headphone's single battery).
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
 #[serde(default)]
@@ -146,6 +164,16 @@ pub struct OverlayState {
     /// Noise control mode, for models with one. A change pops a short alert.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listening_mode: Option<ListeningMode>,
+    /// The mic in use, while the mic switch is on. A change pops a short alert.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mic: Option<MicChoice>,
+    /// Counts failed or interrupted AirPods mic attempts; each new one pops an alert.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub mic_failures: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// One line of the protocol.
@@ -289,6 +317,26 @@ mod tests {
         };
         assert_eq!(state.listening_mode, Some(ListeningMode::Transparency));
         assert_eq!(ListeningMode::Transparency.label(), "Transparency");
+    }
+
+    #[test]
+    fn mic_fields_are_optional_on_the_wire() {
+        let c = OverlayCommand::parse_line(
+            r#"{"type":"state","state":{"connected":true,"mic":"airpods","mic_failures":2}}"#,
+        )
+        .unwrap()
+        .unwrap();
+        let OverlayCommand::State { state } = c else {
+            panic!()
+        };
+        assert_eq!(state.mic, Some(MicChoice::AirPods));
+        assert_eq!(state.mic_failures, 2);
+        let line = OverlayCommand::State {
+            state: OverlayState::default(),
+        }
+        .to_line();
+        assert!(!line.contains("mic"));
+        assert_eq!(MicChoice::Desk.label(), "Desk Mic");
     }
 
     #[test]

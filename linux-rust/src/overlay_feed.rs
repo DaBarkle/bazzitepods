@@ -3,10 +3,11 @@
 //! surface; nothing here ever touches game processes.
 
 use crate::core::battery::ComponentBattery;
+use crate::hub::MicRoute;
 use crate::hub::{AppSnapshot, DeviceSnapshot, Hub, LinkState};
 use crate::overlay_client::OverlayClient;
 use crate::overlay_protocol::{
-    ComponentState, ListeningMode, OverlayConfig, OverlayMode, OverlayState,
+    ComponentState, ListeningMode, MicChoice, OverlayConfig, OverlayMode, OverlayState,
 };
 use crate::utils::get_app_settings_path;
 use log::{debug, info};
@@ -169,6 +170,11 @@ pub fn to_overlay_state(snap: &AppSnapshot) -> Option<OverlayState> {
         } else {
             None
         },
+        mic: d.mic.map(|m| match m {
+            MicRoute::Desk => MicChoice::Desk,
+            MicRoute::AirPods => MicChoice::AirPods,
+        }),
+        mic_failures: d.mic_failures,
     })
 }
 

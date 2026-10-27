@@ -48,6 +48,9 @@ pub struct Settings {
     pub start_at_login: bool,
     /// Stem double/triple press -> next/previous track. Read by the device task.
     pub stem_control: bool,
+    /// Left stem hold swaps the desk mic and the AirPods mic; right hold changes noise
+    /// control. Read by the device task.
+    pub airpods_mic_switch: bool,
     /// Keys we don't manage, preserved verbatim.
     pub extra: Map<String, Value>,
 }
@@ -62,12 +65,13 @@ impl Default for Settings {
             overlay_glass: 0.7,
             start_at_login: true,
             stem_control: false,
+            airpods_mic_switch: false,
             extra: Map::new(),
         }
     }
 }
 
-const KEYS: [&str; 7] = [
+const KEYS: [&str; 8] = [
     "overlay_glass",
     "appearance",
     "overlay_mode",
@@ -75,6 +79,7 @@ const KEYS: [&str; 7] = [
     "overlay_opacity",
     "start_at_login",
     "stem_control",
+    "airpods_mic_switch",
 ];
 
 fn field<T: serde::de::DeserializeOwned>(map: &Map<String, Value>, key: &str, default: T) -> T {
@@ -106,6 +111,7 @@ impl Settings {
             overlay_glass: field(&map, "overlay_glass", d.overlay_glass).clamp(0.0, 1.0),
             start_at_login: field(&map, "start_at_login", d.start_at_login),
             stem_control: field(&map, "stem_control", d.stem_control),
+            airpods_mic_switch: field(&map, "airpods_mic_switch", d.airpods_mic_switch),
             extra,
         }
     }
@@ -131,6 +137,7 @@ impl Settings {
         put("overlay_glass", Value::from(self.overlay_glass));
         put("start_at_login", Value::from(self.start_at_login));
         put("stem_control", Value::from(self.stem_control));
+        put("airpods_mic_switch", Value::from(self.airpods_mic_switch));
         serde_json::to_string_pretty(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
     }
 }
@@ -240,6 +247,7 @@ mod tests {
                 "overlay_mode":"bogus","overlay_position":"bottom-left","start_at_login":false}"#,
         );
         assert!(s.stem_control);
+        assert!(!s.airpods_mic_switch);
         assert!(!s.start_at_login);
         assert_eq!(s.overlay_mode, OverlayMode::Compact);
         assert_eq!(s.overlay_position, OverlayPosition::BottomLeft);

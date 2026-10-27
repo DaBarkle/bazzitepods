@@ -12,7 +12,7 @@
 //! in, and numbers roll when a level changes. All of it is plain data here so it can be
 //! unit tested; `view.rs` only draws what this says.
 
-use crate::overlay_protocol::{ComponentState, ListeningMode, OverlayState};
+use crate::overlay_protocol::{ComponentState, ListeningMode, MicChoice, OverlayState};
 use crate::spring::{Feel, Spring};
 
 // --- Geometry (logical px) ------------------------------------------------------
@@ -107,6 +107,10 @@ pub enum Alert {
     /// The audio came back from another device.
     Back,
     Listening(ListeningMode),
+    /// The mic switch moved to this mic.
+    Mic(MicChoice),
+    /// A stem hold asked for the AirPods mic and it couldn't be used (or it stopped).
+    MicUnavailable,
     Disconnected,
 }
 
@@ -124,6 +128,8 @@ impl Alert {
             Alert::Elsewhere(name) => elsewhere_label(name.as_deref()),
             Alert::Back => "Back on this PC".into(),
             Alert::Listening(m) => m.label().into(),
+            Alert::Mic(m) => m.label().into(),
+            Alert::MicUnavailable => "AirPods Mic Unavailable".into(),
             Alert::Disconnected => display_name(state),
         }
     }
@@ -131,7 +137,8 @@ impl Alert {
     /// How long the alert stays before the island folds back, in seconds.
     pub fn duration(&self) -> f32 {
         match self {
-            Alert::Listening(_) => 2.2,
+            Alert::Listening(_) | Alert::Mic(_) => 2.2,
+            Alert::MicUnavailable => 3.0,
             Alert::Back | Alert::Disconnected => 2.6,
             Alert::Charging(_) => 3.0,
             Alert::Elsewhere(_) => 3.5,

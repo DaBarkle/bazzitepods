@@ -901,3 +901,40 @@ fn codec_names() {
     };
     assert_eq!(codec_for("a2dp-sink", Some(&sink)).as_deref(), Some("aac"));
 }
+
+#[tokio::test]
+async fn rebuild_toggles_a_healthy_output_once_every_time() {
+    // The AirPods mic stream stopped: the right pod went silent while the transport
+    // still looked active, so there is no stall to see. Each stop rebuilds once, with no
+    // cooldown and without using up the stall recoveries.
+    let mut w = World::new();
+    w.playing = true;
+    w.add_card("a2dp-sink-aac");
+    w.transports = vec!["active".into()];
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    for round in 1..=4 {
+        handle.rebuild();
+        settle(600).await;
+        let w = lock(&world);
+        assert_eq!(w.count("profile:off"), round, "log: {:?}", w.log);
+        assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"));
+    }
+    let h = handle.health().borrow().clone();
+    assert!(ready_with(&h, "a2dp-sink-aac"), "{h:?}");
+}
+
+#[tokio::test]
+async fn rebuild_waits_while_another_device_plays() {
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    handle.route_away();
+    handle.rebuild();
+    settle(600).await;
+    assert_eq!(lock(&world).count("profile:off"), 0);
+}

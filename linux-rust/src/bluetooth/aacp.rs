@@ -338,6 +338,8 @@ pub struct AACPManagerState {
     pub old_ear_detection_status: Vec<EarDetectionStatus>,
     pub ear_detection_status: Vec<EarDetectionStatus>,
     event_tx: Option<mpsc::UnboundedSender<AACPEvent>>,
+    /// Where mic audio packets (0x58) go while the AirPods mic is on.
+    mic_tx: Option<mpsc::Sender<Vec<u8>>>,
     pub devices: HashMap<String, DeviceData>,
     pub airpods_mac: Option<Address>,
 }
@@ -363,6 +365,7 @@ impl AACPManagerState {
             old_ear_detection_status: Vec::new(),
             ear_detection_status: Vec::new(),
             event_tx: None,
+            mic_tx: None,
             devices,
             airpods_mac: None,
         }
@@ -516,6 +519,11 @@ impl AACPManager {
 
         let opcode = packet[4];
         let payload = &packet[4..];
+
+        if opcode == crate::mic::packets::MIC_STREAM_OPCODE {
+            self.receive_mic_packet(packet).await;
+            return;
+        }
 
         match opcode {
             opcodes::BATTERY_INFO => {
@@ -869,6 +877,45 @@ impl AACPManager {
         }
         let packet = [opcode.as_slice(), data.as_slice()].concat();
         self.send_data_packet(&packet).await
+    }
+
+    /// The last value the AirPods reported for a control, if any.
+    pub async fn control_value(&self, identifier: ControlCommandIdentifiers) -> Option<Vec<u8>> {
+        self.state
+            .lock()
+            .await
+            .control_command_status_list
+            .iter()
+            .find(|s| s.identifier == identifier)
+            .map(|s| s.value.clone())
+    }
+
+    /// Asks the AirPods to start their high-quality mic stream (see `crate::mic`).
+    pub async fn send_mic_start(&self) -> Result<()> {
+        self.send_packet(&crate::mic::packets::MIC_START).await
+    }
+
+    pub async fn send_mic_stop(&self) -> Result<()> {
+        self.send_packet(&crate::mic::packets::MIC_STOP).await
+    }
+
+    /// Where mic audio packets go; `None` drops them.
+    pub async fn set_mic_sink(&self, tx: Option<mpsc::Sender<Vec<u8>>>) {
+        self.state.lock().await.mic_tx = tx;
+    }
+
+    async fn receive_mic_packet(&self, packet: &[u8]) {
+        if !crate::mic::packets::is_audio(packet) {
+            info!("Received Mic Stream message: {}", hex::encode(packet));
+            return;
+        }
+        let state = self.state.lock().await;
+        if let Some(tx) = &state.mic_tx {
+            // Never wait on the decoder here: battery and ear reports share this channel.
+            if tx.try_send(packet.to_vec()).is_err() {
+                debug!("Mic audio packet dropped (decoder busy or gone)");
+            }
+        }
     }
 
     pub async fn send_media_information_new_device(
@@ -1452,8 +1499,12 @@ where
     update_devices_file_at(&get_devices_path(), f).await
 }
 
+/// Room for one AACP packet. Mic audio packets come close to 1 KB and a longer one
+/// would be cut off silently, so this has headroom.
+const RECV_BUFFER: usize = 4096;
+
 async fn recv_thread(manager: AACPManager, sp: Arc<SeqPacket>) {
-    let mut buf = vec![0u8; 1024];
+    let mut buf = vec![0u8; RECV_BUFFER];
     loop {
         match sp.recv(&mut buf).await {
             Ok(0) => {
@@ -1462,7 +1513,10 @@ async fn recv_thread(manager: AACPManager, sp: Arc<SeqPacket>) {
             }
             Ok(n) => {
                 let data = &buf[..n];
-                debug!("Received {} bytes: {}", n, hex::encode(data));
+                // Mic audio arrives ~33 times a second; logging it would drown the rest.
+                if data.get(4) != Some(&crate::mic::packets::MIC_STREAM_OPCODE) {
+                    debug!("Received {} bytes: {}", n, hex::encode(data));
+                }
                 manager.receive_packet(data).await;
             }
             Err(e) => {
@@ -1518,6 +1572,7 @@ impl AACPManager {
         let mut state = self.state.lock().await;
         state.sender = None;
         state.event_tx = None;
+        state.mic_tx = None;
         state.control_command_subscribers.clear();
     }
 }

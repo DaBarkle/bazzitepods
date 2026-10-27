@@ -95,6 +95,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.4.0" date="2026-10-27">
+      <description>
+        <p>Use the AirPods as the PC's mic while music stays in full quality.</p>
+        <ul>
+          <li>Hold the left stem to swap between your desk mic and the AirPods mic (turn on "AirPods mic switch" first)</li>
+          <li>Hold the right stem to change noise control</li>
+          <li>Apps follow the swap, and the PC returns to the desk mic when the AirPods go to another device or a call starts</li>
+          <li>The overlay shows which mic is in use</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.2" date="2026-10-27">
       <description>
         <p>AirPods come back when you do.</p>
