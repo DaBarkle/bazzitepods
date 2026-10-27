@@ -97,24 +97,15 @@
   <releases>
     <release version="0.5.0" date="2026-10-28">
       <description>
-        <p>A purist Dynamic Island style, and island sizes.</p>
+        <p>A purist Dynamic Island, a redesigned app window, one-click Apple device mode, and a mic switch that works on AirPods 4.</p>
         <ul>
-          <li>Purist style: solid flat black with a hairline edge, like the iPhone's Dynamic Island</li>
+          <li>Purist style, now the default: solid flat black with a hairline edge, like the iPhone's Dynamic Island</li>
           <li>Light runs round the border in the event's colour when something happens, then the island rests</li>
           <li>Small, Medium, Large and Extra large island sizes</li>
           <li>Redesigned app window: pure black, three tabs, and a preview screen for placing the overlay</li>
-        </ul>
-      </description>
-    </release>
-    <release version="0.4.1" date="2026-10-28">
-      <description>
-        <p>The AirPods mic switch now works on AirPods 4 and moves every app, including Discord.</p>
-        <ul>
-          <li>A soft chime tells you which mic you swapped to: rising for the AirPods, falling for the desk mic</li>
-          <li>Holding the left stem swaps the mic instead of changing noise control</li>
-          <li>The AirPods mic sends sound, and the swap is allowed inside the Flatpak</li>
-          <li>Apps set to a mic by name, or using EasyEffects' mic, move to the AirPods mic and back</li>
-          <li>Apps that open the mic after the swap, such as Discord joining a voice channel, move too</li>
+          <li>Apple device mode is one switch in Settings: confirm, enter your password, done</li>
+          <li>Holding the left stem swaps the mic on AirPods 4, with a soft chime telling you which mic you're on</li>
+          <li>The AirPods mic sends sound, and every app moves with the swap, including Discord and EasyEffects</li>
         </ul>
       </description>
     </release>
