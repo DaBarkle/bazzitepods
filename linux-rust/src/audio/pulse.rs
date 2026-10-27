@@ -203,6 +203,13 @@ pub trait PulseApi: Send + Sync + 'static {
         sink_index: u32,
         mute: bool,
     ) -> impl Future<Output = Result<(), PulseError>> + Send;
+    /// Suspends or resumes a sink. For Bluetooth this releases or re-acquires the
+    /// transport, keeping the profile and codec.
+    fn suspend_sink(
+        &self,
+        sink_index: u32,
+        suspend: bool,
+    ) -> impl Future<Output = Result<(), PulseError>> + Send;
 }
 
 /// Real backend.
@@ -238,6 +245,10 @@ impl PulseApi for LibPulse {
 
     async fn set_sink_mute(&self, sink_index: u32, mute: bool) -> Result<(), PulseError> {
         blocking(move || set_sink_mute_sync(sink_index, mute, DEFAULT_DEADLINE)).await
+    }
+
+    async fn suspend_sink(&self, sink_index: u32, suspend: bool) -> Result<(), PulseError> {
+        blocking(move || suspend_sink_sync(sink_index, suspend, DEFAULT_DEADLINE)).await
     }
 }
 
@@ -590,6 +601,18 @@ pub fn set_sink_mute_sync(
     let mut introspect = conn.context.introspect();
     let _op = introspect.set_sink_mute_by_index(sink_index, mute, Some(cb));
     conn.wait_success("mute sink", &slot)
+}
+
+pub fn suspend_sink_sync(
+    sink_index: u32,
+    suspend: bool,
+    timeout: Duration,
+) -> Result<(), PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let (slot, cb) = success_slot();
+    let mut introspect = conn.context.introspect();
+    let _op = introspect.suspend_sink_by_index(sink_index, suspend, Some(cb));
+    conn.wait_success("suspend sink", &slot)
 }
 
 fn get_sink_volume(conn: &mut Conn, sink_name: &str) -> Result<ChannelVolumes, PulseError> {

@@ -32,6 +32,8 @@ struct World {
     toggled_off: bool,
     /// This profile never starts after a toggle (stays idle); any other one plays.
     refuses: Option<String>,
+    /// A suspend/resume of the sink starts the refused transport.
+    resume_plays: bool,
 }
 
 impl World {
@@ -205,6 +207,15 @@ impl PulseApi for FakePulse {
         Ok(())
     }
 
+    async fn suspend_sink(&self, sink_index: u32, suspend: bool) -> Result<(), PulseError> {
+        let mut w = lock(&self.0);
+        w.log.push(format!("suspend:{sink_index}:{suspend}"));
+        if !suspend && w.resume_plays {
+            w.transports = vec!["active".into()];
+        }
+        Ok(())
+    }
+
     async fn set_sink_mute(&self, sink_index: u32, mute: bool) -> Result<(), PulseError> {
         let mut w = lock(&self.0);
         w.log.push(format!("mute:{sink_index}:{mute}"));
@@ -252,6 +263,7 @@ fn fast() -> GuardConfig {
         retry_after_failure: Duration::from_secs(30),
         max_ensure_attempts: 3,
         fresh_link: Duration::ZERO,
+        transport_lockout: Duration::from_millis(50),
     }
 }
 
@@ -1003,7 +1015,7 @@ async fn rebuild_the_airpods_refuse_switches_codec_then_returns_to_aac() {
     settle(100).await;
     handle.hush();
     handle.rebuild();
-    settle(400).await;
+    settle(1000).await;
     {
         let w = lock(&world);
         assert_eq!(w.count("profile:off"), 1, "no second toggle: {:?}", w.log);
@@ -1011,6 +1023,10 @@ async fn rebuild_the_airpods_refuse_switches_codec_then_returns_to_aac() {
         assert_eq!(w.transports, ["active"], "{:?}", w.log);
         assert!(!w.snap.sinks.iter().any(|s| s.muted), "log: {:?}", w.log);
     }
+    assert!(
+        lock(&world).log.iter().any(|l| l.starts_with("suspend:")),
+        "a plain restart is tried first"
+    );
     // Music stops: back to AAC, which plays again now the AirPods have settled.
     {
         let mut w = lock(&world);
@@ -1033,4 +1049,34 @@ async fn a_remembered_fallback_codec_goes_back_to_aac_on_connect() {
     settle(400).await;
     let w = lock(&world);
     assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"), "{:?}", w.log);
+}
+
+#[tokio::test]
+async fn a_stuck_rebuild_waits_out_the_lockout_and_restarts_the_same_codec() {
+    // PipeWire refuses to start the stream for a few seconds after transport errors.
+    // After that a plain restart (suspend/resume) plays, still on AAC, with no second
+    // profile change.
+    let mut w = World::new();
+    w.playing = true;
+    w.add_card("a2dp-sink-aac");
+    w.transports = vec!["active".into()];
+    w.refuses = Some("a2dp-sink-aac".into());
+    w.resume_plays = true;
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    handle.hush();
+    handle.rebuild();
+    settle(1000).await;
+    let w = lock(&world);
+    assert_eq!(w.count("profile:off"), 1, "{:?}", w.log);
+    assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"), "{:?}", w.log);
+    assert_eq!(w.transports, ["active"], "{:?}", w.log);
+    assert!(
+        !w.log.iter().any(|l| l == "profile:a2dp-sink-sbc_xq"),
+        "{:?}",
+        w.log
+    );
+    assert!(!w.snap.sinks.iter().any(|s| s.muted), "{:?}", w.log);
 }
