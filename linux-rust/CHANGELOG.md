@@ -7,7 +7,7 @@ All notable changes to BazzitePods are documented here. The format follows
 ## [0.5.0] - 2026-10-28
 
 ### Added
-- **Purist island style.** Pick *Purist* under Island style for the iPhone's Dynamic Island
+- **Purist island style.** Pick *Purist* under *Style* in the Island tab for the iPhone's Dynamic Island
   as it really is: solid flat black with a hairline edge, tinted to match the alert. When
   something happens, light runs round the border in that event's colour: green for
   charging, a slow amber or red breath for low battery, blue when the audio moves to or
