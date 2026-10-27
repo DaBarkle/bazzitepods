@@ -668,6 +668,19 @@ impl MicSnapshot {
         self.sources.iter().find(|s| s.name == name)
     }
 
+    /// Streams recording from a mic (a real one, or a virtual one such as EasyEffects'),
+    /// other than `except` and the Bluetooth headset mics, with the mic each records from.
+    pub fn recordings_on_mics(&self, except: &str) -> Vec<(u32, String)> {
+        self.recordings
+            .iter()
+            .filter_map(|r| {
+                let s = self.sources.iter().find(|s| s.index == r.source)?;
+                (!s.is_monitor && s.name != except && !s.name.starts_with("bluez_"))
+                    .then(|| (r.index, s.name.clone()))
+            })
+            .collect()
+    }
+
     /// Streams recording from the named source.
     pub fn recordings_on(&self, name: &str) -> Vec<u32> {
         let Some(source) = self.source(name) else {
@@ -820,6 +833,47 @@ mod tests {
         assert_eq!(snap.recordings_on("yeti"), vec![40, 42]);
         assert!(snap.recordings_on("missing").is_empty());
         assert_eq!(snap.source("speakers.monitor").map(|s| s.index), Some(9));
+    }
+
+    #[test]
+    fn recordings_on_mics_skips_monitors_headset_mics_and_ours() {
+        let src = |index, name: &str, is_monitor| MicSource {
+            index,
+            name: name.into(),
+            is_monitor,
+        };
+        let rec = |index, source| MicRecording {
+            index,
+            source,
+            app: None,
+        };
+        let snap = MicSnapshot {
+            default_source: None,
+            sources: vec![
+                src(3, "yeti", false),
+                src(4, "speakers.monitor", true),
+                src(5, "easyeffects_source", false),
+                src(6, "bluez_input.AA_BB", false),
+                src(7, "ours", false),
+            ],
+            recordings: vec![
+                rec(40, 3),
+                rec(41, 4),
+                rec(42, 5),
+                rec(43, 6),
+                rec(44, 7),
+                rec(45, 3),
+            ],
+            modules: Vec::new(),
+        };
+        assert_eq!(
+            snap.recordings_on_mics("ours"),
+            vec![
+                (40, "yeti".to_string()),
+                (42, "easyeffects_source".to_string()),
+                (45, "yeti".to_string())
+            ]
+        );
     }
 
     #[test]

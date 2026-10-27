@@ -5,7 +5,8 @@
 //! DESK --use_airpods_mic--> remember the desk mic (on disk, for crash recovery)
 //!                      -> load the virtual mic -> start the decoder -> 0x58 START
 //!                      -> make it the default mic -> pause Conversation Awareness
-//!                      -> move apps that stayed on the desk mic -> AIRPODS
+//!                      -> move apps still on another mic -> AIRPODS
+//!                         (and every 2 s while on it, for apps that open a mic later)
 //! AIRPODS --use_desk_mic--> desk mic default first -> move those apps back -> 0x58 STOP
 //!                      -> unload the virtual mic -> restore Conversation Awareness
 //!                      -> rebuild the music output -> DESK
@@ -88,6 +89,8 @@ pub struct SwitchConfig {
     pub settle: Duration,
     /// No audio for this long means the AirPods stopped the stream.
     pub watchdog: Duration,
+    /// How often to look for apps that started recording from a real mic since.
+    pub sweep: Duration,
 }
 
 impl Default for SwitchConfig {
@@ -97,6 +100,7 @@ impl Default for SwitchConfig {
             fifo: fifo_path(),
             settle: Duration::from_millis(1500),
             watchdog: Duration::from_secs(3),
+            sweep: Duration::from_secs(2),
         }
     }
 }
@@ -127,6 +131,8 @@ struct Active {
     desk: Option<String>,
     /// Apps that had to be moved by hand, and the mic each came from.
     moved: Vec<(u32, String)>,
+    /// Apps that refused to move; not tried again.
+    refused: Vec<u32>,
     restore_ca: bool,
     live: Liveness,
 }
@@ -185,6 +191,8 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Msg>) {
         self.recover().await;
         let mut tick = tokio::time::interval(Duration::from_millis(500));
+        let mut sweep = tokio::time::interval(self.cfg.sweep);
+        sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             tokio::select! {
                 msg = rx.recv() => match msg {
@@ -209,6 +217,7 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
                         self.use_desk_mic(Some("The AirPods stopped sending mic audio".into())).await;
                     }
                 }
+                _ = sweep.tick(), if self.active.is_some() => self.move_stranded().await,
             }
         }
     }
@@ -325,6 +334,7 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
             module,
             desk: desk.clone(),
             moved: Vec::new(),
+            refused: Vec::new(),
             restore_ca,
             live,
         });
@@ -334,28 +344,44 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
         );
         self.report(None);
 
-        // Apps that follow the default mic have moved by now; move the ones pinned to it.
+        // Apps that follow the default mic have moved by now; move the ones pinned to a mic.
         sleep(self.cfg.settle).await;
-        if let (Some(desk), Ok(snap)) = (desk, self.host.snapshot().await) {
-            let pinned = snap.recordings_on(&desk);
-            let mut moved = Vec::new();
-            for rec in pinned {
-                match self.host.move_recording(rec, SOURCE_NAME).await {
-                    Ok(()) => moved.push((rec, desk.clone())),
-                    Err(e) => warn!("[mic] could not move recording {rec}: {e}"),
+        self.move_stranded().await;
+        Ok(())
+    }
+
+    /// Moves apps still recording from another mic to the AirPods mic, remembering where
+    /// each came from: apps set to a mic by name, and apps on a virtual mic such as
+    /// EasyEffects' (EasyEffects records the desk mic itself, so its mic never changes).
+    async fn move_stranded(&mut self) {
+        let Ok(snap) = self.host.snapshot().await else {
+            return;
+        };
+        let refused = self
+            .active
+            .as_ref()
+            .map(|a| a.refused.clone())
+            .unwrap_or_default();
+        let (mut moved, mut failed) = (Vec::new(), Vec::new());
+        for (rec, source) in snap.recordings_on_mics(SOURCE_NAME) {
+            if refused.contains(&rec) {
+                continue;
+            }
+            match self.host.move_recording(rec, SOURCE_NAME).await {
+                Ok(()) => moved.push((rec, source)),
+                Err(e) => {
+                    warn!("[mic] could not move recording {rec} off {source}: {e}");
+                    failed.push(rec);
                 }
             }
-            if !moved.is_empty() {
-                info!(
-                    "[mic] moved {} app(s) that stayed on the desk mic",
-                    moved.len()
-                );
-            }
-            if let Some(a) = self.active.as_mut() {
-                a.moved = moved;
-            }
         }
-        Ok(())
+        if !moved.is_empty() {
+            info!("[mic] moved {} app(s) to the AirPods mic", moved.len());
+        }
+        if let Some(a) = self.active.as_mut() {
+            a.moved.extend(moved);
+            a.refused.extend(failed);
+        }
     }
 
     async fn use_desk_mic(&mut self, problem: Option<String>) {
