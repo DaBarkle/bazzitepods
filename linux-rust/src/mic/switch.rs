@@ -40,6 +40,8 @@ pub trait MicHost: Send + Sync + 'static {
         recording: u32,
         source: &str,
     ) -> impl Future<Output = Result<(), String>> + Send;
+    /// Plays the chime for switching to `to`.
+    fn chime(&self, to: MicRoute) -> impl Future<Output = ()> + Send;
     /// Starts decoding `packets` into `fifo`.
     fn start_decoder(
         &self,
@@ -214,6 +216,7 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
                         .is_some_and(|a| a.live.quiet_for() > self.cfg.watchdog);
                     if stalled {
                         warn!("[mic] the AirPods stopped sending mic audio; back to the desk mic");
+                        self.host.chime(MicRoute::Desk).await;
                         self.use_desk_mic(Some("The AirPods stopped sending mic audio".into())).await;
                     }
                 }
@@ -233,7 +236,11 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
 
     async fn on_request(&mut self, req: MicRequest) {
         match req {
-            MicRequest::Toggle { .. } if self.active.is_some() => self.use_desk_mic(None).await,
+            MicRequest::Toggle { .. } if self.active.is_some() => {
+                // Before the music output is rebuilt, which would cut it off.
+                self.host.chime(MicRoute::Desk).await;
+                self.use_desk_mic(None).await;
+            }
             MicRequest::Toggle { allowed: Err(why) } => {
                 info!("[mic] not switching to the AirPods mic: {why}");
                 self.report(Some(why.to_string()));
@@ -343,6 +350,7 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
             ELD_SAMPLE_RATE, desk
         );
         self.report(None);
+        self.host.chime(MicRoute::AirPods).await;
 
         // Apps that follow the default mic have moved by now; move the ones pinned to a mic.
         sleep(self.cfg.settle).await;
@@ -357,26 +365,32 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
         let Ok(snap) = self.host.snapshot().await else {
             return;
         };
-        let refused = self
-            .active
-            .as_ref()
-            .map(|a| a.refused.clone())
-            .unwrap_or_default();
+        let Some(active) = self.active.as_ref() else {
+            return;
+        };
         let (mut moved, mut failed) = (Vec::new(), Vec::new());
         for (rec, source) in snap.recordings_on_mics(SOURCE_NAME) {
-            if refused.contains(&rec) {
+            if active.refused.contains(&rec) {
+                continue;
+            }
+            let app = snap.app_of(rec).unwrap_or("an app");
+            if active.moved.iter().any(|(r, _)| *r == rec) {
+                // Moved once and still (or again) on a mic: something pins it there.
+                // Moving it every sweep would flip it between the two mics.
+                warn!("[mic] {app} (recording {rec}) stays on {source}; leaving it there");
+                failed.push(rec);
                 continue;
             }
             match self.host.move_recording(rec, SOURCE_NAME).await {
-                Ok(()) => moved.push((rec, source)),
+                Ok(()) => {
+                    info!("[mic] moved {app} (recording {rec}) from {source} to the AirPods mic");
+                    moved.push((rec, source));
+                }
                 Err(e) => {
-                    warn!("[mic] could not move recording {rec} off {source}: {e}");
+                    warn!("[mic] could not move {app} (recording {rec}) off {source}: {e}");
                     failed.push(rec);
                 }
             }
-        }
-        if !moved.is_empty() {
-            info!("[mic] moved {} app(s) to the AirPods mic", moved.len());
         }
         if let Some(a) = self.active.as_mut() {
             a.moved.extend(moved);

@@ -108,7 +108,10 @@ pub fn spawn(
                 for unit in access_units(&packet) {
                     match decoder.decode(unit, &mut pcm) {
                         Ok(_) => frames += 1,
-                        Err(_) => {
+                        Err(e) => {
+                            if errors < 3 {
+                                warn!("[mic] frame not decoded: {e}");
+                            }
                             // Keep the timing: a lost frame becomes silence.
                             errors += 1;
                             pcm.resize(pcm.len() + ELD_FRAME_SAMPLES, 0.0);

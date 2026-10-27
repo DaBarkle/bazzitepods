@@ -16,6 +16,7 @@
 //! lower the music quality themselves (measured: the PC kept sending full quality).
 
 pub mod agc;
+pub mod chime;
 pub mod eld;
 pub mod gestures;
 pub mod packets;
@@ -121,13 +122,17 @@ impl MicHost for PulseMicHost {
         blocking(move || pulse::move_source_output_sync(recording, &source, DEFAULT_DEADLINE)).await
     }
 
+    async fn chime(&self, to: MicRoute) {
+        chime::play(to).await;
+    }
+
     fn start_decoder(
         &self,
         packets: mpsc::Receiver<Vec<u8>>,
         fifo: &Path,
         live: Liveness,
     ) -> Result<(), String> {
-        let decoder = eld::Decoder::open(&packets::ELD_ASC)
+        let decoder = eld::Decoder::open(&packets::ELD_ASC, packets::ELD_ASC_RATE)
             .map_err(|e| format!("the AirPods mic needs FFmpeg's AAC decoder: {e}"))?;
         stream::spawn(packets, decoder, fifo, live)
             .map(|_| ())

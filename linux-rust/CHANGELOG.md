@@ -32,7 +32,24 @@ All notable changes to BazzitePods are documented here. The format follows
 
 ## [0.4.1] - 2026-10-28
 
+### Added
+- **A sound when the mic swaps.** Holding the left stem now plays a soft rising chime when
+  the AirPods mic turns on and a falling one when the desk mic comes back, so you know which
+  mic you're on without looking. ([#21])
+
 ### Fixed
+- **The left stem hold now swaps the mic on AirPods 4.** The AirPods ignored the request to
+  hand stem holds to the PC when it was sent while connecting, so holding the stem changed
+  noise control instead. BazzitePods now sends it again once the AirPods have settled, after
+  taking them back from another device, and whenever the AirPods reset it. ([#21])
+- **The AirPods mic sends sound.** Its audio wasn't decoded with the FFmpeg in the Flatpak,
+  so apps recorded silence. ([#21])
+- **The swap works inside the Flatpak.** The sound server refused to let BazzitePods change
+  the default mic or move apps between mics; it now identifies itself as an audio manager,
+  like EasyEffects and Discord do. This also fixes moving music back to the AirPods after a
+  reconnect. ([#21])
+- An app that keeps going back to the desk mic is left there instead of being moved back
+  and forth every two seconds. ([#21])
 - **Discord now moves to the AirPods mic.** Swapping to the AirPods mic only moved apps
   that were recording from your default mic, so apps set to a mic by name, or using
   EasyEffects' mic (*Easy Effects Source*), stayed on the desk mic. Every app recording from
@@ -214,6 +231,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
+[#21]: https://github.com/DaBarkle/bazzitepods/pull/21
 [#17]: https://github.com/DaBarkle/bazzitepods/pull/17
 [#16]: https://github.com/DaBarkle/bazzitepods/pull/16
 [#19]: https://github.com/DaBarkle/bazzitepods/pull/19
