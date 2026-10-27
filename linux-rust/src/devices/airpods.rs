@@ -47,6 +47,8 @@ pub struct DeviceContext {
 const RETRY_DELAYS: [u64; 6] = [1, 2, 3, 5, 8, 13];
 /// How often we check that the control channel is still alive.
 const HEALTH_INTERVAL: Duration = Duration::from_secs(2);
+/// When the stem claim is sent a second time after connecting.
+const CLAIM_RESEND_AFTER: Duration = Duration::from_secs(6);
 
 pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: CancellationToken) {
     let mac_s = mac.to_string();
@@ -284,6 +286,10 @@ async fn session(
     let mut route_watch = tokio::time::interval(ROUTE_WATCH_INTERVAL);
     let mut health = tokio::time::interval(HEALTH_INTERVAL);
     let mut model_known = false;
+    // AirPods 4 ANC ignore the stem claim sent during the handshake (seen 2026-10-28) but
+    // take it once the connection has settled, so it is sent again a few seconds in.
+    let connected_at = Instant::now();
+    let mut claim_resent = false;
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -293,6 +299,10 @@ async fn session(
                 }
                 if !model_known {
                     model_known = refresh_model(aacp, ctx, &mac_s, name).await;
+                }
+                if !claim_resent && connected_at.elapsed() >= CLAIM_RESEND_AFTER {
+                    claim_resent = true;
+                    apply_stem_settings(aacp, &StemSettings::read()).await;
                 }
                 // Settings changed in the window: claim or release the stem presses now.
                 let now = StemSettings::read();

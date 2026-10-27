@@ -73,6 +73,7 @@ struct Lib {
     malloc: unsafe extern "C" fn(usize) -> Ptr,
     mallocz: unsafe extern "C" fn(usize) -> Ptr,
     free: unsafe extern "C" fn(Ptr),
+    opt_set_int: unsafe extern "C" fn(Ptr, *const c_char, i64, c_int) -> c_int,
 }
 
 // The function pointers are plain C entry points, callable from any thread.
@@ -157,6 +158,7 @@ fn open_lib() -> Result<Lib, String> {
         malloc: sym!("av_malloc"),
         mallocz: sym!("av_mallocz"),
         free: sym!("av_free"),
+        opt_set_int: sym!("av_opt_set_int"),
     })
 }
 
@@ -192,7 +194,9 @@ unsafe impl Send for Decoder {}
 
 impl Decoder {
     /// Opens FFmpeg's AAC decoder for the given AudioSpecificConfig.
-    pub fn open(asc: &[u8]) -> Result<Decoder, String> {
+    /// Opens a decoder for `asc`, whose sample rate is `rate` (FFmpeg's AAC decoder fails
+    /// every AAC-ELD frame with "internal bug" unless the context knows the rate).
+    pub fn open(asc: &[u8], rate: u32) -> Result<Decoder, String> {
         let lib = lib()?;
         // SAFETY: FFmpeg calls with the documented contracts. Every pointer is checked, and
         // `Decoder` frees whatever was allocated (Drop) on every early return.
@@ -211,6 +215,9 @@ impl Decoder {
                 return Err("FFmpeg ran out of memory".into());
             }
             d.configure(asc)?;
+            if (lib.opt_set_int)(d.ctx, c"ar".as_ptr(), i64::from(rate), 0) < 0 {
+                return Err("FFmpeg refused the sample rate".into());
+            }
             let rc = (lib.open2)(d.ctx, codec, ptr::null_mut());
             if rc < 0 {
                 return Err(format!("FFmpeg could not open the AAC decoder ({rc})"));
@@ -344,10 +351,18 @@ mod tests {
     const LC_ASC: [u8; 2] = [0x11, 0x88];
     const LC_FRAMES: &[u8] = include_bytes!("testdata/aac_lc_tone.bin");
 
+    /// Forty AAC-ELD frames (48 kHz mono, 512 samples, a 440 Hz tone), made with fdkaac.
+    /// The AirPods send 480-sample ELD frames; the decoder setup is the same.
+    const ELD_TEST_ASC: [u8; 4] = [0xF8, 0xE6, 0x20, 0x00];
+    const ELD_FRAMES: &[u8] = include_bytes!("testdata/aac_eld_tone.bin");
+
     fn frames() -> Vec<&'static [u8]> {
+        split(LC_FRAMES)
+    }
+
+    fn split(mut rest: &'static [u8]) -> Vec<&'static [u8]> {
         // Each frame is stored as [len: u16 LE][bytes].
         let mut out = Vec::new();
-        let mut rest = LC_FRAMES;
         while rest.len() >= 2 {
             let n = u16::from_le_bytes([rest[0], rest[1]]) as usize;
             out.push(&rest[2..2 + n]);
@@ -358,7 +373,7 @@ mod tests {
 
     #[test]
     fn decodes_aac_frames_when_ffmpeg_is_installed() {
-        let mut d = match Decoder::open(&LC_ASC) {
+        let mut d = match Decoder::open(&LC_ASC, 48_000) {
             Ok(d) => d,
             Err(e) => {
                 // CI installs FFmpeg; a desktop without it just skips this.
@@ -378,12 +393,29 @@ mod tests {
         let peak = pcm.iter().fold(0.0f32, |m, s| m.max(s.abs()));
         assert!(peak > 0.1 && peak <= 1.0, "peak {peak}");
         // The ELD config of the AirPods stream is accepted too.
-        assert!(Decoder::open(&super::super::packets::ELD_ASC).is_ok());
+        assert!(Decoder::open(&super::super::packets::ELD_ASC, 48_000).is_ok());
+    }
+
+    #[test]
+    fn decodes_aac_eld_frames_when_ffmpeg_is_installed() {
+        // FFmpeg failed every ELD frame ("internal bug") until the context had a rate.
+        let Ok(mut d) = Decoder::open(&ELD_TEST_ASC, 48_000) else {
+            return;
+        };
+        let mut pcm = Vec::new();
+        let decoded = split(ELD_FRAMES)
+            .into_iter()
+            .filter(|f| d.decode(f, &mut pcm).is_ok())
+            .count();
+        assert_eq!(decoded, 40);
+        assert_eq!(pcm.len(), 40 * 512);
+        let peak = pcm.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.1 && peak <= 1.0, "peak {peak}");
     }
 
     #[test]
     fn garbage_is_an_error_not_a_crash() {
-        let Ok(mut d) = Decoder::open(&LC_ASC) else {
+        let Ok(mut d) = Decoder::open(&LC_ASC, 48_000) else {
             return;
         };
         let mut pcm = Vec::new();

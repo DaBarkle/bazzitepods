@@ -22,6 +22,8 @@ pub const MIC_STOP: [u8; 12] = [
 /// AudioSpecificConfig of the stream: AAC-ELD (object type 39), mono. It says 48 kHz, but
 /// 480 samples arrive every 7.5 ms, so the audio really runs at 64 kHz.
 pub const ELD_ASC: [u8; 4] = [0xF8, 0xE6, 0x30, 0x00];
+/// The rate the AudioSpecificConfig states, which the decoder must be told as well.
+pub const ELD_ASC_RATE: u32 = 48_000;
 pub const ELD_SAMPLE_RATE: u32 = 64_000;
 pub const ELD_FRAME_SAMPLES: usize = 480;
 

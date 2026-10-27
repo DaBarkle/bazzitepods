@@ -127,7 +127,7 @@ impl MicHost for PulseMicHost {
         fifo: &Path,
         live: Liveness,
     ) -> Result<(), String> {
-        let decoder = eld::Decoder::open(&packets::ELD_ASC)
+        let decoder = eld::Decoder::open(&packets::ELD_ASC, packets::ELD_ASC_RATE)
             .map_err(|e| format!("the AirPods mic needs FFmpeg's AAC decoder: {e}"))?;
         stream::spawn(packets, decoder, fifo, live)
             .map(|_| ())
