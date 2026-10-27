@@ -4,6 +4,7 @@ mod battery_service;
 mod bluetooth;
 mod core;
 mod devices;
+mod disconnect_watch;
 mod fullscreen_watch;
 mod hub;
 mod media_controller;
@@ -19,6 +20,7 @@ use crate::battery_service::BatteryService;
 use crate::bluetooth::managers::DeviceManagers;
 use crate::devices::airpods::DeviceContext;
 use crate::devices::enums::{DeviceData, DeviceType};
+use crate::disconnect_watch::{DropReason, ReconnectPlan};
 use crate::hub::{AdapterState, Hub};
 use crate::ui::messages::BluetoothUIMessage;
 use crate::utils::get_devices_path;
@@ -181,6 +183,7 @@ async fn async_main(
 
     let (kick_tx, kick_rx) = unbounded_channel::<Kick>();
     sleep_monitor::spawn(kick_tx.clone());
+    disconnect_watch::spawn(kick_tx.clone());
 
     let (ble_tx, mut ble_rx) = unbounded_channel();
     tokio::spawn(async move {
@@ -230,6 +233,8 @@ pub enum Kick {
     Resumed,
     /// A known AirPods is advertising nearby; `in_use` when a pod is out of the case or in an ear.
     BleSeen(Address, bool),
+    /// BlueZ dropped a link, and said why.
+    Disconnected(Address, DropReason),
 }
 
 struct SupervisorCtx {
@@ -262,22 +267,54 @@ struct AdapterState_ {
     /// AirPods worth reconnecting without waiting for their adverts: when they dropped
     /// this PC, and for how long to keep trying.
     eager: HashMap<Address, (Instant, Duration)>,
+    /// Why BlueZ last dropped each device, until it connects again.
+    drop_reason: HashMap<Address, DropReason>,
 }
 
 impl AdapterState_ {
     fn note_lost(&mut self, addr: Address) {
-        let now = Instant::now();
-        self.lost_link.entry(addr).or_insert(now);
+        self.lost_link.entry(addr).or_insert_with(Instant::now);
+        self.plan_reconnect(addr);
+    }
+
+    /// Decide whether to keep reconnecting AirPods that dropped this PC. Runs when the drop is
+    /// noticed and again when BlueZ says why, whichever comes first.
+    fn plan_reconnect(&mut self, addr: Address) {
+        let Some(&lost_at) = self.lost_link.get(&addr) else {
+            return;
+        };
         let mac = addr.to_string();
-        if devices::airpods::dropped_for_peer(&mac) {
-            info!("AirPods {} dropped this PC for another device", addr);
-            self.eager.entry(addr).or_insert((now, PEER_DROP_WINDOW));
-        } else if devices::airpods::dropped_in_case(&mac) {
-            info!(
+        let reason = self.drop_reason.get(&addr).copied();
+        let in_case = devices::airpods::dropped_in_case(&mac);
+        let for_peer = devices::airpods::dropped_for_peer(&mac);
+        let window = match disconnect_watch::plan(reason, in_case, for_peer) {
+            ReconnectPlan::Never => {
+                info!(
+                    "AirPods {} were disconnected on this PC; leaving them disconnected",
+                    addr
+                );
+                self.lost_link.remove(&addr);
+                self.eager.remove(&addr);
+                return;
+            }
+            ReconnectPlan::Briefly => PEER_DROP_WINDOW,
+            ReconnectPlan::UntilBack => CASE_DROP_WINDOW,
+        };
+        let entry = self.eager.entry(addr).or_insert((lost_at, Duration::ZERO));
+        if entry.1 == window {
+            return;
+        }
+        entry.1 = window;
+        match (window == PEER_DROP_WINDOW, in_case) {
+            (true, _) => info!("AirPods {} dropped this PC for another device", addr),
+            (false, true) => info!(
                 "AirPods {} went into the case; reconnecting when they come out",
                 addr
-            );
-            self.eager.entry(addr).or_insert((now, CASE_DROP_WINDOW));
+            ),
+            (false, false) => info!(
+                "AirPods {} went out of range; reconnecting when they come back",
+                addr
+            ),
         }
     }
 }
@@ -286,14 +323,14 @@ impl AdapterState_ {
 const AUTO_RECONNECT_WINDOW: Duration = Duration::from_secs(4 * 60 * 60);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(20);
 /// Reconnecting without adverts. Out of the case, or busy with an iPhone, AirPods often
-/// advertise only Find My beacons this PC can't match to them, so after these drops keep
-/// asking BlueZ to connect: a failed attempt costs nothing, and connecting never takes
-/// the audio from an iPhone that is playing. Not after other drops, so disconnecting the
-/// AirPods here keeps them disconnected.
+/// advertise only Find My beacons this PC can't match to them, so after a drop keep asking
+/// BlueZ to connect: a failed attempt costs nothing, and connecting never takes the audio
+/// from an iPhone that is playing. Never after they were disconnected here (see
+/// disconnect_watch::plan), so disconnecting the AirPods here keeps them disconnected.
 /// - They dropped this PC to make room for an iPhone: it can't hear the iPhone let go.
 const PEER_DROP_WINDOW: Duration = Duration::from_secs(3 * 60);
-/// - They went into the case: come back when they come out, as on a Mac, however long
-///   they were away.
+/// - They went into the case or out of range: come back when they do, as on a Mac, however
+///   long they were away.
 const CASE_DROP_WINDOW: Duration = Duration::MAX;
 /// Retry every RECONNECT_INTERVAL at first, every minute after FAST_RECONNECT_PERIOD and
 /// every few minutes after SLOW_RECONNECT_PERIOD.
@@ -437,8 +474,17 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     }
                 }
                 for k in kicks {
-                    if let Kick::BleSeen(addr, in_use) = k {
-                        maybe_reconnect(adapter, addr, in_use, &mut st).await;
+                    match k {
+                        Kick::BleSeen(addr, in_use) => {
+                            maybe_reconnect(adapter, addr, in_use, &mut st).await;
+                        }
+                        Kick::Disconnected(addr, reason) => {
+                            st.drop_reason.insert(addr, reason);
+                            if !st.running.contains_key(&addr) {
+                                st.plan_reconnect(addr);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -637,6 +683,7 @@ async fn reconcile(
             info!("AirPods connected: {} ({})", name, addr);
             st.lost_link.remove(&addr);
             st.eager.remove(&addr);
+            st.drop_reason.remove(&addr);
             let dctx = DeviceContext {
                 hub: ctx.hub.clone(),
                 battery: ctx.battery.clone(),
