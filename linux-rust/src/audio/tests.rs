@@ -30,6 +30,8 @@ struct World {
     /// Transport state after a successful a2dp profile set following "off".
     transport_after_toggle: Option<String>,
     toggled_off: bool,
+    /// This profile never starts after a toggle (stays idle); any other one plays.
+    refuses: Option<String>,
 }
 
 impl World {
@@ -166,6 +168,13 @@ impl PulseApi for FakePulse {
         card.active_profile = Some(profile.to_string());
         if profile == "off" {
             w.toggled_off = true;
+        } else if w.refuses.is_some() {
+            let state = if w.refuses.as_deref() == Some(profile) && w.toggled_off {
+                "idle"
+            } else {
+                "active"
+            };
+            w.transports = vec![state.into()];
         } else if w.toggled_off
             && let Some(t) = w.transport_after_toggle.clone()
         {
@@ -979,22 +988,37 @@ async fn hush_keeps_the_speakers_quiet_until_the_rebuilt_output_plays() {
 }
 
 #[tokio::test]
-async fn rebuild_that_leaves_the_airpods_silent_recovers_straight_away() {
-    // After the mic stream stops the AirPods can refuse audio on the rebuilt output.
-    // That is repaired right after the rebuild, and the speakers end up unmuted.
+async fn rebuild_the_airpods_refuse_switches_codec_then_returns_to_aac() {
+    // After the mic stream stops the AirPods can refuse to start the rebuilt AAC
+    // stream. A codec switch (a fresh transport) plays at once; AAC comes back as soon
+    // as nothing is playing.
     let mut w = World::new();
     w.playing = true;
     w.add_card("a2dp-sink-aac");
     w.transports = vec!["active".into()];
-    w.transport_after_toggle = Some("idle".into());
+    w.refuses = Some("a2dp-sink-aac".into());
     let (world, handle) = start(w, fast());
     handle.link_up();
     wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
     settle(100).await;
     handle.hush();
     handle.rebuild();
-    settle(600).await;
+    settle(400).await;
+    {
+        let w = lock(&world);
+        assert_eq!(w.count("profile:off"), 1, "no second toggle: {:?}", w.log);
+        assert_ne!(w.active().as_deref(), Some("a2dp-sink-aac"), "{:?}", w.log);
+        assert_eq!(w.transports, ["active"], "{:?}", w.log);
+        assert!(!w.snap.sinks.iter().any(|s| s.muted), "log: {:?}", w.log);
+    }
+    // Music stops: back to AAC, which plays again now the AirPods have settled.
+    {
+        let mut w = lock(&world);
+        w.playing = false;
+        w.refuses = None;
+        w.sync_sink();
+    }
+    settle(400).await;
     let w = lock(&world);
-    assert!(w.count("profile:off") >= 2, "log: {:?}", w.log);
-    assert!(!w.snap.sinks.iter().any(|s| s.muted), "log: {:?}", w.log);
+    assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"), "{:?}", w.log);
 }
