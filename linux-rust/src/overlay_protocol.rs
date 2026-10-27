@@ -49,6 +49,52 @@ pub enum OverlayMode {
     Off,
 }
 
+/// How the island looks.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlayStyle {
+    /// Smoked glass with a sheen and soft shadow (the Glass slider applies).
+    #[default]
+    Classic,
+    /// The iPhone's Dynamic Island as it is: flat opaque black, a hairline keyline, and
+    /// light that runs around the border when something happens.
+    Purist,
+}
+
+/// How big the island is drawn, relative to the iPhone-sized default.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OverlaySize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+    ExtraLarge,
+}
+
+impl OverlaySize {
+    pub const ALL: [OverlaySize; 4] = [Self::Small, Self::Medium, Self::Large, Self::ExtraLarge];
+
+    /// Scale applied to the whole island.
+    pub fn scale(self) -> f32 {
+        match self {
+            Self::Small => 0.85,
+            Self::Medium => 1.0,
+            Self::Large => 1.2,
+            Self::ExtraLarge => 1.45,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Small => "Small",
+            Self::Medium => "Medium",
+            Self::Large => "Large",
+            Self::ExtraLarge => "Extra large",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct OverlayConfig {
@@ -62,6 +108,8 @@ pub struct OverlayConfig {
     pub opacity: f32,
     /// Material, 0 = smoked solid .. 1 = clear liquid glass.
     pub glass: f32,
+    pub style: OverlayStyle,
+    pub size: OverlaySize,
 }
 
 impl Default for OverlayConfig {
@@ -73,6 +121,8 @@ impl Default for OverlayConfig {
             mode: OverlayMode::Auto,
             opacity: 1.0,
             glass: 0.7,
+            style: OverlayStyle::Classic,
+            size: OverlaySize::Medium,
         }
     }
 }

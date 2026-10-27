@@ -638,3 +638,102 @@ fn surface_lost_restarts_cleanly() {
     assert!(!c.is_mapped());
     assert_eq!(c.tick(t1), SurfaceAction::Map);
 }
+
+// ---------------------------------------------------------------------------
+// Purist style and size
+// ---------------------------------------------------------------------------
+
+fn purist() -> Controller {
+    Controller::new(OverlayConfig {
+        mode: OverlayMode::Compact,
+        style: OverlayStyle::Purist,
+        ..OverlayConfig::default()
+    })
+}
+
+#[test]
+fn purist_lights_the_border_for_events_and_then_rests() {
+    use crate::island::{GlowKind, Tint};
+    let t0 = Instant::now();
+    let mut c = purist();
+    state(&mut c, buds(80, 75, 40), t0);
+    let g = c.motion.glow.expect("connecting lights the border");
+    assert_eq!((g.kind, g.tint), (GlowKind::Flow, Tint::Spectrum));
+    c.tick(t0);
+    let (_, t1) = run(&mut c, t0, 2500);
+    assert!(c.motion.glow.is_none());
+
+    let mut s = buds(80, 75, 40);
+    s.case = comp(40, true, true);
+    state(&mut c, s, t1);
+    let g = c.motion.glow.expect("charging lights the border");
+    assert_eq!((g.kind, g.tint), (GlowKind::Sweep, Tint::Green));
+    assert!(c.is_animating(t1));
+    // The pop-up stays for three seconds; the light is long gone by then and the
+    // island goes still once it folds back.
+    let (_, t2) = run(&mut c, t1, 6000);
+    assert!(c.motion.glow.is_none());
+    assert!(!c.is_animating(t2), "no frames at rest");
+}
+
+#[test]
+fn classic_never_spends_frames_on_light() {
+    let t0 = Instant::now();
+    let mut c = Controller::new(OverlayConfig {
+        mode: OverlayMode::Compact,
+        ..OverlayConfig::default()
+    });
+    state(&mut c, buds(80, 75, 40), t0);
+    assert!(c.motion.glow.is_none());
+    let mut s = buds(80, 75, 40);
+    s.case = comp(40, true, true);
+    state(&mut c, s, t0);
+    assert!(c.motion.glow.is_none());
+}
+
+#[test]
+fn purist_shakes_when_the_mic_is_unavailable() {
+    let t0 = Instant::now();
+    let mut c = purist();
+    let mut s = buds(80, 75, 40);
+    state(&mut c, s.clone(), t0);
+    let (_, t1) = run(&mut c, t0, 2500);
+    s.mic_failures = 1;
+    state(&mut c, s, t1);
+    assert!(c.motion.shake.velocity != 0.0, "the island shakes its head");
+    assert_eq!(c.target(t1), alert(Alert::MicUnavailable));
+}
+
+#[test]
+fn purist_preview_shows_the_light_once() {
+    let t0 = Instant::now();
+    let mut c = purist();
+    let preview = || OverlayCommand::Show {
+        reason: "preview".into(),
+    };
+    c.apply(preview(), t0);
+    assert!(c.motion.glow.is_some());
+    c.motion.glow = None;
+    // Repeated previews while one is open (dragging a slider) don't restart it.
+    c.apply(preview(), t0 + Duration::from_millis(100));
+    assert!(c.motion.glow.is_none());
+}
+
+#[test]
+fn surface_room_follows_the_size_setting() {
+    use crate::overlay_protocol::OverlaySize;
+    let at = |size| {
+        Controller::new(OverlayConfig {
+            size,
+            ..OverlayConfig::default()
+        })
+        .extent()
+    };
+    let m = at(OverlaySize::Medium);
+    for size in OverlaySize::ALL {
+        let e = at(size);
+        assert!((e.0 - m.0 * size.scale()).abs() < 0.01);
+        assert!((e.1 - m.1 * size.scale()).abs() < 0.01);
+    }
+    assert!(at(OverlaySize::Small).0 < m.0 && at(OverlaySize::ExtraLarge).0 > m.0);
+}

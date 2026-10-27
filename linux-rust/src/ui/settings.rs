@@ -23,7 +23,7 @@ pub enum Appearance {
     Dark,
 }
 
-pub use crate::overlay_protocol::{OverlayMode, OverlayPosition};
+pub use crate::overlay_protocol::{OverlayMode, OverlayPosition, OverlaySize, OverlayStyle};
 
 /// Overlay corners/edges in picker order (top row, then bottom row).
 pub const OVERLAY_POSITIONS: [OverlayPosition; 6] = [
@@ -44,6 +44,9 @@ pub struct Settings {
     pub overlay_opacity: f32,
     /// Overlay material, 0 = smoked solid .. 1 = clear liquid glass.
     pub overlay_glass: f32,
+    /// Classic glass island, or the purist flat black one.
+    pub overlay_style: OverlayStyle,
+    pub overlay_size: OverlaySize,
     /// Login autostart (applied through `crate::autostart`).
     pub start_at_login: bool,
     /// Stem double/triple press -> next/previous track. Read by the device task.
@@ -63,6 +66,8 @@ impl Default for Settings {
             overlay_position: OverlayPosition::default(),
             overlay_opacity: 0.6,
             overlay_glass: 0.7,
+            overlay_style: OverlayStyle::default(),
+            overlay_size: OverlaySize::default(),
             start_at_login: true,
             stem_control: false,
             airpods_mic_switch: false,
@@ -71,8 +76,10 @@ impl Default for Settings {
     }
 }
 
-const KEYS: [&str; 8] = [
+const KEYS: [&str; 10] = [
     "overlay_glass",
+    "overlay_style",
+    "overlay_size",
     "appearance",
     "overlay_mode",
     "overlay_position",
@@ -109,6 +116,8 @@ impl Settings {
             overlay_position: field(&map, "overlay_position", d.overlay_position),
             overlay_opacity: field(&map, "overlay_opacity", d.overlay_opacity).clamp(0.2, 1.0),
             overlay_glass: field(&map, "overlay_glass", d.overlay_glass).clamp(0.0, 1.0),
+            overlay_style: field(&map, "overlay_style", d.overlay_style),
+            overlay_size: field(&map, "overlay_size", d.overlay_size),
             start_at_login: field(&map, "start_at_login", d.start_at_login),
             stem_control: field(&map, "stem_control", d.stem_control),
             airpods_mic_switch: field(&map, "airpods_mic_switch", d.airpods_mic_switch),
@@ -135,6 +144,14 @@ impl Settings {
         );
         put("overlay_opacity", Value::from(self.overlay_opacity));
         put("overlay_glass", Value::from(self.overlay_glass));
+        put(
+            "overlay_style",
+            serde_json::to_value(self.overlay_style).unwrap_or(Value::Null),
+        );
+        put(
+            "overlay_size",
+            serde_json::to_value(self.overlay_size).unwrap_or(Value::Null),
+        );
         put("start_at_login", Value::from(self.start_at_login));
         put("stem_control", Value::from(self.stem_control));
         put("airpods_mic_switch", Value::from(self.airpods_mic_switch));

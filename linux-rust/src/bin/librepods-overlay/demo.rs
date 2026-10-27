@@ -113,12 +113,16 @@ pub fn story() -> Vec<(f32, OverlayCommand)> {
     s.elsewhere = false;
     s.elsewhere_name = None;
     at(25.4, &s);
+    // A stem hold asks for the AirPods mic and it can't be used (the purist island
+    // shakes its head).
+    s.mic_failures += 1;
+    at(33.5, &s);
     // The left stem hold swaps to the AirPods mic.
     s.mic = Some(crate::overlay_protocol::MicChoice::AirPods);
-    at(33.5, &s);
+    at(37.0, &s);
     // Disconnect.
     s.connected = false;
-    at(36.0, &s);
+    at(40.0, &s);
     out.push((
         29.0,
         OverlayCommand::Show {

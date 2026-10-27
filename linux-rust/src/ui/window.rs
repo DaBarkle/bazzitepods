@@ -12,7 +12,8 @@ use crate::hub::{AdapterState, AppSnapshot, DeviceSnapshot, Hub};
 use crate::ui::format::{self, DeviceSetting, Gauge, ListeningMode, PillTone};
 use crate::ui::messages::BluetoothUIMessage;
 use crate::ui::settings::{
-    Appearance, OVERLAY_POSITIONS, OverlayMode, OverlayPosition, Settings, SettingsStore,
+    Appearance, OVERLAY_POSITIONS, OverlayMode, OverlayPosition, OverlaySize, OverlayStyle,
+    Settings, SettingsStore,
 };
 use crate::ui::style::{self, Tokens};
 use crate::ui::widgets::{self, Glyph, Ink};
@@ -156,6 +157,8 @@ pub enum Message {
     SetOverlayPosition(OverlayPosition),
     SetOverlayOpacity(f32),
     SetOverlayGlass(f32),
+    SetOverlayStyle(OverlayStyle),
+    SetOverlaySize(OverlaySize),
     CommitOverlaySliders,
     SetStartAtLogin(bool),
     SetStemControl(bool),
@@ -404,6 +407,8 @@ impl App {
             position: s.overlay_position,
             opacity: s.overlay_opacity,
             glass: s.overlay_glass,
+            style: s.overlay_style,
+            size: s.overlay_size,
             ..Default::default()
         });
     }
@@ -504,6 +509,16 @@ impl App {
                 self.live_overlay(|s| s.overlay_glass = v);
                 crate::overlay_feed::preview();
                 Task::none()
+            }
+            Message::SetOverlayStyle(v) => {
+                let task = self.save_overlay(|s| s.overlay_style = v);
+                crate::overlay_feed::preview();
+                task
+            }
+            Message::SetOverlaySize(v) => {
+                let task = self.save_overlay(|s| s.overlay_size = v);
+                crate::overlay_feed::preview();
+                task
             }
             Message::CommitOverlaySliders => self.save_overlay(|_| {}),
             Message::PreviewOverlay => {
@@ -972,6 +987,42 @@ impl App {
             ),
             divider(),
             setting_row(
+                "Island style",
+                Some(match s.overlay_style {
+                    OverlayStyle::Classic => "Smoked glass with a soft sheen",
+                    OverlayStyle::Purist => "Flat black, light runs round the edge",
+                }),
+                segmented(
+                    &[
+                        ("Classic", OverlayStyle::Classic),
+                        ("Purist", OverlayStyle::Purist),
+                    ],
+                    s.overlay_style,
+                    overlay_on,
+                    Message::SetOverlayStyle,
+                ),
+            ),
+            divider(),
+            setting_row(
+                "Island size",
+                None,
+                segmented(
+                    &[
+                        ("S", OverlaySize::Small),
+                        ("M", OverlaySize::Medium),
+                        ("L", OverlaySize::Large),
+                        ("XL", OverlaySize::ExtraLarge),
+                    ],
+                    s.overlay_size,
+                    overlay_on,
+                    Message::SetOverlaySize,
+                ),
+            ),
+        ]
+        .spacing(14);
+        // Glass only shapes the classic island; the purist one is always solid black.
+        let col = if s.overlay_style == OverlayStyle::Classic {
+            col.push(divider()).push(setting_row(
                 "Glass",
                 Some("Island black to clear glass"),
                 row![
@@ -987,7 +1038,11 @@ impl App {
                 .spacing(10)
                 .align_y(Center)
                 .into(),
-            ),
+            ))
+        } else {
+            col
+        };
+        let col = col.extend([
             divider(),
             setting_row(
                 "Game opacity",
@@ -1012,11 +1067,10 @@ impl App {
                 Some("Runs quietly in the tray"),
                 switch(
                     s.start_at_login,
-                    Some(Message::SetStartAtLogin as fn(bool) -> Message)
+                    Some(Message::SetStartAtLogin as fn(bool) -> Message),
                 ),
             ),
-        ]
-        .spacing(14);
+        ]);
         card(col.into())
     }
 
