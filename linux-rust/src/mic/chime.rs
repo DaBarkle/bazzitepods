@@ -38,7 +38,12 @@ fn pcm(to: MicRoute) -> Vec<u8> {
 /// Plays the chime on the default output and waits for it (at most a second).
 pub async fn play(to: MicRoute) {
     let child = Command::new("paplay")
-        .args(["--raw", "--format=s16le", "--channels=1", "--client-name=BazzitePods"])
+        .args([
+            "--raw",
+            "--format=s16le",
+            "--channels=1",
+            "--client-name=BazzitePods",
+        ])
         .arg(format!("--rate={RATE}"))
         .arg("--property=media.role=event")
         .stdin(Stdio::piped())
@@ -75,6 +80,9 @@ mod tests {
             .map(|b| i16::from_le_bytes([b[0], b[1]]).unsigned_abs())
             .max()
             .unwrap();
-        assert!(peak > 1000 && peak < i16::MAX as u16 / 2, "audible but soft: {peak}");
+        assert!(
+            peak > 1000 && peak < i16::MAX as u16 / 2,
+            "audible but soft: {peak}"
+        );
     }
 }

@@ -97,8 +97,11 @@
   <releases>
     <release version="0.4.1" date="2026-10-28">
       <description>
-        <p>The AirPods mic switch now moves every app, including Discord.</p>
+        <p>The AirPods mic switch now works on AirPods 4 and moves every app, including Discord.</p>
         <ul>
+          <li>A soft chime tells you which mic you swapped to: rising for the AirPods, falling for the desk mic</li>
+          <li>Holding the left stem swaps the mic instead of changing noise control</li>
+          <li>The AirPods mic sends sound, and the swap is allowed inside the Flatpak</li>
           <li>Apps set to a mic by name, or using EasyEffects' mic, move to the AirPods mic and back</li>
           <li>Apps that open the mic after the swap, such as Discord joining a voice channel, move too</li>
         </ul>

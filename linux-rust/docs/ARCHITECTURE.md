@@ -94,21 +94,29 @@ Exit code 3 from the overlay means no layer-shell (e.g. GNOME); the client then 
 Off by default ("AirPods mic switch" in More options). When on, holding the left stem swaps
 the PC's mic between the desk mic and the AirPods, and holding the right stem cycles noise
 control (ANC models). The presses are claimed with control 0x39 (`gestures::stem_claims`)
-and released again when the setting is turned off.
+and released again when the setting is turned off. AirPods 4 ignore a claim sent during
+the connection handshake, so it is sent again 6 s after connecting, after taking the AirPods
+back from another device, and whenever they report a different claim (at most every 10 s).
 
 * **Why not the headset profile:** it drops music to phone quality. Apple devices instead
   ask for a separate AAC-ELD mic stream over AACP (opcode 0x58, START/STOP in
   `mic/packets.rs`), found in LibrePods PR #655. Music stays on A2DP AAC.
 * **Decode:** `mic/eld.rs` opens the runtime's FFmpeg (`libavcodec.so.58`-`62`) with
   `dlopen` and decodes with its native `aac` decoder; the stream is 64 kHz mono, 480-sample
-  frames. Gain control (`agc.rs`), then s16 into a FIFO (`stream.rs`).
+  frames. The decoder context needs a sample rate set (48 kHz, as the ASC states) or FFmpeg
+  rejects every ELD frame. Gain control (`agc.rs`), then s16 into a FIFO (`stream.rs`).
 * **Virtual mic:** pipewire-pulse `module-pipe-source` named `bazzitepods_airpods_mic`
   ("AirPods mic"), reading that FIFO from the app's runtime directory.
 * **Switching (`switch.rs`):** the desk mic is remembered on disk (`mic_switch.json`, for
   crash recovery), and the virtual mic becomes the default. After 1.5 s, and every 2 s
   after that, every app still recording from another mic is moved to it: apps set to a mic
   by name, and apps on a virtual mic such as EasyEffects' (EasyEffects records the desk mic
-  natively, so its own input never shows up as a recording). Going back reverses it in
+  natively, so its own input never shows up as a recording). An app found back on a mic after
+being moved is left there rather than moved every sweep. The pulse connection sets
+`media.category=Manager`, which the Flatpak needs to change the default mic and move
+streams. A stem hold plays a short chime (`chime.rs`, synthesized, played with the
+runtime's `paplay`, role `event`): rising for the AirPods mic, falling for the desk mic,
+the latter before the output is rebuilt. Going back reverses it in
   order: desk mic default, move those apps back, STOP, unload, restore Conversation Awareness (paused while the mic runs), then
   `AudioGuardHandle::rebuild`.
 * **The rebuild is required:** after STOP the right pod goes silent while the transport

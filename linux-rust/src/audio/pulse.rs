@@ -688,6 +688,15 @@ impl MicSnapshot {
             .collect()
     }
 
+    /// The name of the app making `recording`, when it gives one.
+    pub fn app_of(&self, recording: u32) -> Option<&str> {
+        self.recordings
+            .iter()
+            .find(|r| r.index == recording)?
+            .app
+            .as_deref()
+    }
+
     /// Streams recording from the named source.
     pub fn recordings_on(&self, name: &str) -> Vec<u32> {
         let Some(source) = self.source(name) else {
