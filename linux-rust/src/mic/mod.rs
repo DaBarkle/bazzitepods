@@ -16,6 +16,7 @@
 //! lower the music quality themselves (measured: the PC kept sending full quality).
 
 pub mod agc;
+pub mod chime;
 pub mod eld;
 pub mod gestures;
 pub mod packets;
@@ -119,6 +120,10 @@ impl MicHost for PulseMicHost {
     async fn move_recording(&self, recording: u32, source: &str) -> Result<(), String> {
         let source = source.to_string();
         blocking(move || pulse::move_source_output_sync(recording, &source, DEFAULT_DEADLINE)).await
+    }
+
+    async fn chime(&self, to: MicRoute) {
+        chime::play(to).await;
     }
 
     fn start_decoder(

@@ -40,6 +40,8 @@ pub trait MicHost: Send + Sync + 'static {
         recording: u32,
         source: &str,
     ) -> impl Future<Output = Result<(), String>> + Send;
+    /// Plays the chime for switching to `to`.
+    fn chime(&self, to: MicRoute) -> impl Future<Output = ()> + Send;
     /// Starts decoding `packets` into `fifo`.
     fn start_decoder(
         &self,
@@ -343,6 +345,7 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
             ELD_SAMPLE_RATE, desk
         );
         self.report(None);
+        self.host.chime(MicRoute::AirPods).await;
 
         // Apps that follow the default mic have moved by now; move the ones pinned to a mic.
         sleep(self.cfg.settle).await;
@@ -388,6 +391,8 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
         let Some(active) = self.active.take() else {
             return;
         };
+        // Before the music output is rebuilt, which would cut it off.
+        self.host.chime(MicRoute::Desk).await;
         // The desk mic first, so nothing that records falls back to the AirPods' call mic.
         if let Some(desk) = active.desk.as_deref()
             && let Err(e) = self.host.set_default(desk).await

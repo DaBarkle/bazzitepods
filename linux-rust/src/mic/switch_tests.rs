@@ -99,6 +99,8 @@ impl MicHost for Host {
         Ok(())
     }
 
+    async fn chime(&self, _to: MicRoute) {}
+
     fn start_decoder(
         &self,
         mut packets: mpsc::Receiver<Vec<u8>>,
