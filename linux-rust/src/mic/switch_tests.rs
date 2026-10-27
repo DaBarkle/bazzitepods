@@ -7,6 +7,10 @@ struct World {
     log: Vec<String>,
     snap: MicSnapshot,
     load_fails: bool,
+    /// Recordings that refuse to move (a stream flagged "don't move").
+    refuse: Vec<u32>,
+    /// Recordings set to a mic by name, besides Discord's.
+    pinned: Vec<u32>,
     ca: Option<bool>,
     packets: Option<mpsc::Sender<Vec<u8>>>,
     reports: Vec<MicReport>,
@@ -61,12 +65,13 @@ impl MicHost for Host {
         w.snap.default_source = Some(source.into());
         // Apps that follow the default move with it; pinned ones (Discord here) don't.
         let to = w.snap.source(source).map(|s| s.index);
+        let pinned = w.pinned.clone();
         if let Some(to) = to {
             for r in w
                 .snap
                 .recordings
                 .iter_mut()
-                .filter(|r| r.app.as_deref() != Some("Discord"))
+                .filter(|r| r.app.as_deref() != Some("Discord") && !pinned.contains(&r.index))
             {
                 r.source = to;
             }
@@ -77,6 +82,9 @@ impl MicHost for Host {
     async fn move_recording(&self, recording: u32, source: &str) -> Result<(), String> {
         let mut w = lock(&self.0);
         w.log.push(format!("move:{recording}->{source}"));
+        if w.refuse.contains(&recording) {
+            return Err("refused".into());
+        }
         let to = w.snap.source(source).map(|s| s.index);
         if let Some(to) = to {
             for r in w
@@ -193,6 +201,7 @@ fn rig_with(world: World, watchdog: Duration, prepare: impl FnOnce(&SwitchConfig
         fifo: dir.join("mic.fifo"),
         settle: Duration::from_millis(50),
         watchdog,
+        sweep: Duration::from_millis(100),
     };
     prepare(&cfg);
     let world: Shared = Arc::new(Mutex::new(world));
@@ -383,4 +392,96 @@ async fn recovers_from_a_crash_on_the_airpods_mic() {
     settle(100).await;
     assert_eq!(log(&rig), ["unload:12", "default:yeti", "ca:true"]);
     assert!(!rig.dir.join("mic_switch.json").exists());
+}
+
+fn recording(index: u32, source: u32, app: &str) -> MicRecording {
+    MicRecording {
+        index,
+        source,
+        app: Some(app.into()),
+    }
+}
+
+#[tokio::test]
+async fn an_app_that_opens_the_desk_mic_later_is_moved_too() {
+    // Discord only opens the mic when joining a voice channel, set to the Yeti by name.
+    let mut world = desk_world();
+    world.snap.recordings.retain(|r| r.index != 41);
+    let rig = rig(world);
+    rig.handle.request(toggle());
+    settle(150).await;
+    lock(&rig.world)
+        .snap
+        .recordings
+        .push(recording(50, 3, "Discord"));
+    settle(250).await;
+    assert!(log(&rig).contains(&"move:50->bazzitepods_airpods_mic".to_string()));
+    {
+        let w = lock(&rig.world);
+        assert_eq!(
+            w.snap
+                .recordings
+                .iter()
+                .find(|r| r.index == 50)
+                .unwrap()
+                .source,
+            OURS
+        );
+    }
+    lock(&rig.world).log.clear();
+    rig.handle.request(toggle());
+    settle(150).await;
+    assert!(
+        log(&rig).contains(&"move:50->yeti".to_string()),
+        "{:?}",
+        log(&rig)
+    );
+}
+
+#[tokio::test]
+async fn apps_on_the_easyeffects_mic_move_to_the_airpods_mic_and_back() {
+    // David's setup: EasyEffects records the Yeti itself (not as a recording the sound
+    // server lists), and Discord records from EasyEffects' virtual mic, set by name.
+    let mut world = desk_world();
+    world.snap.sources.push(MicSource {
+        index: 6,
+        name: "easyeffects_source".into(),
+        is_monitor: false,
+    });
+    world.snap.recordings = vec![recording(86, 6, "WEBRTC VoiceEngine")];
+    world.pinned = vec![86];
+    let rig = rig(world);
+    rig.handle.request(toggle());
+    settle(250).await;
+    let l = log(&rig);
+    assert!(
+        l.contains(&"move:86->bazzitepods_airpods_mic".to_string()),
+        "{l:?}"
+    );
+
+    lock(&rig.world).log.clear();
+    rig.handle.request(toggle());
+    settle(150).await;
+    let l = log(&rig);
+    assert_eq!(l[0], "default:yeti");
+    assert!(
+        l.contains(&"move:86->easyeffects_source".to_string()),
+        "{l:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_app_that_refuses_to_move_is_tried_once() {
+    let mut world = desk_world();
+    world.refuse = vec![41];
+    let rig = rig(world);
+    rig.handle.request(toggle());
+    settle(450).await;
+    let l = log(&rig);
+    assert_eq!(
+        l.iter().filter(|x| x.starts_with("move:41")).count(),
+        1,
+        "{l:?}"
+    );
+    assert_eq!(last_report(&rig).map(|r| r.route), Some(MicRoute::AirPods));
 }

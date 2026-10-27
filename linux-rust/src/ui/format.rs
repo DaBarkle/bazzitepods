@@ -392,6 +392,84 @@ pub fn tray_level(d: &DeviceSnapshot) -> (Option<u8>, bool) {
     (b.min_pod_level(), charging)
 }
 
+/// Colour class of the status island at the top of the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StatusTone {
+    Good,
+    Low,
+    Critical,
+    Busy,
+    Info,
+    Idle,
+}
+
+/// What the window's status island says: a headline, an optional quieter detail and a tone.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Status {
+    pub headline: String,
+    pub detail: Option<String>,
+    pub tone: StatusTone,
+}
+
+/// The one thing worth knowing right now, island style: a low pod beats "Connected".
+pub fn status(d: &DeviceSnapshot, now: SystemTime) -> Status {
+    let (label, pill) = connection_label(d);
+    let make = |headline: String, detail: Option<String>, tone| Status {
+        headline,
+        detail,
+        tone,
+    };
+    if d.in_use_elsewhere() {
+        let headline = match d.elsewhere_name.as_deref() {
+            Some(name) => format!("Playing on {name}"),
+            None => "Playing on another device".to_string(),
+        };
+        return make(headline, None, StatusTone::Info);
+    }
+    if pill == PillTone::Busy {
+        return make(label.to_string(), None, StatusTone::Busy);
+    }
+    if d.is_connected() {
+        let low: Vec<Gauge> = gauges(d, now)
+            .into_iter()
+            .filter(|g| g.label != "Case" && !g.charging)
+            .filter(|g| matches!(g.tone, Tone::Low | Tone::Critical))
+            .collect();
+        if let Some(worst) = low.iter().min_by_key(|g| g.level) {
+            let headline = match (low.len(), worst.label) {
+                (2.., _) => "AirPods low",
+                (_, "Left") => "Left AirPod low",
+                (_, "Right") => "Right AirPod low",
+                _ => "Battery low",
+            };
+            let tone = if worst.tone == Tone::Critical {
+                StatusTone::Critical
+            } else {
+                StatusTone::Low
+            };
+            return make(headline.to_string(), Some(worst.text.clone()), tone);
+        }
+        let detail = d
+            .listening_mode
+            .filter(|_| d.model.info().has_anc)
+            .and_then(ListeningMode::from_byte)
+            .map(|m| m.label().to_string())
+            .or_else(|| d.audio.clone());
+        return make(label.to_string(), detail, StatusTone::Good);
+    }
+    let tone = match pill {
+        PillTone::Busy => StatusTone::Busy,
+        PillTone::Info => StatusTone::Info,
+        _ => StatusTone::Idle,
+    };
+    // Live adverts mean the levels are current; otherwise say how old they are.
+    let detail = match (tone, d.last_seen) {
+        (StatusTone::Idle, Some(seen)) => Some(format!("seen {}", ago_text(seen, now))),
+        _ => None,
+    };
+    make(label.to_string(), detail, tone)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -714,3 +792,7 @@ mod tests {
         assert_eq!(tray_level(&d), (Some(80), true));
     }
 }
+
+#[cfg(test)]
+#[path = "format_status_tests.rs"]
+mod status_tests;

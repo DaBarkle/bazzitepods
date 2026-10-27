@@ -91,14 +91,16 @@ The window shows every state at a glance, so you always know what your AirPods a
 
 ### Controls and settings
 
-Models with noise control get Transparency, Adaptive and Noise Cancellation tiles, plus
-conversation awareness. **More options** has the theme, Apple device mode and stem-press
-track control.
+The window has three tabs. **AirPods** shows a small status island (it glows green when
+connected, amber when a pod runs low), the battery rings, and on models with noise control the
+listening mode tiles and conversation awareness. **Island** places and styles the in-game
+overlay on a little preview screen. **Settings** has the theme, start at login, the AirPods'
+own settings, Apple device mode and stem-press track control.
 
 <p align="center">
-  <img src="linux-rust/docs/screenshots/window-pro.png" width="300" alt="AirPods Pro with listening mode tiles and conversation awareness">
+  <img src="linux-rust/docs/screenshots/window-pro.png" width="300" alt="Island tab: a preview screen to place the overlay, its mode, glass and opacity">
   &nbsp;
-  <img src="linux-rust/docs/screenshots/window-settings.png" width="300" alt="More options: appearance, Apple device mode, stem press control">
+  <img src="linux-rust/docs/screenshots/window-settings.png" width="300" alt="Settings tab: appearance, start at login, rename, stem press control, mic switch and AirPods settings">
 </p>
 
 ### The overlay

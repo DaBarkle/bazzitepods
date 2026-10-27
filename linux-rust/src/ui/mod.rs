@@ -1,6 +1,7 @@
 pub mod demo;
 pub mod format;
 pub mod messages;
+pub mod motion;
 pub mod settings;
 pub mod style;
 pub mod tray;

@@ -19,11 +19,32 @@ All notable changes to BazzitePods are documented here. The format follows
 - In the purist style the island gives a quick head shake when the AirPods mic can't be
   used, and its outline moves like liquid as it stretches. ([#20])
 
+### Changed
+- **Redesigned app window:** pure black like the island, three tabs (AirPods, Island,
+  Settings), a glowing status island, battery rings and selections that move on springs,
+  and a preview screen for placing the overlay. ([#19])
+
 ### Notes
 - *Classic* stays the default and looks exactly as before; the Glass slider only applies to
   it. *Opacity over games* applies to both styles.
 - The purist look is drawn by a small GPU shader on the overlay's own surface. It runs only
   while the island moves, so a still island still costs nothing, and it never touches games.
+
+## [0.4.1] - 2026-10-28
+
+### Fixed
+- **Discord now moves to the AirPods mic.** Swapping to the AirPods mic only moved apps
+  that were recording from your default mic, so apps set to a mic by name, or using
+  EasyEffects' mic (*Easy Effects Source*), stayed on the desk mic. Every app recording from
+  a mic is now moved to the AirPods mic, and back to the mic it was using when you swap
+  back. ([#17])
+- **Apps that open the mic after the swap move too.** Discord only opens the mic when you
+  join a voice channel; while the AirPods mic is on, such apps are now moved across within
+  two seconds. ([#17])
+
+### Notes
+- Apps on EasyEffects' mic skip EasyEffects while the AirPods mic is in use (EasyEffects
+  keeps processing the desk mic). The AirPods do their own noise reduction.
 
 ## [0.4.0] - 2026-10-27
 
@@ -182,7 +203,8 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
-[0.5.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.4.0...v0.5.0
+[0.5.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.4.1...v0.5.0
+[0.4.1]: https://github.com/DaBarkle/bazzitepods/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.4.0
 [0.3.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.1...v0.2.2
@@ -192,7 +214,9 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
+[#17]: https://github.com/DaBarkle/bazzitepods/pull/17
 [#16]: https://github.com/DaBarkle/bazzitepods/pull/16
+[#19]: https://github.com/DaBarkle/bazzitepods/pull/19
 [#20]: https://github.com/DaBarkle/bazzitepods/pull/20
 [#15]: https://github.com/DaBarkle/bazzitepods/pull/15
 [#12]: https://github.com/DaBarkle/bazzitepods/pull/12

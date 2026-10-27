@@ -102,6 +102,16 @@
           <li>Purist style: solid flat black with a hairline edge, like the iPhone's Dynamic Island</li>
           <li>Light runs round the border in the event's colour when something happens, then the island rests</li>
           <li>Small, Medium, Large and Extra large island sizes</li>
+          <li>Redesigned app window: pure black, three tabs, and a preview screen for placing the overlay</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.1" date="2026-10-28">
+      <description>
+        <p>The AirPods mic switch now moves every app, including Discord.</p>
+        <ul>
+          <li>Apps set to a mic by name, or using EasyEffects' mic, move to the AirPods mic and back</li>
+          <li>Apps that open the mic after the swap, such as Discord joining a voice channel, move too</li>
         </ul>
       </description>
     </release>
