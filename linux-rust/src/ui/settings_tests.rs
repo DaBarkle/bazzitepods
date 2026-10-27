@@ -10,6 +10,8 @@ fn every_setting_survives_a_save_and_load() {
         overlay_position: OverlayPosition::BottomRight,
         overlay_opacity: 0.45,
         overlay_glass: 0.1,
+        overlay_style: OverlayStyle::Purist,
+        overlay_size: OverlaySize::Large,
         start_at_login: false,
         stem_control: true,
         airpods_mic_switch: true,
@@ -37,6 +39,25 @@ fn every_overlay_position_and_mode_has_a_stable_name() {
         let json = format!(r#"{{"overlay_mode":"{name}"}}"#);
         assert_eq!(Settings::from_json(&json).overlay_mode, mode);
     }
+    for (style, name) in [
+        (OverlayStyle::Classic, "classic"),
+        (OverlayStyle::Purist, "purist"),
+    ] {
+        let json = format!(r#"{{"overlay_style":"{name}"}}"#);
+        assert_eq!(Settings::from_json(&json).overlay_style, style);
+    }
+    for (size, name) in [
+        (OverlaySize::Small, "small"),
+        (OverlaySize::Medium, "medium"),
+        (OverlaySize::Large, "large"),
+        (OverlaySize::ExtraLarge, "extra_large"),
+    ] {
+        let json = format!(r#"{{"overlay_size":"{name}"}}"#);
+        assert_eq!(Settings::from_json(&json).overlay_size, size);
+    }
+    let s = Settings::from_json(r#"{"overlay_style":"neon","overlay_size":9}"#);
+    assert_eq!(s.overlay_style, OverlayStyle::Purist);
+    assert_eq!(s.overlay_size, OverlaySize::Medium);
     for (a, name) in [
         (Appearance::System, "system"),
         (Appearance::Light, "light"),

@@ -46,6 +46,20 @@ fn config_from_json(json: &str) -> OverlayConfig {
     {
         cfg.position = pos;
     }
+    if let Some(style) = v
+        .get("overlay_style")
+        .cloned()
+        .and_then(|s| serde_json::from_value(s).ok())
+    {
+        cfg.style = style;
+    }
+    if let Some(size) = v
+        .get("overlay_size")
+        .cloned()
+        .and_then(|s| serde_json::from_value(s).ok())
+    {
+        cfg.size = size;
+    }
     if let Some(g) = v.get("overlay_glass").and_then(|g| g.as_f64()) {
         cfg.glass = (g as f32).clamp(0.0, 1.0);
     }

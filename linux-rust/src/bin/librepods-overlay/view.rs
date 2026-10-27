@@ -15,11 +15,12 @@ use iced::{Color, Font, Point, Rectangle, Renderer, Size, Theme, Vector, border:
 use crate::glyphs::*;
 use crate::island::{
     ALERT_ICON_X, ALERT_LEVEL_W, ALERT_TEXT_X, ALERT_TITLE_SIZE, ALERT_TRAIL_PAD, Alert, BREATHE,
-    CASE, COMPACT_ITEM, COMPACT_LEAD, Content, HEADPHONE, LEFT, Level, Motion, Parts, RIGHT,
-    ease_out_back, shape, text_width,
+    CASE, COMPACT_ITEM, COMPACT_LEAD, Content, GlowKind, HEADPHONE, LEFT, Level, Motion, Parts,
+    RIGHT, Tint, ease_out_back, shape, text_width,
 };
 use crate::logic::Controller;
-use crate::overlay_protocol::{ComponentState, OverlayPosition, OverlayState};
+use crate::overlay_protocol::{ComponentState, OverlayPosition, OverlayState, OverlayStyle};
+use crate::purist;
 
 /// Transparent room around the island for its shadow.
 pub const PAD: f32 = 14.0;
@@ -29,6 +30,15 @@ const ROLL_TRAVEL: f32 = 7.0;
 const GREEN: Color = Color::from_rgb(0.204, 0.820, 0.345);
 const AMBER: Color = Color::from_rgb(1.0, 0.702, 0.251);
 const RED: Color = Color::from_rgb(1.0, 0.271, 0.227);
+/// The purist palette: iOS system colours on black (shared with the app window).
+const BLUE: Color = Color::from_rgb(0.039, 0.518, 1.0);
+const ORANGE: Color = Color::from_rgb(1.0, 0.584, 0.0);
+
+/// The font the purist island uses (bundled, so it looks the same everywhere).
+pub const INTER: &str = "Inter";
+
+/// Strength of the purist key line at rest; Apple keeps it barely there.
+const KEY_ALPHA: f32 = 0.15;
 
 fn white(a: f32) -> Color {
     Color::from_rgba(1.0, 1.0, 1.0, a)
@@ -51,18 +61,19 @@ pub fn surface_size(extent: (f32, f32)) -> (u32, u32) {
     (even(extent.0 + 2.0 * PAD), even(extent.1 + 2.0 * PAD))
 }
 
-/// Top-left of a `size` rect hugging the anchored edges inside the surface.
-fn anchored(position: OverlayPosition, surface: Size, size: Size) -> Point {
+/// Top-left of a `size` rect hugging the anchored edges inside the surface, `pad` in
+/// from them.
+fn anchored_in(position: OverlayPosition, surface: Size, size: Size, pad: f32) -> Point {
     use OverlayPosition::*;
     let x = match position {
-        TopLeft | BottomLeft => PAD,
+        TopLeft | BottomLeft => pad,
         TopCenter | BottomCenter => (surface.width - size.width) / 2.0,
-        TopRight | BottomRight => surface.width - PAD - size.width,
+        TopRight | BottomRight => surface.width - pad - size.width,
     };
     let y = if position.is_top() {
-        PAD
+        pad
     } else {
-        surface.height - PAD - size.height
+        surface.height - pad - size.height
     };
     Point::new(x, y)
 }
@@ -102,9 +113,141 @@ struct Ctx<'a> {
     reveal: f32,
     /// The island's current (unscaled) size.
     island: (f32, f32),
+    /// Purist style: bundled Inter, and no halo under text (the body is solid black,
+    /// so a halo would only soften the glyph edges).
+    purist: bool,
+}
+
+impl Ctx<'_> {
+    fn font(&self, w: Weight) -> Font {
+        if self.purist {
+            Font {
+                weight: w,
+                ..Font::with_name(INTER)
+            }
+        } else {
+            weight(w)
+        }
+    }
+
+    fn text(&self, frame: &mut Frame, text: canvas::Text) {
+        if self.purist {
+            frame.fill_text(text);
+        } else {
+            fill_text_lifted(frame, text);
+        }
+    }
+}
+
+/// Where the island is in one frame, in the drawing space (logical px divided by the
+/// size setting, so everything inside is laid out at the iPhone-like default size).
+struct Placement {
+    /// Size setting: logical px per drawing unit.
+    k: f32,
+    /// The surface in drawing units, and the edge padding in drawing units.
+    space: Size,
+    pad: f32,
+    /// The island's unscaled size and corner radius.
+    w: f32,
+    h: f32,
+    r: f32,
+    /// The island's middle, and its drawn outline (bump, shake and squash applied).
+    center: Point,
+    body: Rectangle,
+    radius: f32,
+    /// Sideways shake, carried by the content too.
+    shift: f32,
 }
 
 impl Island<'_> {
+    fn placement(&self, surface: Size) -> Placement {
+        let ctl = self.ctl;
+        let m = &ctl.motion;
+        let k = ctl.config.size.scale();
+        let space = Size::new(surface.width / k, surface.height / k);
+        let pad = PAD / k;
+        let (w, h, r) = m.size();
+        let s = m.pulse.value;
+        let origin = anchored_in(ctl.config.position, space, Size::new(w, h), pad);
+        let mut center = Point::new(origin.x + w / 2.0, origin.y + h / 2.0);
+        let (mut bw, mut bh) = (w * s, h * s);
+        let mut shift = 0.0;
+        if ctl.config.style == OverlayStyle::Purist {
+            shift = m.shake.value;
+            center.x += shift;
+            // Liquid: while the island stretches wider fast it gives a little height,
+            // and takes it back as it settles, the way a drop of liquid moves.
+            let stretch = (m.w.velocity / 9000.0).clamp(-0.05, 0.05);
+            bh *= 1.0 - stretch;
+            bw *= 1.0 + 0.3 * stretch;
+            // Keep the anchored edge where it is.
+            let dy = (h * s - bh) / 2.0;
+            center.y += if ctl.config.position.is_top() {
+                -dy
+            } else {
+                dy
+            };
+        }
+        Placement {
+            k,
+            space,
+            pad,
+            w,
+            h,
+            r,
+            center,
+            body: Rectangle::new(
+                Point::new(center.x - bw / 2.0, center.y - bh / 2.0),
+                Size::new(bw, bh),
+            ),
+            radius: (r * s).min(bw.min(bh) / 2.0),
+            shift,
+        }
+    }
+
+    /// The purist body, key line and glow for the shader, or None for the classic style
+    /// or while nothing is shown.
+    pub fn purist_body(&self, surface: Size) -> Option<purist::Body> {
+        let ctl = self.ctl;
+        if ctl.config.style != OverlayStyle::Purist {
+            return None;
+        }
+        let m = &ctl.motion;
+        let presence = m.alpha.value.clamp(0.0, 1.0);
+        if presence <= 0.0 || ctl.display_state(self.now).is_none() {
+            return None;
+        }
+        let p = self.placement(surface);
+        let k = p.k;
+        let key = key_color(m.shown.as_ref());
+        let (glow_kind, glow_progress, glow_age, glow_color) = match &m.glow {
+            Some(g) => {
+                let kind = match g.kind {
+                    GlowKind::Sweep => 1.0,
+                    GlowKind::Breathe => 2.0,
+                    GlowKind::Flow => 3.0,
+                    GlowKind::Ping => 4.0,
+                };
+                let (c, strength) = tint_color(g.tint);
+                (kind, g.progress(), g.age, [c.r, c.g, c.b, strength])
+            }
+            None => (0.0, 0.0, 0.0, [0.0; 4]),
+        };
+        Some(purist::Body {
+            center: (p.center.x * k, p.center.y * k),
+            size: (p.body.width * k, p.body.height * k),
+            radius: p.radius * k,
+            unit: k,
+            alpha: presence * ctl.effective_opacity(),
+            key: [key.r, key.g, key.b, key.a],
+            glow_color,
+            glow_kind,
+            glow_progress,
+            glow_age,
+            top: ctl.config.position.is_top(),
+        })
+    }
+
     fn paint(&self, frame: &mut Frame, surface: Size) {
         let ctl = self.ctl;
         let m = &ctl.motion;
@@ -115,56 +258,119 @@ impl Island<'_> {
         if presence <= 0.0 {
             return;
         }
+        let purist = ctl.config.style == OverlayStyle::Purist;
         // Opacity mostly thins the glass; text and icons fade far less, so they stay legible.
         let opacity = ctl.effective_opacity();
         let body_alpha = presence * opacity;
         let ink = presence * (0.8 + 0.2 * opacity);
         let position = ctl.config.position;
-
-        let (w, h, r) = m.size();
+        let p = self.placement(surface);
         let s = m.pulse.value;
-        let origin = anchored(position, surface, Size::new(w, h));
-        let center = Point::new(origin.x + w / 2.0, origin.y + h / 2.0);
-        let body = Rectangle::new(
-            Point::new(center.x - w * s / 2.0, center.y - h * s / 2.0),
-            Size::new(w * s, h * s),
-        );
-        // Drawn into its own layer: geometry in clipped layers is pasted ahead of the
-        // frame's own, so the body must be one too or it would cover the content.
-        frame.with_clip(Rectangle::with_size(surface), |f| {
-            paint_body(f, body, r * s, body_alpha, ctl.config.glass)
-        });
+        let (w, h, r) = (p.w, p.h, p.r);
+        let center = p.center;
+        let body = p.body;
 
-        let name = ctl.name(self.now);
-        frame.with_clip(body, |f| {
-            if let Some((content, a, sc)) = m.leaving() {
-                let ctx = Ctx {
-                    state: &state,
-                    motion: m,
-                    name: &name,
-                    ink: ink * a,
-                    age: f32::MAX,
-                    reveal: 1.0,
-                    island: (w, h),
-                };
-                paint_content(f, content, &ctx, position, surface, center, s * sc);
-            }
-            if let Some(content) = &m.shown {
-                let (a, sc) = m.incoming();
-                if a > 0.0 {
+        let k = p.k;
+        let scaled = |r: Rectangle| {
+            Rectangle::new(
+                Point::new(r.x * k, r.y * k),
+                Size::new(r.width * k, r.height * k),
+            )
+        };
+        {
+            // Drawn into its own layer: geometry in clipped layers is pasted ahead of the
+            // frame's own, so the body must be one too or it would cover the content.
+            frame.with_clip(Rectangle::with_size(surface), |f| {
+                f.scale(k);
+                if !purist {
+                    paint_body(f, body, r * s, body_alpha, ctl.config.glass);
+                } else if !purist::gpu_draws() {
+                    // No shader (yet): a plain black body, a hair inside the shader's
+                    // outline so the two never double up at the edge.
+                    let inset = 1.0;
+                    f.fill(
+                        &Path::rounded_rectangle(
+                            Point::new(body.x + inset, body.y + inset),
+                            Size::new(body.width - 2.0 * inset, body.height - 2.0 * inset),
+                            Radius::from((p.radius - inset).max(0.0)),
+                        ),
+                        Color::from_rgba(0.0, 0.0, 0.0, body_alpha),
+                    );
+                }
+            });
+
+            let name = ctl.name(self.now);
+            // Clipped frames start without the parent's transform, so each one scales
+            // itself.
+            frame.with_clip(scaled(body), |f| {
+                f.scale(k);
+                if let Some((content, a, sc)) = m.leaving() {
                     let ctx = Ctx {
                         state: &state,
                         motion: m,
                         name: &name,
                         ink: ink * a,
-                        age: m.shown_age,
-                        reveal: m.reveal(),
+                        age: f32::MAX,
+                        reveal: 1.0,
                         island: (w, h),
+                        purist,
                     };
-                    paint_content(f, content, &ctx, position, surface, center, s * sc);
+                    paint_content(f, content, &ctx, position, &p, center, s * sc);
                 }
-            }
-        });
+                if let Some(content) = &m.shown {
+                    let (a, sc) = m.incoming();
+                    if a > 0.0 {
+                        let ctx = Ctx {
+                            state: &state,
+                            motion: m,
+                            name: &name,
+                            ink: ink * a,
+                            age: m.shown_age,
+                            reveal: m.reveal(),
+                            island: (w, h),
+                            purist,
+                        };
+                        paint_content(f, content, &ctx, position, &p, center, s * sc);
+                    }
+                }
+            });
+        }
+    }
+}
+
+/// The purist key line: neutral at rest, tinted to the alert on show (`keylineTint`).
+fn key_color(content: Option<&Content>) -> Color {
+    let tint = match content {
+        Some(Content::Alert(a)) => match a {
+            Alert::Charging(_) => Some(GREEN),
+            Alert::Low(_) => Some(RED),
+            Alert::Elsewhere(_) | Alert::Back => Some(BLUE),
+            Alert::Mic(crate::overlay_protocol::MicChoice::AirPods) => Some(ORANGE),
+            _ => None,
+        },
+        _ => None,
+    };
+    match tint {
+        Some(c) => Color {
+            a: KEY_ALPHA * 1.8,
+            ..c
+        },
+        None => white(KEY_ALPHA),
+    }
+}
+
+/// Colour and strength of a border glow.
+fn tint_color(t: Tint) -> (Color, f32) {
+    match t {
+        Tint::White => (Color::from_rgb(0.92, 0.95, 1.0), 0.9),
+        Tint::Dim => (Color::from_rgb(0.75, 0.78, 0.85), 0.45),
+        Tint::Green => (GREEN, 1.0),
+        Tint::Amber => (AMBER, 1.0),
+        Tint::Red => (RED, 1.0),
+        Tint::Blue => (BLUE, 1.0),
+        Tint::Orange => (ORANGE, 1.0),
+        // Above 1.5 tells the shader to use its spectrum.
+        Tint::Spectrum => (Color::WHITE, 2.0),
     }
 }
 
@@ -176,7 +382,7 @@ fn paint_content(
     content: &Content,
     ctx: &Ctx,
     position: OverlayPosition,
-    surface: Size,
+    place: &Placement,
     center: Point,
     scale: f32,
 ) {
@@ -184,7 +390,7 @@ fn paint_content(
         return;
     }
     let (cw, ch, _) = shape(content, ctx.state);
-    let mut origin = anchored(position, surface, Size::new(cw, ch));
+    let mut origin = anchored_in(position, place.space, Size::new(cw, ch), place.pad);
     // Content smaller than the island (it is shrinking onto it) sits in the island's
     // middle; content larger than the island (it is growing) is revealed from the
     // anchored edge.
@@ -197,6 +403,7 @@ fn paint_content(
         TopCenter | BottomCenter => 0.0,
     };
     origin.y += if position.is_top() { dy } else { -dy };
+    origin.x += place.shift;
     f.with_save(|f| {
         f.translate(Vector::new(center.x, center.y));
         f.scale(scale);
@@ -355,6 +562,7 @@ fn age_text(secs: u64) -> String {
 /// Apple's numeric content transition.
 fn draw_level_number(
     f: &mut Frame,
+    ctx: &Ctx,
     level: &Level,
     at: Point,
     size: f32,
@@ -369,7 +577,7 @@ fn draw_level_number(
             Point::new(at.x, at.y + y),
             size,
             with_alpha(color, a),
-            weight(Weight::Bold),
+            ctx.font(Weight::Bold),
         )
     };
     if let Some(prev) = level.prev {
@@ -379,12 +587,12 @@ fn draw_level_number(
         } else {
             1.0
         };
-        fill_text_lifted(f, text(format!("{prev}%"), dir * ROLL_TRAVEL * t, 1.0 - t));
+        ctx.text(f, text(format!("{prev}%"), dir * ROLL_TRAVEL * t, 1.0 - t));
         let current = level.value.map_or("--".into(), |v| format!("{v}%"));
-        fill_text_lifted(f, text(current, -dir * ROLL_TRAVEL * (1.0 - t), t));
+        ctx.text(f, text(current, -dir * ROLL_TRAVEL * (1.0 - t), t));
     } else {
         let current = level.value.map_or("--".into(), |v| format!("{v}%"));
-        fill_text_lifted(f, text(current, 0.0, 1.0));
+        ctx.text(f, text(current, 0.0, 1.0));
     }
 }
 
@@ -443,7 +651,7 @@ fn paint_compact(f: &mut Frame, _w: f32, h: f32, ctx: &Ctx) {
             draw_bolt(f, Point::new(x + 4.0, cy), 0.8, with_alpha(GREEN, ctx.ink));
         } else {
             match slot {
-                Slot::Letter(l) => fill_text_lifted(
+                Slot::Letter(l) => ctx.text(
                     f,
                     canvas::Text {
                         align_x: TextAlign::Center,
@@ -452,7 +660,7 @@ fn paint_compact(f: &mut Frame, _w: f32, h: f32, ctx: &Ctx) {
                             Point::new(x + 4.0, cy),
                             11.0,
                             label_c,
-                            weight(Weight::Semibold),
+                            ctx.font(Weight::Semibold),
                         )
                     },
                 ),
@@ -471,6 +679,7 @@ fn paint_compact(f: &mut Frame, _w: f32, h: f32, ctx: &Ctx) {
         };
         draw_level_number(
             f,
+            ctx,
             &ctx.motion.levels[idx],
             Point::new(tx, cy),
             13.5,
@@ -498,14 +707,14 @@ fn paint_expanded(f: &mut Frame, w: f32, ctx: &Ctx) {
         0.0
     };
     let max_w = w - text_x - INSET - trailing;
-    fill_text_lifted(
+    ctx.text(
         f,
         label(
             truncate(ctx.name, max_w, 15.0),
             Point::new(text_x, header_y - 8.5),
             15.0,
             white(0.97 * ctx.ink),
-            weight(Weight::Semibold),
+            ctx.font(Weight::Semibold),
         ),
     );
     // Second line: rolls over to the news when something happens.
@@ -514,25 +723,25 @@ fn paint_expanded(f: &mut Frame, w: f32, ctx: &Ctx) {
     let cap_y = header_y + 9.0;
     let cap_color = |a: f32| white(0.58 * ctx.ink * a);
     if let Some(prev) = &cap.prev {
-        fill_text_lifted(
+        ctx.text(
             f,
             label(
                 truncate(prev, max_w, 12.0),
                 Point::new(text_x, cap_y - ROLL_TRAVEL * t),
                 12.0,
                 cap_color(1.0 - t),
-                weight(Weight::Medium),
+                ctx.font(Weight::Medium),
             ),
         );
     }
-    fill_text_lifted(
+    ctx.text(
         f,
         label(
             truncate(&cap.text, max_w, 12.0),
             Point::new(text_x, cap_y + ROLL_TRAVEL * (1.0 - t)),
             12.0,
             cap_color(t),
-            weight(Weight::Medium),
+            ctx.font(Weight::Medium),
         ),
     );
     if let Some(mode) = ctx.state.listening_mode {
@@ -621,7 +830,7 @@ fn draw_segment(
         draw_bolt(f, center, pop, with_alpha(GREEN, alpha));
     } else {
         match slot {
-            Slot::Letter(l) => fill_text_lifted(
+            Slot::Letter(l) => ctx.text(
                 f,
                 canvas::Text {
                     align_x: TextAlign::Center,
@@ -630,7 +839,7 @@ fn draw_segment(
                         center,
                         12.0,
                         label_color,
-                        weight(Weight::Semibold),
+                        ctx.font(Weight::Semibold),
                     )
                 },
             ),
@@ -646,6 +855,7 @@ fn draw_segment(
     };
     draw_level_number(
         f,
+        ctx,
         level,
         Point::new(text_x, center.y - 7.0),
         16.5,
@@ -660,14 +870,14 @@ fn draw_segment(
         },
         _ => slot.title().to_string(),
     };
-    fill_text_lifted(
+    ctx.text(
         f,
         label(
             subtitle,
             Point::new(text_x, center.y + 9.5),
             11.0,
             white(0.5 * alpha * if present { 1.0 } else { 0.8 }),
-            weight(Weight::Medium),
+            ctx.font(Weight::Medium),
         ),
     );
 }
@@ -727,19 +937,19 @@ fn paint_alert(f: &mut Frame, alert: &Alert, w: f32, h: f32, ctx: &Ctx) {
         w - ALERT_TEXT_X - trailing_w - ALERT_TRAIL_PAD,
         ALERT_TITLE_SIZE,
     );
-    fill_text_lifted(
+    ctx.text(
         f,
         label(
             title,
             Point::new(ALERT_TEXT_X, cy),
             ALERT_TITLE_SIZE,
             white(0.97 * ink),
-            weight(Weight::Semibold),
+            ctx.font(Weight::Semibold),
         ),
     );
 
     if let Some(text) = alert.trailing_text() {
-        fill_text_lifted(
+        ctx.text(
             f,
             canvas::Text {
                 align_x: TextAlign::Right,
@@ -748,7 +958,7 @@ fn paint_alert(f: &mut Frame, alert: &Alert, w: f32, h: f32, ctx: &Ctx) {
                     Point::new(w - ALERT_TRAIL_PAD, cy),
                     13.0,
                     white(0.55 * ink),
-                    weight(Weight::Medium),
+                    ctx.font(Weight::Medium),
                 )
             },
         );
@@ -849,11 +1059,11 @@ fn draw_alert_level(
     }
     let inner = white(0.8 * ink);
     match slot {
-        Slot::Letter(l) => fill_text_lifted(
+        Slot::Letter(l) => ctx.text(
             f,
             canvas::Text {
                 align_x: TextAlign::Center,
-                ..label(l.into(), center, 9.5, inner, weight(Weight::Bold))
+                ..label(l.into(), center, 9.5, inner, ctx.font(Weight::Bold))
             },
         ),
         Slot::Case => draw_case_glyph_small(f, center, inner),
@@ -861,6 +1071,7 @@ fn draw_alert_level(
     }
     draw_level_number(
         f,
+        ctx,
         level,
         Point::new(center.x + R + 7.0, center.y),
         14.5,
@@ -920,9 +1131,9 @@ mod tests {
     fn anchoring_keeps_the_island_on_its_edge() {
         let surface = Size::new(400.0, 140.0);
         let small = Size::new(100.0, 36.0);
-        let p = anchored(OverlayPosition::TopCenter, surface, small);
+        let p = anchored_in(OverlayPosition::TopCenter, surface, small, PAD);
         assert_eq!(p, Point::new(150.0, PAD));
-        let p = anchored(OverlayPosition::BottomRight, surface, small);
+        let p = anchored_in(OverlayPosition::BottomRight, surface, small, PAD);
         assert_eq!(p, Point::new(400.0 - PAD - 100.0, 140.0 - PAD - 36.0));
     }
 }

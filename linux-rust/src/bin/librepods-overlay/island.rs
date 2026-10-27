@@ -63,6 +63,123 @@ const FADE_IN: Feel = Feel::new(0.26, 0.0);
 const FADE_OUT: Feel = Feel::new(0.32, 0.0);
 const PULSE: Feel = Feel::new(0.36, 0.45);
 const FILL: Feel = Feel::new(0.8, 0.0);
+/// The purist island's head shake when something failed, as iOS does for a wrong
+/// passcode: quick, and settles in about half a second.
+const SHAKE: Feel = Feel::new(0.22, 0.62);
+
+// --- Border light (purist style) -------------------------------------------------
+//
+// On the iPhone a thin key line runs round the island so it stands apart from a dark
+// screen, tinted to match what the island shows (`keylineTint`). The purist style keeps
+// that key line and, when something happens, lets light run along it in the event's
+// colour. Every glow is shorter than two seconds (Apple's limit for Live Activity
+// animations); after it the island is still again and no frames are drawn.
+
+/// How light moves around the border.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlowKind {
+    /// Two lights leave the anchored edge, run both ways round and meet opposite.
+    Sweep,
+    /// The whole border brightens and dims twice (low battery).
+    Breathe,
+    /// Colours flow round the border, like Apple Intelligence's glow (connected).
+    Flow,
+    /// One quick flash with a ripple that leaves the edge (a mode changed).
+    Ping,
+}
+
+/// The colour of a glow; `view.rs` maps these to the purist palette.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tint {
+    White,
+    Dim,
+    Green,
+    Amber,
+    Red,
+    Blue,
+    Orange,
+    /// Several colours at once (purple, pink, blue, orange), for `Flow`.
+    Spectrum,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Glow {
+    pub kind: GlowKind,
+    pub tint: Tint,
+    /// Seconds since the glow started.
+    pub age: f32,
+}
+
+impl Glow {
+    pub fn new(kind: GlowKind, tint: Tint) -> Self {
+        Self {
+            kind,
+            tint,
+            age: 0.0,
+        }
+    }
+
+    /// Seconds from start to dark. Always under two.
+    pub fn duration(&self) -> f32 {
+        match self.kind {
+            GlowKind::Sweep => 1.5,
+            GlowKind::Breathe => 1.9,
+            GlowKind::Flow => 1.9,
+            GlowKind::Ping => 0.9,
+        }
+    }
+
+    /// 0..1 through the glow.
+    pub fn progress(&self) -> f32 {
+        (self.age / self.duration()).clamp(0.0, 1.0)
+    }
+
+    pub fn done(&self) -> bool {
+        self.age >= self.duration()
+    }
+}
+
+/// The glow that announces `content`, if any. `connected` is true when the island
+/// opens because the AirPods just connected (rather than for a pod coming or going).
+pub fn glow_for(content: &Content, state: &OverlayState, connected: bool) -> Option<Glow> {
+    use GlowKind::*;
+    let (kind, tint) = match content {
+        Content::Compact => return None,
+        Content::Expanded if connected => (Flow, Tint::Spectrum),
+        Content::Expanded => (Sweep, Tint::White),
+        Content::Alert(a) => match a {
+            Alert::Charging(_) => (Sweep, Tint::Green),
+            Alert::Low(p) => {
+                let lowest = [
+                    (p.left, &state.left),
+                    (p.right, &state.right),
+                    (p.case, &state.case),
+                    (p.headphone, &state.headphone),
+                ]
+                .into_iter()
+                .filter_map(|(on, c)| on.then_some(c.as_ref()).flatten())
+                .map(|c| c.level)
+                .min();
+                let tint = if lowest.is_some_and(|l| l > 10) {
+                    Tint::Amber
+                } else {
+                    Tint::Red
+                };
+                (Breathe, tint)
+            }
+            Alert::Elsewhere(_) | Alert::Back => (Sweep, Tint::Blue),
+            Alert::Listening(ListeningMode::NoiseCancellation) => (Ping, Tint::Blue),
+            Alert::Listening(ListeningMode::Adaptive) => (Ping, Tint::Spectrum),
+            Alert::Listening(_) => (Ping, Tint::White),
+            // Orange is the colour iOS uses to say a microphone is in use.
+            Alert::Mic(MicChoice::AirPods) => (Ping, Tint::Orange),
+            Alert::Mic(MicChoice::Desk) => (Ping, Tint::White),
+            Alert::MicUnavailable => (Ping, Tint::Red),
+            Alert::Disconnected => (Sweep, Tint::Dim),
+        },
+    };
+    Some(Glow::new(kind, tint))
+}
 
 /// Which batteries an alert is about.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -404,6 +521,10 @@ pub struct Motion {
     pub levels: [Level; 4],
     /// The card's second line (status, or the latest news).
     pub caption: Caption,
+    /// Light running round the border (purist style only).
+    pub glow: Option<Glow>,
+    /// Sideways offset of a head shake, in px (purist style only).
+    pub shake: Spring,
 }
 
 impl Default for Motion {
@@ -419,6 +540,8 @@ impl Default for Motion {
             outgoing: None,
             levels: [Level::default(); 4],
             caption: Caption::default(),
+            glow: None,
+            shake: Spring::new(0.0, SHAKE, 0.05),
         }
     }
 }
@@ -428,9 +551,12 @@ impl Motion {
     pub fn reset(&mut self) {
         let levels = self.levels;
         let caption = std::mem::take(&mut self.caption);
+        let glow = self.glow;
         *self = Self::default();
         self.levels = levels;
         self.caption = caption;
+        // A glow asked for just before the surface existed plays as the island opens.
+        self.glow = glow;
     }
 
     /// Changes what is shown. `target` is the new content's shape, or None to fold away.
@@ -486,6 +612,16 @@ impl Motion {
         self.pulse.kick(0.55);
     }
 
+    /// Starts a border glow, replacing any glow still running.
+    pub fn light(&mut self, glow: Glow) {
+        self.glow = Some(glow);
+    }
+
+    /// A quick side to side shake, for something that didn't work.
+    pub fn shake(&mut self) {
+        self.shake.kick(-200.0);
+    }
+
     /// Sets the card's second line; it rolls over when `animate` and it changed.
     pub fn set_caption(&mut self, text: &str, animate: bool) {
         self.caption.set(text, animate);
@@ -511,6 +647,7 @@ impl Motion {
             &mut self.r,
             &mut self.alpha,
             &mut self.pulse,
+            &mut self.shake,
         ] {
             moving |= s.step(dt);
         }
@@ -518,6 +655,14 @@ impl Motion {
             moving |= l.step(dt);
         }
         moving |= self.caption.step(dt);
+        if let Some(g) = &mut self.glow {
+            g.age += dt;
+            if g.done() {
+                self.glow = None;
+            } else {
+                moving = true;
+            }
+        }
         if let Some((_, age)) = &mut self.outgoing {
             *age += dt;
             if *age >= CONTENT_OUT {

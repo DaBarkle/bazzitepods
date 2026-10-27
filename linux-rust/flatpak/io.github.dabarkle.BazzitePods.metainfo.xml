@@ -95,6 +95,17 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.5.0" date="2026-10-28">
+      <description>
+        <p>A purist Dynamic Island style, and island sizes.</p>
+        <ul>
+          <li>Purist style: solid flat black with a hairline edge, like the iPhone's Dynamic Island</li>
+          <li>Light runs round the border in the event's colour when something happens, then the island rests</li>
+          <li>Small, Medium, Large and Extra large island sizes</li>
+          <li>Redesigned app window: pure black, three tabs, and a preview screen for placing the overlay</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.1" date="2026-10-28">
       <description>
         <p>The AirPods mic switch now moves every app, including Discord.</p>

@@ -15,7 +15,8 @@ use crate::ui::format::{self, DeviceSetting, ListeningMode, StatusTone};
 use crate::ui::messages::BluetoothUIMessage;
 use crate::ui::motion::{self, Motion};
 use crate::ui::settings::{
-    Appearance, OVERLAY_POSITIONS, OverlayMode, OverlayPosition, Settings, SettingsStore,
+    Appearance, OVERLAY_POSITIONS, OverlayMode, OverlayPosition, OverlaySize, OverlayStyle,
+    Settings, SettingsStore,
 };
 use crate::ui::style::{self, Tokens};
 use crate::ui::widgets::{self, Glyph, Ink};
@@ -163,6 +164,8 @@ pub enum Message {
     SetOverlayPosition(OverlayPosition),
     SetOverlayOpacity(f32),
     SetOverlayGlass(f32),
+    SetOverlayStyle(OverlayStyle),
+    SetOverlaySize(OverlaySize),
     CommitOverlaySliders,
     SetStartAtLogin(bool),
     SetStemControl(bool),
@@ -222,6 +225,8 @@ enum Anim {
     Mode,
     Appearance,
     OverlayMode,
+    OverlayStyle,
+    OverlaySize,
     /// A segmented AirPods setting, by AACP control id.
     Control(u8),
     /// Battery ring fill, by gauge index.
@@ -468,6 +473,8 @@ impl App {
             position: s.overlay_position,
             opacity: s.overlay_opacity,
             glass: s.overlay_glass,
+            style: s.overlay_style,
+            size: s.overlay_size,
             ..Default::default()
         });
     }
@@ -522,6 +529,17 @@ impl App {
         let m = &mut self.motion;
         let tab = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
         m.target(Anim::Tab, tab as f32, None, motion::SNAPPY, now);
+        let s = &self.settings;
+        let style = OVERLAY_STYLES
+            .iter()
+            .position(|(_, v)| *v == s.overlay_style)
+            .unwrap_or(0) as f32;
+        let size = OVERLAY_SIZES
+            .iter()
+            .position(|(_, v)| *v == s.overlay_size)
+            .unwrap_or(0) as f32;
+        m.target(Anim::OverlayStyle, style, None, motion::SNAPPY, now);
+        m.target(Anim::OverlaySize, size, None, motion::SNAPPY, now);
         m.target(
             Anim::Appearance,
             [Appearance::System, Appearance::Light, Appearance::Dark]
@@ -659,6 +677,16 @@ impl App {
                 self.live_overlay(|s| s.overlay_glass = v);
                 crate::overlay_feed::preview();
                 Task::none()
+            }
+            Message::SetOverlayStyle(v) => {
+                let task = self.save_overlay(|s| s.overlay_style = v);
+                crate::overlay_feed::preview();
+                task
+            }
+            Message::SetOverlaySize(v) => {
+                let task = self.save_overlay(|s| s.overlay_size = v);
+                crate::overlay_feed::preview();
+                task
             }
             Message::CommitOverlaySliders => self.save_overlay(|_| {}),
             Message::PreviewOverlay => {
@@ -1180,8 +1208,42 @@ impl App {
             ),
         )]);
 
-        let look = group(vec![
+        let mut look = vec![
             setting_row(
+                "Style",
+                Some(match s.overlay_style {
+                    OverlayStyle::Classic => "Smoked glass with a soft sheen",
+                    OverlayStyle::Purist => "Flat black, light runs round the edge",
+                }),
+                container(slide_control(
+                    &OVERLAY_STYLES,
+                    s.overlay_style,
+                    Some(self.anim(Anim::OverlayStyle, 0.0)),
+                    overlay_on,
+                    Message::SetOverlayStyle,
+                    Shape::COMPACT,
+                ))
+                .width(Length::Fixed(160.0))
+                .into(),
+            ),
+            setting_row(
+                "Size",
+                None,
+                container(slide_control(
+                    &OVERLAY_SIZES,
+                    s.overlay_size,
+                    Some(self.anim(Anim::OverlaySize, 0.0)),
+                    overlay_on,
+                    Message::SetOverlaySize,
+                    Shape::COMPACT,
+                ))
+                .width(Length::Fixed(196.0))
+                .into(),
+            ),
+        ];
+        // Glass only shapes the classic island; the purist one is always solid black.
+        if s.overlay_style == OverlayStyle::Classic {
+            look.push(setting_row(
                 "Glass",
                 Some("Black to clear glass"),
                 percent_slider(
@@ -1190,18 +1252,19 @@ impl App {
                     Message::SetOverlayGlass,
                     overlay_on,
                 ),
+            ));
+        }
+        look.push(setting_row(
+            "Opacity over games",
+            Some("Over fullscreen games"),
+            percent_slider(
+                0.2..=1.0,
+                s.overlay_opacity,
+                Message::SetOverlayOpacity,
+                overlay_on,
             ),
-            setting_row(
-                "Opacity over games",
-                Some("Over fullscreen games"),
-                percent_slider(
-                    0.2..=1.0,
-                    s.overlay_opacity,
-                    Message::SetOverlayOpacity,
-                    overlay_on,
-                ),
-            ),
-        ]);
+        ));
+        let look = group(look);
 
         column![
             preview,
@@ -1631,6 +1694,18 @@ const OVERLAY_MODES: [(&str, OverlayMode); 4] = [
     ("Compact", OverlayMode::Compact),
     ("Full", OverlayMode::Always),
     ("Off", OverlayMode::Off),
+];
+
+const OVERLAY_STYLES: [(&str, OverlayStyle); 2] = [
+    ("Classic", OverlayStyle::Classic),
+    ("Purist", OverlayStyle::Purist),
+];
+
+const OVERLAY_SIZES: [(&str, OverlaySize); 4] = [
+    ("S", OverlaySize::Small),
+    ("M", OverlaySize::Medium),
+    ("L", OverlaySize::Large),
+    ("XL", OverlaySize::ExtraLarge),
 ];
 
 fn dim_text(theme: &Theme) -> text::Style {

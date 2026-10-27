@@ -27,6 +27,8 @@ mod island;
 mod logic;
 #[path = "librepods-overlay/probe.rs"]
 mod probe;
+#[path = "librepods-overlay/purist.rs"]
+mod purist;
 #[path = "librepods-overlay/spring.rs"]
 mod spring;
 #[path = "librepods-overlay/view.rs"]
@@ -50,7 +52,8 @@ use log::{debug, info, warn};
 
 use logic::{Controller, SurfaceAction};
 use overlay_protocol::{
-    EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayMode, OverlayPosition, OverlayState,
+    EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayMode, OverlayPosition, OverlaySize,
+    OverlayState, OverlayStyle,
 };
 
 const NAMESPACE: &str = "librepods-overlay";
@@ -64,6 +67,8 @@ struct Args {
     story: bool,
     mode: Option<OverlayMode>,
     position: Option<OverlayPosition>,
+    style: Option<OverlayStyle>,
+    size: Option<OverlaySize>,
 }
 
 fn usage() -> &'static str {
@@ -76,6 +81,8 @@ fn usage() -> &'static str {
        --demo-story        play a scripted tour of every island state (for recordings)\n  \
        --mode M            with --demo-story: auto|compact|always (default compact)\n  \
        --position P        top-left|top-center|top-right|bottom-left|bottom-center|bottom-right\n  \
+       --style S           with a demo: classic|purist\n  \
+       --size S            with a demo: small|medium|large|extra_large\n  \
        --probe             check for layer-shell support and exit (0 or 3)\n"
 }
 
@@ -133,6 +140,12 @@ impl Overlay {
         let mut cfg = OverlayConfig::default();
         if let Some(p) = args.position {
             cfg.position = p;
+        }
+        if let Some(s) = args.style {
+            cfg.style = s;
+        }
+        if let Some(s) = args.size {
+            cfg.size = s;
         }
         let demo = args.demo.then(|| DemoState {
             step: args.demo_step.unwrap_or(0),
@@ -271,6 +284,15 @@ impl Overlay {
                 let old_cfg = self.ctl.config.clone();
                 self.ctl.apply(cmd, now);
                 let mut tasks = vec![];
+                if let Some(id) = self.window
+                    && self.ctl.config.size != old_cfg.size
+                {
+                    // The surface is sized for the island and never resized while shown
+                    // (see `Controller::extent`), so a new size gets a new surface.
+                    tasks.push(iced::window::close(id));
+                    self.window = None;
+                    self.ctl.surface_lost();
+                }
                 if let Some(id) = self.window {
                     let cfg = &self.ctl.config;
                     if cfg.position != old_cfg.position {
@@ -328,13 +350,24 @@ impl Overlay {
         if self.ctl.display_state(now).is_none() {
             return iced::widget::Space::new().into();
         }
-        canvas(view::Island {
+        let island = view::Island {
             ctl: &self.ctl,
             now,
-        })
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+        };
+        let surface = iced::Size::new(self.size.0 as f32, self.size.1 as f32);
+        let body = island.purist_body(surface);
+        let content = canvas(island).width(Length::Fill).height(Length::Fill);
+        match body {
+            // The purist body is a shader underneath; the canvas draws the content on top.
+            Some(body) => iced::widget::stack![
+                iced::widget::shader(body)
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+                content,
+            ]
+            .into(),
+            None => content.into(),
+        }
     }
 
     fn subscription(&self) -> Subscription<Message> {
@@ -439,6 +472,20 @@ fn parse_args() -> Result<(Args, bool), String> {
                     .map_err(|_| "bad --position value".to_string())?;
                 args.position = Some(p);
             }
+            "--style" => {
+                let v = it.next().ok_or("--style needs a value")?;
+                args.style = Some(
+                    serde_json::from_value(serde_json::Value::String(v))
+                        .map_err(|_| "bad --style value".to_string())?,
+                );
+            }
+            "--size" => {
+                let v = it.next().ok_or("--size needs a value")?;
+                args.size = Some(
+                    serde_json::from_value(serde_json::Value::String(v))
+                        .map_err(|_| "bad --size value".to_string())?,
+                );
+            }
             "--probe" => probe_only = true,
             "-h" | "--help" => return Err(String::new()),
             other => return Err(format!("unknown argument: {other}")),
@@ -505,6 +552,15 @@ fn main() -> ExitCode {
     })
     .settings(Settings {
         id: Some(NAMESPACE.into()),
+        // Inter for the purist island (the classic one keeps the system sans).
+        fonts: vec![
+            include_bytes!("../../assets/font/Inter-Medium.ttf")
+                .as_slice()
+                .into(),
+            include_bytes!("../../assets/font/Inter-SemiBold.ttf")
+                .as_slice()
+                .into(),
+        ],
         antialiasing: true,
         layer_settings: LayerShellSettings {
             // Start with no surface at all; surfaces are created on demand.
