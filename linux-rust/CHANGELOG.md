@@ -4,6 +4,17 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-10-27
+
+### Fixed
+- **AirPods reconnect when you come home.** If you walked out of range wearing them, the PC
+  only reconnected when it happened to recognise their Bluetooth adverts, and stopped
+  trying after 4 hours, so after a workday they never came back. Now they are reconnected
+  however long you were away, the same as after putting them in the case. ([#16])
+- Disconnecting the AirPods on this PC (from the KDE Bluetooth menu, for example) now keeps
+  them disconnected for sure: BlueZ says why each link dropped, and the app only stays away
+  when the drop was yours. ([#16])
+
 ## [0.3.1] - 2026-10-27
 
 ### Added
@@ -131,5 +142,6 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
+[#16]: https://github.com/DaBarkle/bazzitepods/pull/16
 [#12]: https://github.com/DaBarkle/bazzitepods/pull/12
 [#11]: https://github.com/DaBarkle/bazzitepods/pull/11
