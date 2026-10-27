@@ -60,10 +60,11 @@ All notable changes to BazzitePods are documented here. The format follows
 - **The switch chime is heard even when system notification sounds are muted.** ([#22])
 - **Music no longer gets stuck on a lower-quality codec.** When the AirPods refused to
   restart AAC after a mic swap, the repair fell back to SBC-XQ and stayed there, even
-  across reconnects. The restart was blocked by PipeWire's short lockout after a
-  Bluetooth error, which each extra reset only extended; BazzitePods now waits it out
-  and restarts AAC as it was, switches codec only as a last resort, and returns to AAC
-  as soon as nothing is playing. ([#22])
+  across reconnects. A refused restart now switches codec once to get the sound back
+  within about two seconds (instead of a second, slower reset), and BazzitePods
+  returns to AAC as soon as nothing is playing. ([#22])
+- The speakers are never left muted if BazzitePods stops in the middle of a switch,
+  for example when the PC goes to sleep. ([#22])
 
 ### Notes
 - *Purist* is the new default. If you had never changed the overlay's look, it switches to

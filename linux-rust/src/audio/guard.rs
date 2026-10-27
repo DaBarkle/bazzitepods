@@ -54,10 +54,6 @@ pub struct GuardConfig {
     /// After the link comes up, the output was just built: a take-back this soon doesn't
     /// rebuild it again (a stall is still repaired).
     pub fresh_link: Duration,
-    /// After transport errors PipeWire refuses to start a Bluetooth stream (EIO, no
-    /// acquire at all) until it has had a few seconds without errors. Retrying sooner
-    /// only adds errors and extends it, so a stuck rebuild waits this long first.
-    pub transport_lockout: Duration,
 }
 
 impl Default for GuardConfig {
@@ -76,7 +72,6 @@ impl Default for GuardConfig {
             max_ladders_per_link: 3,
             retry_after_failure: Duration::from_secs(30),
             max_ensure_attempts: 3,
-            transport_lockout: Duration::from_millis(6500),
             fresh_link: Duration::from_secs(10),
         }
     }
@@ -406,6 +401,8 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 self.hush_until = Some(Instant::now() + HUSH_LIMIT);
             }
         }
+        // Stopped mid-rebuild (sleep, shutdown): never leave the speakers muted.
+        self.unmute_hushed().await;
         info!("[audio {}] guard stopped", self.mac_str);
     }
 
@@ -1175,7 +1172,6 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         let streams = self.our_streams().await;
         self.set_health(AudioHealth::Recovering { step: 1 });
         self.hush().await;
-        let started = Instant::now();
         if let Err(e) = self.pulse.set_card_profile(card.index, "off").await {
             warn!("[audio {}] toggle to off failed: {}", self.mac_str, e);
         }
@@ -1186,30 +1182,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         // The profile is back, but the AirPods can take a few seconds more to accept
         // audio. Keep the speakers muted until they do; if they don't, recover now.
         if result.is_ok() && !self.flowing_within(self.rebuild_flow_wait()).await {
-            // Usually PipeWire's transport error lockout, which the toggle itself can
-            // trip: wait it out without touching anything, then start the same codec
-            // again. A codec switch is the last resort.
+            // PipeWire locks a transport out (EIO, no acquire) for a few seconds after
+            // errors, and the off toggle keeps the same AAC transport object with its
+            // error count. Another codec gets a fresh transport that starts at once;
+            // AAC comes back later, once that lockout is long gone.
             info!(
-                "[audio {}] the AirPods didn't start the rebuilt output; waiting out the \
-                 transport error lockout, then starting it again",
-                self.mac_str
-            );
-            sleep_until(started + self.cfg.transport_lockout).await;
-            if self.reacquire().await {
-                self.unhush().await;
-                self.last_repair = Some(Instant::now());
-                self.stall_since = None;
-                if let Some(card) = self.current_card().await {
-                    let profile = card.active_profile.unwrap_or_default();
-                    self.set_health(AudioHealth::Ready {
-                        codec: codec_for(&profile, None),
-                        profile,
-                    });
-                }
-                return;
-            }
-            info!(
-                "[audio {}] still not playing, switching codec",
+                "[audio {}] the AirPods didn't start the rebuilt output, switching codec",
                 self.mac_str
             );
             if let Some(profile) = self.switch_codec(&streams).await {
@@ -1336,25 +1314,6 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             return Ok(Some(3));
         }
         Ok(None)
-    }
-
-    /// Suspends and resumes our sink: releases and re-acquires the transport on the
-    /// same codec, without a profile change. True once audio flows.
-    async fn reacquire(&mut self) -> bool {
-        let Some(sink) = self.pulse.snapshot().await.ok().and_then(|snap| {
-            let card = snap.card_for(&self.mac_str)?;
-            snap.sink_for_card(card).map(|s| s.index)
-        }) else {
-            return false;
-        };
-        if let Err(e) = self.pulse.suspend_sink(sink, true).await {
-            debug!("[audio {}] suspend failed: {}", self.mac_str, e);
-        }
-        sleep(Duration::from_millis(100)).await;
-        if let Err(e) = self.pulse.suspend_sink(sink, false).await {
-            warn!("[audio {}] resume failed: {}", self.mac_str, e);
-        }
-        self.stall_resolved().await
     }
 
     /// Switches to another A2DP codec, which makes a fresh transport, and waits for
