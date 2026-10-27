@@ -102,6 +102,8 @@ impl AudioGuardHandle {
 
     /// Anything that may have broken audio: resume from sleep, or the audio route coming
     /// back from another device. Re-runs the full setup after the usual debounce.
+    // Unused for now: after sleep the device task restarts, which builds a new guard.
+    #[allow(dead_code)]
     pub fn resume_hint(&self) {
         self.send(Cmd::Resume);
     }

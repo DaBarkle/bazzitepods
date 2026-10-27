@@ -104,7 +104,7 @@ impl Compositor {
 
                 log::info!("Available formats: {formats:#?}");
 
-                let mut formats = formats.filter(|format| {
+                let formats = formats.filter(|format| {
                     format.required_features() == wgpu::Features::empty()
                 });
 

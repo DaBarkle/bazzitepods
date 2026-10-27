@@ -366,13 +366,6 @@ impl MediaController {
         }
     }
 
-    /// Kept for API compatibility. This used to set the card profile to `off`, which
-    /// WirePlumber persisted, leaving the AirPods silent on every reconnect. It is now
-    /// a no-op: losing ownership or taking the buds out only pauses media.
-    pub async fn deactivate_a2dp_profile(&self) {
-        info!("Not switching the audio profile off (keeps A2DP alive for reconnects)");
-    }
-
     async fn pause(&self) {
         debug!("Pausing playback");
         let paused_services = tokio::task::spawn_blocking(|| {

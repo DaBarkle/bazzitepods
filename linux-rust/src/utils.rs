@@ -11,14 +11,6 @@ pub fn get_devices_path() -> PathBuf {
         .join("devices.json")
 }
 
-pub fn get_preferences_path() -> PathBuf {
-    let config_dir = std::env::var("XDG_CONFIG_HOME")
-        .unwrap_or_else(|_| format!("{}/.config", std::env::var("HOME").unwrap_or_default()));
-    PathBuf::from(config_dir)
-        .join("librepods")
-        .join("preferences.json")
-}
-
 pub fn get_app_settings_path() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_default();
 

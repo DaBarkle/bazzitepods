@@ -81,7 +81,7 @@ modules:
     buildsystem: simple
     build-commands:
       # Builds both binaries: librepods and librepods-overlay.
-      - cargo build --release --frozen --verbose
+      - cargo build --release --frozen
       - install -Dm755 target/release/librepods -t ${FLATPAK_DEST}/bin/
       - install -Dm755 target/release/librepods-overlay -t ${FLATPAK_DEST}/bin/
       - install -Dm644 assets/io.github.dabarkle.BazzitePods.desktop -t ${FLATPAK_DEST}/share/applications/
