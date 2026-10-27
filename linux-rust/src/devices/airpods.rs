@@ -658,9 +658,10 @@ async fn subscribe_controls(
     let hub = ctx.hub.clone();
     let audio = audio.cloned();
     let route = route.clone();
-    let aacp = aacp.clone();
+    let owner_aacp = aacp.clone();
     let (mac, name) = (mac_s.to_string(), name.to_string());
     tasks.spawn(async move {
+        let aacp = owner_aacp;
         while let Some(value) = rx.recv().await {
             let owns = value.first().copied().unwrap_or(0) != 0;
             let had = owns_audio(&hub, &mac);
@@ -678,7 +679,31 @@ async fn subscribe_controls(
                 media.lock().await.pause_all_media().await;
             } else if had == Some(false) && owns {
                 route_regained(audio.as_ref(), true);
+                // The other device may have given the stem holds back to the AirPods.
+                apply_stem_settings(&aacp, &StemSettings::read()).await;
             }
+        }
+    });
+
+    // Another device (an iPhone setting itself up) can reset which presses the AirPods hand
+    // over, and the left hold then changes noise control instead of swapping mics. Claim
+    // them again, at most every 10 s so two devices never fight over it.
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    aacp.subscribe_to_control_command(ControlCommandIdentifiers::StemConfig, tx)
+        .await;
+    let aacp = aacp.clone();
+    tasks.spawn(async move {
+        let mut last: Option<Instant> = None;
+        while let Some(value) = rx.recv().await {
+            let wanted = StemSettings::read();
+            let mask = crate::mic::gestures::stem_claims(wanted.track_control, wanted.mic_switch);
+            let now = value.first().copied().unwrap_or(0);
+            if now == mask || last.is_some_and(|t| t.elapsed() < Duration::from_secs(10)) {
+                continue;
+            }
+            info!("Stem presses were reset ({now:#04x}); claiming {mask:#04x} again");
+            last = Some(Instant::now());
+            apply_stem_settings(&aacp, &wanted).await;
         }
     });
 }
