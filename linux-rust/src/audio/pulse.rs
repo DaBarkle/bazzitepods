@@ -629,9 +629,198 @@ pub fn set_sink_volume_percent_sync(
     conn.wait_success("set sink volume", &slot)
 }
 
+// ---------------------------------------------------------------------------
+// Microphones (the AirPods mic switch, src/mic/)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MicSource {
+    pub index: u32,
+    pub name: String,
+    pub is_monitor: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MicRecording {
+    pub index: u32,
+    pub source: u32,
+    pub app: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModuleEntry {
+    pub index: u32,
+    pub name: String,
+    pub argument: String,
+}
+
+/// Inputs, who records from them, and loaded modules, read in one round trip.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MicSnapshot {
+    pub default_source: Option<String>,
+    pub sources: Vec<MicSource>,
+    pub recordings: Vec<MicRecording>,
+    pub modules: Vec<ModuleEntry>,
+}
+
+impl MicSnapshot {
+    pub fn source(&self, name: &str) -> Option<&MicSource> {
+        self.sources.iter().find(|s| s.name == name)
+    }
+
+    /// Streams recording from the named source.
+    pub fn recordings_on(&self, name: &str) -> Vec<u32> {
+        let Some(source) = self.source(name) else {
+            return Vec::new();
+        };
+        self.recordings
+            .iter()
+            .filter(|r| r.source == source.index)
+            .map(|r| r.index)
+            .collect()
+    }
+}
+
+pub fn mic_snapshot_sync(timeout: Duration) -> Result<MicSnapshot, PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let introspect = conn.context.introspect();
+    let sources: Rc<RefCell<Vec<MicSource>>> = Rc::default();
+    let recordings: Rc<RefCell<Vec<MicRecording>>> = Rc::default();
+    let modules: Rc<RefCell<Vec<ModuleEntry>>> = Rc::default();
+    let default_source: Rc<RefCell<Option<String>>> = Rc::default();
+
+    let s = sources.clone();
+    let op_sources = introspect.get_source_info_list(move |r| {
+        if let ListResult::Item(item) = r {
+            s.borrow_mut().push(MicSource {
+                index: item.index,
+                name: item.name.as_deref().unwrap_or("").to_string(),
+                is_monitor: item.monitor_of_sink.is_some(),
+            });
+        }
+    });
+    let r = recordings.clone();
+    let op_outputs = introspect.get_source_output_info_list(move |res| {
+        if let ListResult::Item(item) = res {
+            r.borrow_mut().push(MicRecording {
+                index: item.index,
+                source: item.source,
+                app: item.proplist.get_str("application.name"),
+            });
+        }
+    });
+    let m = modules.clone();
+    let op_modules = introspect.get_module_info_list(move |res| {
+        if let ListResult::Item(item) = res {
+            m.borrow_mut().push(ModuleEntry {
+                index: item.index,
+                name: item.name.as_deref().unwrap_or("").to_string(),
+                argument: item.argument.as_deref().unwrap_or("").to_string(),
+            });
+        }
+    });
+    let d = default_source.clone();
+    let op_server = introspect.get_server_info(move |info| {
+        *d.borrow_mut() = info.default_source_name.as_deref().map(str::to_string);
+    });
+    conn.wait_ops("list sources", &[&op_sources])?;
+    conn.wait_ops("list source outputs", &[&op_outputs])?;
+    conn.wait_ops("list modules", &[&op_modules])?;
+    conn.wait_ops("server info", &[&op_server])?;
+    Ok(MicSnapshot {
+        default_source: default_source.take(),
+        sources: sources.take(),
+        recordings: recordings.take(),
+        modules: modules.take(),
+    })
+}
+
+/// Loads a module; returns its index.
+pub fn load_module_sync(name: &str, argument: &str, timeout: Duration) -> Result<u32, PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let index: Rc<Cell<Option<u32>>> = Rc::default();
+    let i = index.clone();
+    let mut introspect = conn.context.introspect();
+    let _op = introspect.load_module(name, argument, move |idx| i.set(Some(idx)));
+    conn.run_until("load module", |_| match index.get() {
+        Some(u32::MAX) => Some(Err(PulseError::Failed(format!(
+            "{name} refused its arguments"
+        )))),
+        Some(idx) => Some(Ok(idx)),
+        None => None,
+    })
+}
+
+pub fn unload_module_sync(index: u32, timeout: Duration) -> Result<(), PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let (slot, cb) = success_slot();
+    let mut introspect = conn.context.introspect();
+    let _op = introspect.unload_module(index, cb);
+    conn.wait_success("unload module", &slot)
+}
+
+pub fn set_default_source_sync(name: &str, timeout: Duration) -> Result<(), PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let (slot, cb) = success_slot();
+    let _op = conn.context.set_default_source(name, cb);
+    conn.wait_success("set default source", &slot)
+}
+
+pub fn move_source_output_sync(
+    output_index: u32,
+    source_name: &str,
+    timeout: Duration,
+) -> Result<(), PulseError> {
+    let mut conn = Conn::open(Instant::now() + timeout)?;
+    let (slot, cb) = success_slot();
+    let mut introspect = conn.context.introspect();
+    let _op = introspect.move_source_output_by_name(output_index, source_name, Some(cb));
+    conn.wait_success("move source output", &slot)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mic_snapshot_finds_recordings_by_source_name() {
+        let snap = MicSnapshot {
+            default_source: Some("yeti".into()),
+            sources: vec![
+                MicSource {
+                    index: 3,
+                    name: "yeti".into(),
+                    is_monitor: false,
+                },
+                MicSource {
+                    index: 9,
+                    name: "speakers.monitor".into(),
+                    is_monitor: true,
+                },
+            ],
+            recordings: vec![
+                MicRecording {
+                    index: 40,
+                    source: 3,
+                    app: Some("easyeffects".into()),
+                },
+                MicRecording {
+                    index: 41,
+                    source: 9,
+                    app: None,
+                },
+                MicRecording {
+                    index: 42,
+                    source: 3,
+                    app: Some("Discord".into()),
+                },
+            ],
+            modules: Vec::new(),
+        };
+        assert_eq!(snap.recordings_on("yeti"), vec![40, 42]);
+        assert!(snap.recordings_on("missing").is_empty());
+        assert_eq!(snap.source("speakers.monitor").map(|s| s.index), Some(9));
+    }
 
     #[test]
     fn playing_streams_skip_background_and_system_sounds() {

@@ -159,6 +159,9 @@ pub enum Message {
     CommitOverlaySliders,
     SetStartAtLogin(bool),
     SetStemControl(bool),
+    SetMicSwitch(bool),
+    /// The "Use AirPods mic" switch: it always toggles, whatever the switch shows.
+    ToggleAirPodsMic,
     SetAppearance(Appearance),
     ToggleMore,
     RenameInput(String),
@@ -508,6 +511,11 @@ impl App {
                 Task::none()
             }
             Message::SetStemControl(on) => self.save_settings(|s| s.stem_control = on),
+            Message::SetMicSwitch(on) => self.save_settings(|s| s.airpods_mic_switch = on),
+            Message::ToggleAirPodsMic => {
+                crate::mic::request_toggle();
+                Task::none()
+            }
             Message::SetAppearance(a) => self.save_settings(|s| s.appearance = a),
             Message::SetStartAtLogin(on) => {
                 let save = self.save_settings(|s| s.start_at_login = on);
@@ -1096,12 +1104,42 @@ impl App {
         col = col.push(divider()).push(self.apple_mode_row());
         col = col.push(divider()).push(setting_row(
             "Stem press track control",
-            Some("Double-press for next track, triple-press for previous. Applies on reconnect."),
+            Some("Double-press for next track, triple-press for previous."),
             switch(
                 s.stem_control,
                 Some(Message::SetStemControl as fn(bool) -> Message),
             ),
         ));
+        col = col.push(divider()).push(setting_row(
+            "AirPods mic switch",
+            Some(
+                "Hold the left stem to swap between your desk mic and the AirPods mic, \
+                 with music still in full quality. Hold the right stem to change noise control.",
+            ),
+            switch(
+                s.airpods_mic_switch,
+                Some(Message::SetMicSwitch as fn(bool) -> Message),
+            ),
+        ));
+        if let Some(d) = self.primary()
+            && let Some(mic) = d.mic.filter(|_| d.is_connected())
+        {
+            let on = mic == crate::hub::MicRoute::AirPods;
+            let caption = match (&d.mic_problem, on) {
+                (Some(problem), false) => problem.as_str(),
+                (_, true) => "The AirPods mic is the default mic now",
+                (None, false) => "Your desk mic is the default mic",
+            };
+            col = col.push(divider()).push(setting_row(
+                "Use AirPods mic",
+                Some(caption),
+                switch(
+                    on,
+                    format::controls_enabled(d)
+                        .then_some((|_| Message::ToggleAirPodsMic) as fn(bool) -> Message),
+                ),
+            ));
+        }
 
         if let Some(d) = self.primary() {
             let info = d.model.info();

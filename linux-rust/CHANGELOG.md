@@ -4,6 +4,33 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-10-27
+
+### Added
+- **Use your AirPods as the PC's mic without losing music quality.** Turn on *AirPods mic
+  switch* in More options, then hold the **left stem** to swap between your desk mic and the
+  AirPods' mic, and hold it again to swap back. Music keeps playing in full quality instead
+  of dropping to phone-call sound, because the AirPods send their mic over a separate
+  high-quality stream, the way they do for an iPhone or Mac. ([#15])
+- **Hold the right stem to change noise control** (models with noise cancellation), cycling
+  through the modes enabled for the AirPods. ([#15])
+- The overlay shows *Desk Mic* or *AirPods Mic* when you swap, and *AirPods Mic Unavailable*
+  if the AirPods mic stops. The window and tray have a *Use AirPods mic* switch too. ([#15])
+
+### Changed
+- Apps follow the swap on their own: the AirPods mic becomes the default while selected,
+  and apps that were set to the desk mic (Discord, for example) are moved across and back.
+- Turning stem control on or off now applies at once instead of on the next reconnect.
+
+### Notes
+- The PC goes back to the desk mic on its own when the AirPods go to another device, a call
+  starts, both AirPods come out of your ears, or the AirPods stop sending mic audio.
+- While the AirPods mic is in use, the AirPods themselves lower the music quality slightly.
+  This happens inside the AirPods (the PC keeps sending full quality), which is why the
+  stream only runs while the AirPods mic is selected.
+- While the switch is on, holding a stem is taken by BazzitePods on every device, so on an
+  iPhone a hold won't change noise control until the switch is turned off.
+
 ## [0.3.2] - 2026-10-27
 
 ### Fixed
@@ -143,5 +170,6 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
 [#16]: https://github.com/DaBarkle/bazzitepods/pull/16
+[#15]: https://github.com/DaBarkle/bazzitepods/pull/15
 [#12]: https://github.com/DaBarkle/bazzitepods/pull/12
 [#11]: https://github.com/DaBarkle/bazzitepods/pull/11

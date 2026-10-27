@@ -12,6 +12,7 @@ fn every_setting_survives_a_save_and_load() {
         overlay_glass: 0.1,
         start_at_login: false,
         stem_control: true,
+        airpods_mic_switch: true,
         extra: Map::new(),
     };
     let back = Settings::from_json(&s.to_json());

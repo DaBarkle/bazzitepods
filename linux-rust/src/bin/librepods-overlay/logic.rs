@@ -77,6 +77,14 @@ pub fn event(prev: Option<&OverlayState>, next: &OverlayState) -> Option<Content
     if charging.any() {
         return Some(Content::Alert(Alert::Charging(charging)));
     }
+    // Asked for with a stem hold, so say what happened before anything else routine.
+    if next.mic_failures > prev.mic_failures {
+        return Some(Content::Alert(Alert::MicUnavailable));
+    }
+    match (prev.mic, next.mic) {
+        (Some(a), Some(b)) if a != b => return Some(Content::Alert(Alert::Mic(b))),
+        _ => {}
+    }
     match (prev.listening_mode, next.listening_mode) {
         (Some(a), Some(b)) if a != b => Some(Content::Alert(Alert::Listening(b))),
         _ => None,

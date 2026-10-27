@@ -82,6 +82,7 @@ pub fn story() -> Vec<(f32, OverlayCommand)> {
     use crate::overlay_protocol::ListeningMode;
     let mut s = buds("AirPods 4", "airpods4_anc");
     s.listening_mode = Some(ListeningMode::NoiseCancellation);
+    s.mic = Some(crate::overlay_protocol::MicChoice::Desk);
     let mut out = vec![];
     let mut at = |t: f32, state: &OverlayState| {
         out.push((
@@ -112,6 +113,9 @@ pub fn story() -> Vec<(f32, OverlayCommand)> {
     s.elsewhere = false;
     s.elsewhere_name = None;
     at(25.4, &s);
+    // The left stem hold swaps to the AirPods mic.
+    s.mic = Some(crate::overlay_protocol::MicChoice::AirPods);
+    at(33.5, &s);
     // Disconnect.
     s.connected = false;
     at(36.0, &s);

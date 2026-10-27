@@ -172,6 +172,36 @@ pub fn draw_monitor_glyph(frame: &mut Frame, c: Point, s: f32, color: Color) {
     frame.stroke(&stand, line_stroke(1.6 * s, color));
 }
 
+/// A microphone, for the mic switch; `crossed` adds a slash (unavailable).
+pub fn draw_mic_glyph(frame: &mut Frame, c: Point, s: f32, color: Color, crossed: bool) {
+    let capsule = Path::rounded_rectangle(
+        Point::new(c.x - 3.6 * s, c.y - 9.0 * s),
+        Size::new(7.2 * s, 12.0 * s),
+        Radius::from(3.6 * s),
+    );
+    frame.fill(&capsule, color);
+    let cradle = Path::new(|b| {
+        b.arc(Arc {
+            center: Point::new(c.x, c.y - 1.5 * s),
+            radius: 6.4 * s,
+            start_angle: 0.0.into(),
+            end_angle: PI.into(),
+        });
+        b.move_to(Point::new(c.x, c.y + 4.9 * s));
+        b.line_to(Point::new(c.x, c.y + 8.5 * s));
+        b.move_to(Point::new(c.x - 3.6 * s, c.y + 8.8 * s));
+        b.line_to(Point::new(c.x + 3.6 * s, c.y + 8.8 * s));
+    });
+    frame.stroke(&cradle, line_stroke(1.6 * s, color));
+    if crossed {
+        let slash = Path::line(
+            Point::new(c.x - 7.5 * s, c.y + 7.5 * s),
+            Point::new(c.x + 7.5 * s, c.y - 9.0 * s),
+        );
+        frame.stroke(&slash, line_stroke(1.8 * s, color));
+    }
+}
+
 /// A horizontal battery filled to `frac`, for low battery alerts.
 pub fn draw_battery_glyph(frame: &mut Frame, c: Point, s: f32, frac: f32, fill: Color, rim: Color) {
     let (w, h) = (20.0 * s, 10.5 * s);

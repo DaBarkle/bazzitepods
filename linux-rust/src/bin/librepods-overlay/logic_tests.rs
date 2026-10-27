@@ -153,6 +153,39 @@ fn route_and_noise_control_changes_alert() {
 }
 
 #[test]
+fn mic_switch_changes_pop_an_alert() {
+    use crate::overlay_protocol::MicChoice;
+    let mut desk = buds(80, 75, 40);
+    desk.mic = Some(MicChoice::Desk);
+    desk.listening_mode = Some(ListeningMode::NoiseCancellation);
+    let mut airpods = desk.clone();
+    airpods.mic = Some(MicChoice::AirPods);
+    assert_eq!(
+        event(Some(&desk), &airpods),
+        alert(Alert::Mic(MicChoice::AirPods))
+    );
+    assert_eq!(
+        event(Some(&airpods), &desk),
+        alert(Alert::Mic(MicChoice::Desk))
+    );
+    // Turning the switch on or off is not a mic change.
+    let mut off = desk.clone();
+    off.mic = None;
+    assert_eq!(event(Some(&off), &desk), None);
+    // A failed attempt says so, even though the mic stays the same.
+    let mut failed = desk.clone();
+    failed.mic_failures = 1;
+    assert_eq!(event(Some(&desk), &failed), alert(Alert::MicUnavailable));
+    // The mic beats a noise control change at the same moment.
+    let mut both = airpods.clone();
+    both.listening_mode = Some(ListeningMode::Transparency);
+    assert_eq!(
+        event(Some(&desk), &both),
+        alert(Alert::Mic(MicChoice::AirPods))
+    );
+}
+
+#[test]
 fn the_most_important_change_wins() {
     let a = buds(21, 75, 40);
     let mut b = buds(20, 75, 40);

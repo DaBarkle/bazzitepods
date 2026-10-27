@@ -15,6 +15,8 @@ use crate::core::models::ModelInfo;
 use crate::devices::enums::{DeviceData, DeviceInformation};
 use crate::hub::{Hub, LinkState};
 use crate::media_controller::MediaController;
+use crate::mic::switch::{MicReport, MicRequest, MicSwitchHandle, SwitchConfig};
+use crate::mic::{AacpMicLink, MicRoute, PulseMicHost};
 use crate::ui::messages::BluetoothUIMessage;
 use crate::utils::{get_app_settings_path, get_devices_path};
 use bluer::Address;
@@ -258,6 +260,14 @@ async fn session(
 
     subscribe_controls(aacp, ctx, &mac_s, name, media, audio, &route, &mut tasks).await;
 
+    let mut stems = StemSettings::read();
+    ctx.hub.update_device(&mac_s, name, |d| {
+        d.mic = stems.mic_switch.then_some(MicRoute::Desk);
+        d.mic_problem = None;
+    });
+    let mic = spawn_mic_switch(aacp, audio, ctx, &mac_s, name);
+    let mut mic_requests = crate::mic::subscribe_requests();
+
     {
         let controller = media.lock().await;
         controller
@@ -271,7 +281,6 @@ async fn session(
         .ui_tx
         .send(BluetoothUIMessage::DeviceConnected(mac_s.clone()));
 
-    let stem_control = setting_bool("stem_control");
     let mut route_watch = tokio::time::interval(ROUTE_WATCH_INTERVAL);
     let mut health = tokio::time::interval(HEALTH_INTERVAL);
     let mut model_known = false;
@@ -285,16 +294,44 @@ async fn session(
                 if !model_known {
                     model_known = refresh_model(aacp, ctx, &mac_s, name).await;
                 }
+                // Settings changed in the window: claim or release the stem presses now.
+                let now = StemSettings::read();
+                if now != stems {
+                    apply_stem_settings(aacp, &now).await;
+                    if !now.mic_switch {
+                        mic.request(MicRequest::Desk("the mic switch was turned off"));
+                    }
+                    ctx.hub.update_device(&mac_s, name, |d| {
+                        d.mic = now.mic_switch.then_some(d.mic.unwrap_or(MicRoute::Desk));
+                        if !now.mic_switch {
+                            d.mic_problem = None;
+                        }
+                    });
+                    stems = now;
+                }
             }
             _ = route_watch.tick() => {
                 watch_route(aacp, ctx, &mac_s, &route, &command_tx).await;
+                keep_mic_allowed(aacp, ctx, &mac_s, &route, &mic).await;
             }
             event = event_rx.recv() => {
                 let Some(event) = event else { break };
-                handle_event(event, mac, name, aacp, ctx, media, audio, &command_tx, &route, stem_control).await;
+                handle_event(event, mac, name, aacp, ctx, media, audio, &command_tx, &route, &stems, &mic).await;
+                keep_mic_allowed(aacp, ctx, &mac_s, &route, &mic).await;
+            }
+            req = mic_requests.recv() => {
+                if matches!(req, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                    continue;
+                }
+                if stems.mic_switch {
+                    let allowed = mic_allowed(aacp, ctx, &mac_s, &route).await;
+                    mic.request(MicRequest::Toggle { allowed });
+                }
             }
         }
     }
+    // Back to the desk mic before the control channel goes (STOP needs it).
+    mic.shutdown().await;
     tasks.abort_all();
     // Wait for aborted tasks so their channels are really closed before cleanup checks them.
     while tasks.join_next().await.is_some() {}
@@ -364,6 +401,21 @@ fn route_regained(audio: Option<&AudioGuardHandle>, from_other_device: bool) {
     } else {
         audio.route_back();
     }
+    resume_after_rebuild(audio);
+}
+
+/// The AirPods mic stream stopped: rebuild the music output once (the right pod goes
+/// silent otherwise) and resume the players that the rebuild pauses.
+pub fn rebuild_output(audio: Option<&AudioGuardHandle>) {
+    let Some(audio) = audio.cloned() else {
+        return;
+    };
+    audio.rebuild();
+    resume_after_rebuild(audio);
+}
+
+/// Players that are playing now get pressed play again once the guard's rebuild is done.
+fn resume_after_rebuild(audio: AudioGuardHandle) {
     tokio::spawn(async move {
         let playing = MediaController::playing_players().await;
         if playing.is_empty() {
@@ -438,16 +490,124 @@ async fn handshake(aacp: &AACPManager) -> bluer::Result<()> {
     {
         warn!("Failed to request proximity keys: {}", e);
     }
-    if setting_bool("stem_control") {
-        // StemConfig bitmask: single=0x01, double=0x02, triple=0x04, long=0x08.
-        if let Err(e) = aacp
-            .send_control_command(ControlCommandIdentifiers::StemConfig, &[0x06])
-            .await
-        {
-            warn!("Failed to enable stem press detection: {}", e);
+    apply_stem_settings(aacp, &StemSettings::read()).await;
+    Ok(())
+}
+
+/// The settings that decide which stem presses this PC handles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StemSettings {
+    /// Double/triple press: next/previous track.
+    track_control: bool,
+    /// Left hold: swap mics; right hold: noise control.
+    mic_switch: bool,
+}
+
+impl StemSettings {
+    fn read() -> Self {
+        Self {
+            track_control: setting_bool("stem_control"),
+            mic_switch: setting_bool("airpods_mic_switch"),
         }
     }
+}
+
+/// Claims the presses the settings ask for, and gives the rest back to the AirPods. The
+/// AirPods keep the claim across reconnects, so it is always sent, 0 included.
+async fn apply_stem_settings(aacp: &AACPManager, s: &StemSettings) {
+    let mask = crate::mic::gestures::stem_claims(s.track_control, s.mic_switch);
+    if let Err(e) = aacp
+        .send_control_command(ControlCommandIdentifiers::StemConfig, &[mask])
+        .await
+    {
+        warn!("Failed to set stem press handling: {}", e);
+    }
+}
+
+fn spawn_mic_switch(
+    aacp: &AACPManager,
+    audio: Option<&AudioGuardHandle>,
+    ctx: &DeviceContext,
+    mac_s: &str,
+    name: &str,
+) -> MicSwitchHandle {
+    let (hub, mac, name) = (ctx.hub.clone(), mac_s.to_string(), name.to_string());
+    let report = move |r: MicReport| {
+        hub.update_device(&mac, &name, |d| {
+            if d.mic.is_some() || r.route == MicRoute::AirPods {
+                d.mic = Some(r.route);
+            }
+            if r.problem.is_some() {
+                d.mic_failures = d.mic_failures.wrapping_add(1);
+            }
+            d.mic_problem = r.problem.clone();
+        });
+    };
+    crate::mic::switch::spawn(
+        PulseMicHost,
+        AacpMicLink {
+            aacp: aacp.clone(),
+            audio: audio.cloned(),
+        },
+        SwitchConfig::default(),
+        Arc::new(report),
+    )
+}
+
+/// Whether the AirPods mic may be used right now: this PC has the AirPods, at least one
+/// is worn, and no call is on them.
+async fn mic_allowed(
+    aacp: &AACPManager,
+    ctx: &DeviceContext,
+    mac_s: &str,
+    route: &RouteWatch,
+) -> Result<(), &'static str> {
+    if owns_audio(&ctx.hub, mac_s) == Some(false) {
+        return Err("The AirPods are in use on another device");
+    }
+    if route.lock().call {
+        return Err("A call is on the AirPods");
+    }
+    let ears = aacp.state.lock().await.ear_detection_status.clone();
+    if !ears.is_empty() && !ears.contains(&EarDetectionStatus::InEar) {
+        return Err("The AirPods aren't in your ears");
+    }
     Ok(())
+}
+
+/// Back to the desk mic as soon as the AirPods mic stops being usable.
+async fn keep_mic_allowed(
+    aacp: &AACPManager,
+    ctx: &DeviceContext,
+    mac_s: &str,
+    route: &RouteWatch,
+    mic: &MicSwitchHandle,
+) {
+    let on_airpods = ctx
+        .hub
+        .snapshot()
+        .devices
+        .get(mac_s)
+        .is_some_and(|d| d.mic == Some(MicRoute::AirPods));
+    if on_airpods && let Err(why) = mic_allowed(aacp, ctx, mac_s, route).await {
+        mic.request(MicRequest::Desk(why));
+    }
+}
+
+/// Right stem hold with the mic switch on: the AirPods no longer change noise control
+/// themselves, so step to the next of the modes picked for press and hold.
+async fn cycle_listening_mode(aacp: &AACPManager, command_tx: &CommandSender) {
+    let current = aacp
+        .control_value(ControlCommandIdentifiers::ListeningMode)
+        .await
+        .and_then(|v| v.first().copied());
+    let enabled = aacp
+        .control_value(ControlCommandIdentifiers::ListeningModeConfigs)
+        .await
+        .and_then(|v| v.first().copied());
+    let next = crate::mic::gestures::next_listening_mode(current, enabled);
+    info!("Right stem hold: listening mode {current:?} -> {next:#04x}");
+    let _ = command_tx.send((ControlCommandIdentifiers::ListeningMode, vec![next]));
 }
 
 /// Mirror control-command state (listening mode, etc.) into the hub, and react to ownership changes.
@@ -534,7 +694,8 @@ async fn handle_event(
     audio: Option<&AudioGuardHandle>,
     command_tx: &CommandSender,
     route: &RouteWatch,
-    stem_control: bool,
+    stems: &StemSettings,
+    mic: &MicSwitchHandle,
 ) {
     let mac_s = mac.to_string();
     match &event {
@@ -723,15 +884,35 @@ async fn handle_event(
             let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x00]));
             media.lock().await.pause_all_media().await;
         }
-        AACPEvent::StemPress(press, _bud) => {
-            use crate::bluetooth::aacp::StemPressType;
-            if stem_control {
-                let controller = media.lock().await;
-                match press {
-                    StemPressType::DoublePress => controller.next_track().await,
-                    StemPressType::TriplePress => controller.previous_track().await,
-                    _ => {}
+        AACPEvent::StemPress(press, bud) => {
+            use crate::bluetooth::aacp::{StemPressBudType, StemPressType};
+            match press {
+                StemPressType::DoublePress | StemPressType::TriplePress if stems.track_control => {
+                    let controller = media.lock().await;
+                    if *press == StemPressType::DoublePress {
+                        controller.next_track().await;
+                    } else {
+                        controller.previous_track().await;
+                    }
                 }
+                StemPressType::LongPress if stems.mic_switch => match bud {
+                    StemPressBudType::Left => {
+                        let allowed = mic_allowed(aacp, ctx, &mac_s, route).await;
+                        mic.request(MicRequest::Toggle { allowed });
+                    }
+                    StemPressBudType::Right => {
+                        let has_anc = ctx
+                            .hub
+                            .snapshot()
+                            .devices
+                            .get(&mac_s)
+                            .is_none_or(|d| d.model.info().has_anc);
+                        if has_anc {
+                            cycle_listening_mode(aacp, command_tx).await;
+                        }
+                    }
+                },
+                _ => {}
             }
         }
         _ => {}
