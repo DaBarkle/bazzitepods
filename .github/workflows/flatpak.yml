@@ -44,16 +44,6 @@ jobs:
             appstreamcli validate --no-net linux-rust/flatpak/io.github.dabarkle.BazzitePods.metainfo.xml
           fi
 
-      # Link-time optimisation makes the binaries about 20% smaller but adds over a minute
-      # to every build. Pull requests only need to prove the Flatpak builds and give a
-      # bundle to try, so they skip it; main and release tags keep the full release build.
-      - name: Skip link-time optimisation on pull requests
-        if: github.event_name == 'pull_request'
-        run: |
-          manifest=linux-rust/flatpak/io.github.dabarkle.BazzitePods.yml
-          sed -i "s/^    CARGO_NET_OFFLINE: 'true'$/&\n    CARGO_PROFILE_RELEASE_LTO: 'false'/" "$manifest"
-          grep -q "CARGO_PROFILE_RELEASE_LTO: 'false'" "$manifest"
-
       - name: Build
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
