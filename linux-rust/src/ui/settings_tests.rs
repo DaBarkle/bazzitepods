@@ -56,7 +56,7 @@ fn every_overlay_position_and_mode_has_a_stable_name() {
         assert_eq!(Settings::from_json(&json).overlay_size, size);
     }
     let s = Settings::from_json(r#"{"overlay_style":"neon","overlay_size":9}"#);
-    assert_eq!(s.overlay_style, OverlayStyle::Classic);
+    assert_eq!(s.overlay_style, OverlayStyle::Purist);
     assert_eq!(s.overlay_size, OverlaySize::Medium);
     for (a, name) in [
         (Appearance::System, "system"),

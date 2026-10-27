@@ -260,13 +260,14 @@ fn popup_mode_opens_folds_and_unmaps_once() {
     assert_eq!(c.target(t0), Some(Content::Expanded));
     assert_eq!(c.tick(t0), SurfaceAction::Map);
     assert!(c.is_animating(t0));
-    let (acts, t1) = run(&mut c, t0, 1500);
+    // Long enough for the connect glow (under 2 s) to finish too.
+    let (acts, t1) = run(&mut c, t0, 2100);
     assert!(acts.is_empty());
     assert_eq!(c.motion.alpha.value, 1.0);
     assert!(!c.is_animating(t1), "settled: no more frames");
     assert!(c.next_deadline().is_some());
     // After auto_hide_secs (4 s) it folds away and unmaps exactly once.
-    let (acts, t2) = run(&mut c, t1, 3500);
+    let (acts, t2) = run(&mut c, t1, 2900);
     assert_eq!(acts, vec![SurfaceAction::Unmap]);
     assert!(!c.is_mapped());
     assert!(!c.is_animating(t2));
@@ -387,7 +388,7 @@ fn full_mode_keeps_the_card_and_bumps_for_news() {
     let mut s = buds(80, 75, 40);
     state(&mut c, s.clone(), t0);
     c.tick(t0);
-    let (_, t1) = run(&mut c, t0, 1500);
+    let (_, t1) = run(&mut c, t0, 2100);
     assert!(!c.is_animating(t1));
     s.case = comp(40, true, true);
     state(&mut c, s, t1);
@@ -681,6 +682,7 @@ fn classic_never_spends_frames_on_light() {
     let t0 = Instant::now();
     let mut c = Controller::new(OverlayConfig {
         mode: OverlayMode::Compact,
+        style: OverlayStyle::Classic,
         ..OverlayConfig::default()
     });
     state(&mut c, buds(80, 75, 40), t0);

@@ -54,10 +54,10 @@ pub enum OverlayMode {
 #[serde(rename_all = "snake_case")]
 pub enum OverlayStyle {
     /// Smoked glass with a sheen and soft shadow (the Glass slider applies).
-    #[default]
     Classic,
     /// The iPhone's Dynamic Island as it is: flat opaque black, a hairline keyline, and
-    /// light that runs around the border when something happens.
+    /// light that runs around the border when something happens. The default.
+    #[default]
     Purist,
 }
 
@@ -121,7 +121,7 @@ impl Default for OverlayConfig {
             mode: OverlayMode::Auto,
             opacity: 1.0,
             glass: 0.7,
-            style: OverlayStyle::Classic,
+            style: OverlayStyle::Purist,
             size: OverlaySize::Medium,
         }
     }

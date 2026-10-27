@@ -7,8 +7,7 @@ All notable changes to BazzitePods are documented here. The format follows
 ## [0.5.0] - 2026-10-28
 
 ### Added
-- **Purist island style.** Pick *Purist* under *Style* in the Island tab for the iPhone's Dynamic Island
-  as it really is: solid flat black with a hairline edge, tinted to match the alert. When
+- **Purist island style, now the default.** The iPhone's Dynamic Island as it really is: solid flat black with a hairline edge, tinted to match the alert. When
   something happens, light runs round the border in that event's colour: green for
   charging, a slow amber or red breath for low battery, blue when the audio moves to or
   from another device, orange when you swap to the AirPods mic, and a flowing spectrum when
@@ -25,8 +24,9 @@ All notable changes to BazzitePods are documented here. The format follows
   and a preview screen for placing the overlay. ([#19])
 
 ### Notes
-- *Classic* stays the default and looks exactly as before; the Glass slider only applies to
-  it. *Opacity over games* applies to both styles.
+- *Purist* is the new default. If you had never changed the overlay's look, it switches to
+  Purist; pick *Classic* in the Island tab to get the glass island back exactly as before.
+  The Glass slider only applies to Classic; *Opacity over games* applies to both.
 - The purist look is drawn by a small GPU shader on the overlay's own surface. It runs only
   while the island moves, so a still island still costs nothing, and it never touches games.
 
