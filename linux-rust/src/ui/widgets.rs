@@ -30,7 +30,8 @@ impl<Message> canvas::Program<Message> for Ring {
         let t = Tokens::of(theme);
         let mut frame = Frame::new(renderer, bounds.size());
         let center = frame.center();
-        let radius = bounds.width.min(bounds.height) / 2.0 - self.thickness / 2.0 - 1.0;
+        // Leave room for the glow around the arc.
+        let radius = bounds.width.min(bounds.height) / 2.0 - self.thickness / 2.0 - 5.0;
 
         frame.stroke(
             &Path::circle(center, radius),
@@ -51,12 +52,29 @@ impl<Message> canvas::Program<Message> for Ring {
                         end_angle: Radians(start + TAU * f.max(0.004)),
                     })
                 });
+                let muted = self.tone == crate::ui::format::Tone::Muted;
                 let color = t.tone(self.tone, self.charging);
-                let color = if self.tone == crate::ui::format::Tone::Muted {
+                let color = if muted {
                     Color { a: 0.55, ..color }
                 } else {
                     color
                 };
+                if !muted {
+                    // Soft edge light around the arc, as on the island.
+                    let glow = if t.dark { 1.0 } else { 0.45 };
+                    for (extra, a) in [(10.0, 0.06), (6.0, 0.10), (3.0, 0.16)] {
+                        frame.stroke(
+                            &arc,
+                            Stroke::default()
+                                .with_color(Color {
+                                    a: a * glow,
+                                    ..color
+                                })
+                                .with_width(self.thickness + extra)
+                                .with_line_cap(LineCap::Round),
+                        );
+                    }
+                }
                 frame.stroke(
                     &arc,
                     Stroke::default()
@@ -75,7 +93,6 @@ impl<Message> canvas::Program<Message> for Ring {
 pub enum Glyph {
     Mode(ListeningMode),
     Bolt,
-    Chevron { up: bool },
     Bluetooth,
     Earbuds,
 }
@@ -85,8 +102,9 @@ pub enum Glyph {
 pub enum Ink {
     Text,
     Dim,
+    Faint,
     Green,
-    OnAccent,
+    Accent,
 }
 
 impl Ink {
@@ -94,8 +112,9 @@ impl Ink {
         match self {
             Ink::Text => t.text,
             Ink::Dim => t.text_dim,
+            Ink::Faint => t.text_faint,
             Ink::Green => t.green,
-            Ink::OnAccent => t.on_accent,
+            Ink::Accent => t.accent,
         }
     }
 }
@@ -190,16 +209,6 @@ impl<Message> canvas::Program<Message> for Icon {
             Glyph::Bolt => {
                 frame.fill(&bolt_path(c.x, c.y, s * 0.95), color);
             }
-            Glyph::Chevron { up } => {
-                let d = s * 0.22;
-                let dy = if up { -d * 0.5 } else { d * 0.5 };
-                let path = Path::new(|b| {
-                    b.move_to(Point::new(c.x - d, c.y - dy));
-                    b.line_to(Point::new(c.x, c.y + dy));
-                    b.line_to(Point::new(c.x + d, c.y - dy));
-                });
-                frame.stroke(&path, stroke.with_line_join(canvas::LineJoin::Round));
-            }
             Glyph::Bluetooth => {
                 let h = s * 0.34;
                 let x = c.x - s * 0.02;
@@ -269,12 +278,14 @@ pub fn icon_alpha<'a, M: 'a>(glyph: Glyph, size: f32, ink: Ink, alpha: f32) -> E
 }
 
 /// Ring with the percentage in the middle, label (and optional caption) underneath.
-pub fn gauge_view<'a, M: 'a>(g: &Gauge, size: f32) -> Element<'a, M> {
+///
+/// `fraction` is the ring's animated fill (None: draw the level as is).
+pub fn gauge_view<'a, M: 'a>(g: &Gauge, size: f32, fraction: Option<f32>) -> Element<'a, M> {
     let tone = g.tone;
     let charging = g.charging;
     let dimmed = g.dimmed;
     let ring = Canvas::new(Ring {
-        fraction: g.level.map(|l| l as f32 / 100.0),
+        fraction: g.level.map(|l| fraction.unwrap_or(l as f32 / 100.0)),
         tone,
         charging,
         thickness: (size / 12.5).round().max(4.0),
@@ -283,15 +294,38 @@ pub fn gauge_view<'a, M: 'a>(g: &Gauge, size: f32) -> Element<'a, M> {
     .height(Length::Fixed(size));
 
     let pct_size = (size * 0.22).round();
-    let pct = text(g.text.clone())
-        .size(pct_size)
-        .font(style::INTER_SEMIBOLD)
-        .style(move |theme: &Theme| {
-            let t = Tokens::of(theme);
-            text::Style {
-                color: Some(if dimmed { t.text_faint } else { t.text }),
-            }
-        });
+    let number = g.text.strip_suffix('%').unwrap_or(&g.text).to_string();
+    let has_sign = number.len() != g.text.len();
+    let mut pct = iced::widget::row![
+        text(number)
+            .size(pct_size)
+            .font(style::INTER_SEMIBOLD)
+            .style(move |theme: &Theme| {
+                let t = Tokens::of(theme);
+                text::Style {
+                    color: Some(if dimmed { t.text_dim } else { t.text }),
+                }
+            })
+    ]
+    .align_y(iced::Bottom);
+    if has_sign {
+        // A smaller, quieter % keeps the number the hero.
+        pct = pct.push(
+            container(
+                text("%")
+                    .size((pct_size * 0.55).round())
+                    .font(style::INTER_MEDIUM)
+                    .style(|theme: &Theme| text::Style {
+                        color: Some(Tokens::of(theme).text_dim),
+                    }),
+            )
+            .padding(iced::Padding {
+                bottom: (pct_size * 0.12).round(),
+                left: 1.0,
+                ..iced::Padding::ZERO
+            }),
+        );
+    }
 
     let label = text(g.label)
         .size(13)

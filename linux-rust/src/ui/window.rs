@@ -1,4 +1,6 @@
-//! Main window: one calm screen driven entirely by the hub snapshot.
+//! Main window: three calm tabs (AirPods, Island, Settings) driven entirely by the hub
+//! snapshot, in the island's design language. Selections and battery rings move on springs
+//! ([`crate::ui::motion`]); frames are only requested while something is moving.
 //!
 //! Rules: `view` and `update` never block, never touch the disk, never panic. Device commands go
 //! through `active_commands` from an async task; settings are written by a background task.
@@ -9,8 +11,9 @@ use crate::bluetooth::managers::DeviceManagers;
 use crate::devices::airpods::CommandSender;
 use crate::devices::enums::{DeviceData, DeviceInformation};
 use crate::hub::{AdapterState, AppSnapshot, DeviceSnapshot, Hub};
-use crate::ui::format::{self, DeviceSetting, Gauge, ListeningMode, PillTone};
+use crate::ui::format::{self, DeviceSetting, ListeningMode, StatusTone};
 use crate::ui::messages::BluetoothUIMessage;
+use crate::ui::motion::{self, Motion};
 use crate::ui::settings::{
     Appearance, OVERLAY_POSITIONS, OverlayMode, OverlayPosition, Settings, SettingsStore,
 };
@@ -18,9 +21,13 @@ use crate::ui::style::{self, Tokens};
 use crate::ui::widgets::{self, Glyph, Ink};
 use futures::Stream;
 use iced::widget::{
-    Space, button, column, container, pick_list, row, scrollable, slider, text, text_input, toggler,
+    Space, button, column, container, pick_list, row, scrollable, slider, stack, text, text_input,
+    toggler,
 };
-use iced::{Center, Element, Fill, Length, Padding, Size, Subscription, Task, Theme, window};
+use iced::{
+    Center, Color, Element, Fill, FillPortion, Length, Padding, Size, Subscription, Task, Theme,
+    window,
+};
 use log::{debug, info, warn};
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
@@ -29,7 +36,7 @@ use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::{Mutex, RwLock};
 
-const WINDOW_SIZE: Size = Size::new(420.0, 600.0);
+const WINDOW_SIZE: Size = Size::new(420.0, 640.0);
 /// How long an optimistic control change is shown before we fall back to the device's state.
 const PENDING_FOR: Duration = Duration::from_secs(4);
 /// The supervisor needs a moment to find the adapter; don't flash "unavailable" at startup.
@@ -163,7 +170,9 @@ pub enum Message {
     /// The "Use AirPods mic" switch: it always toggles, whatever the switch shows.
     ToggleAirPodsMic,
     SetAppearance(Appearance),
-    ToggleMore,
+    SelectTab(Tab),
+    /// A display frame while something is animating.
+    Frame(Instant),
     RenameInput(String),
     RenameSubmit,
     RenameDone(Result<(), String>),
@@ -176,6 +185,49 @@ pub enum Message {
     TakeAudio,
     SetNothingMode(String, NothingMode),
     Ignore,
+}
+
+/// The window's three pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Tab {
+    AirPods,
+    Island,
+    Settings,
+}
+
+impl Tab {
+    const ALL: [Tab; 3] = [Tab::AirPods, Tab::Island, Tab::Settings];
+
+    fn label(self) -> &'static str {
+        match self {
+            Tab::AirPods => "AirPods",
+            Tab::Island => "Island",
+            Tab::Settings => "Settings",
+        }
+    }
+
+    fn from_name(name: &str) -> Option<Tab> {
+        Tab::ALL
+            .into_iter()
+            .find(|t| t.label().eq_ignore_ascii_case(name))
+    }
+}
+
+/// What a spring moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum Anim {
+    /// Tab thumb position (tab index).
+    Tab,
+    /// Listening mode highlight position (index among the offered modes).
+    Mode,
+    Appearance,
+    OverlayMode,
+    /// A segmented AirPods setting, by AACP control id.
+    Control(u8),
+    /// Battery ring fill, by gauge index.
+    Ring(usize),
+    /// Status island edge light.
+    Glow,
 }
 
 /// Nothing Ear noise control modes (legacy device support behind "More").
@@ -242,7 +294,12 @@ pub struct App {
     started: Instant,
     now: SystemTime,
 
-    more_open: bool,
+    tab: Tab,
+    motion: Motion<Anim>,
+    /// Animation clock: now, as of the last update or frame.
+    clock: Instant,
+    /// Last status island text and tone, to pulse its glow when it changes.
+    last_status: Option<(String, StatusTone)>,
     pending_mode: Option<(u8, Instant)>,
     pending_ca: Option<(bool, Instant)>,
     /// "Use on this PC" was pressed; shows "Switching…" until the AirPods answer.
@@ -291,8 +348,15 @@ impl App {
             light_theme: style::theme(false),
             started: Instant::now(),
             now: SystemTime::now(),
-            // Demo/screenshots only: start with "More options" expanded.
-            more_open: demo && std::env::var_os("LIBREPODS_UI_EXPAND").is_some(),
+            // Demo/screenshots only: open on another tab.
+            tab: std::env::var("LIBREPODS_UI_TAB")
+                .ok()
+                .filter(|_| demo)
+                .and_then(|t| Tab::from_name(&t))
+                .unwrap_or(Tab::AirPods),
+            motion: Motion::default(),
+            clock: Instant::now(),
+            last_status: None,
             pending_mode: None,
             pending_ca: None,
             taking_audio: None,
@@ -334,7 +398,7 @@ impl App {
             .unwrap_or(WINDOW_SIZE.height);
         let settings = window::Settings {
             size: Size::new(WINDOW_SIZE.width, height),
-            min_size: Some(Size::new(380.0, 480.0)),
+            min_size: Some(Size::new(380.0, 520.0)),
             max_size: Some(Size::new(560.0, 1000.0)),
             icon: self.window_icon.clone(),
             platform_specific: window::settings::PlatformSpecific {
@@ -442,6 +506,93 @@ impl App {
     }
 
     fn update(&mut self, message: Message) -> Task<Message> {
+        self.clock = match message {
+            Message::Frame(at) => at,
+            _ => Instant::now(),
+        };
+        let task = self.handle(message);
+        self.sync_motion();
+        task
+    }
+
+    /// Point every spring at what the state says now; pulse the status glow on a change.
+    fn sync_motion(&mut self) {
+        let now = self.clock;
+        let mode = self.snap.primary().and_then(|d| self.mode_index(d));
+        let m = &mut self.motion;
+        let tab = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
+        m.target(Anim::Tab, tab as f32, None, motion::SNAPPY, now);
+        m.target(
+            Anim::Appearance,
+            [Appearance::System, Appearance::Light, Appearance::Dark]
+                .iter()
+                .position(|a| *a == self.settings.appearance)
+                .unwrap_or(0) as f32,
+            None,
+            motion::SNAPPY,
+            now,
+        );
+        m.target(
+            Anim::OverlayMode,
+            OVERLAY_MODES
+                .iter()
+                .position(|(_, o)| *o == self.settings.overlay_mode)
+                .unwrap_or(0) as f32,
+            None,
+            motion::SNAPPY,
+            now,
+        );
+        let Some(d) = self.snap.primary() else {
+            self.last_status = None;
+            return;
+        };
+        if let Some(i) = mode {
+            m.target(Anim::Mode, i as f32, None, motion::SNAPPY, now);
+        }
+        for setting in format::device_settings(d) {
+            if let DeviceSetting::Choice {
+                id,
+                options,
+                selected,
+                ..
+            } = setting
+                && let Some(i) = options.iter().position(|(_, v)| *v == selected)
+            {
+                m.target(Anim::Control(id), i as f32, None, motion::SNAPPY, now);
+            }
+        }
+        // Rings sweep in from empty the first time they are seen (window opened).
+        for (i, g) in format::gauges(d, self.now).iter().enumerate() {
+            let f = g.level.map_or(0.0, |l| l.min(100) as f32 / 100.0);
+            m.target(Anim::Ring(i), f, Some(0.0), motion::SMOOTH, now);
+        }
+        let status = format::status(d, self.now);
+        let lit = if status.tone == StatusTone::Idle {
+            0.0
+        } else {
+            1.0
+        };
+        m.target(Anim::Glow, lit, Some(0.0), motion::SMOOTH, now);
+        let key = (status.headline, status.tone);
+        if self.last_status.as_ref().is_some_and(|k| *k != key) && lit > 0.0 {
+            m.kick(Anim::Glow, 2.4, now);
+        }
+        self.last_status = Some(key);
+    }
+
+    /// Position of the current (or just requested) listening mode among those offered.
+    fn mode_index(&self, d: &DeviceSnapshot) -> Option<usize> {
+        let current = self
+            .pending_mode
+            .map(|(m, _)| m)
+            .or(d.listening_mode)
+            .and_then(ListeningMode::from_byte)?;
+        format::listening_modes(d)
+            .iter()
+            .position(|m| *m == current)
+    }
+
+    fn handle(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Hub(snap) => {
                 self.snap = snap;
@@ -452,8 +603,12 @@ impl App {
             Message::Legacy(msg) => self.on_legacy(msg),
             Message::WindowOpened(id) => {
                 self.window = Some(id);
+                // Let the rings and glow play in again.
+                self.motion.reset();
+                self.last_status = None;
                 Task::none()
             }
+            Message::Frame(_) => Task::none(),
             Message::WindowClosed(id) => {
                 // Closing the window keeps BazzitePods running in the tray.
                 if self.window == Some(id) {
@@ -536,10 +691,13 @@ impl App {
                 }
                 Task::none()
             }
-            Message::ToggleMore => {
-                self.more_open = !self.more_open;
+            Message::SelectTab(tab) => {
+                if tab == self.tab {
+                    return Task::none();
+                }
+                self.tab = tab;
                 self.apple_copied = false;
-                if self.more_open && !self.demo {
+                if tab == Tab::Settings && !self.demo {
                     load_apple_mode()
                 } else {
                     Task::none()
@@ -684,6 +842,11 @@ impl App {
             window::close_events().map(Message::WindowClosed),
             iced::system::theme_changes().map(Message::SystemTheme),
             iced::time::every(Duration::from_secs(20)).map(|_| Message::Tick),
+            if self.window.is_some() && self.motion.is_animating(self.clock) {
+                window::frames().map(Message::Frame)
+            } else {
+                Subscription::none()
+            },
         ])
     }
 
@@ -703,53 +866,19 @@ impl App {
     // ---------------------------------------------------------------- view
 
     fn view(&self, _id: window::Id) -> Element<'_, Message> {
-        let mut page = column![].spacing(14);
-
-        match (self.snap.adapter, self.primary()) {
-            (AdapterState::Off, _) => {
-                page = page.push(empty_state(
-                    Glyph::Bluetooth,
-                    "Bluetooth is off",
-                    "Turn on Bluetooth from the system tray or System Settings › Bluetooth. \
-                     BazzitePods reconnects on its own.",
-                ));
-            }
-            (AdapterState::Missing, None) => {
-                page = page.push(if self.started.elapsed() < ADAPTER_GRACE {
-                    empty_state(Glyph::Bluetooth, "Looking for Bluetooth…", "One moment.")
-                } else {
-                    empty_state(
-                        Glyph::Bluetooth,
-                        "Bluetooth unavailable",
-                        "No Bluetooth adapter was found. Check that Bluetooth is enabled \
-                         in System Settings and the adapter is plugged in.",
-                    )
-                });
-            }
-            (_, None) => {
-                page = page.push(empty_state(
-                    Glyph::Earbuds,
-                    "No AirPods yet",
-                    "Pair your AirPods in System Settings › Bluetooth. \
-                     BazzitePods finds them automatically — nothing to set up here.",
-                ));
-            }
-            (_, Some(d)) => {
-                page = page.push(self.hero(d));
-                if let Some(controls) = self.controls(d) {
-                    page = page.push(controls);
-                }
-            }
-        }
-
-        page = page.push(self.settings_card());
-        page = page.push(self.more_toggle());
-        if self.more_open {
-            page = page.push(self.more_card());
-        }
-
+        let nav = container(self.tabs()).center_x(Fill).padding(Padding {
+            top: 14.0,
+            bottom: 6.0,
+            left: 20.0,
+            right: 20.0,
+        });
+        let page = match self.tab {
+            Tab::AirPods => self.airpods_tab(),
+            Tab::Island => self.island_tab(),
+            Tab::Settings => self.settings_tab(),
+        };
         let body = scrollable(container(page).padding(Padding {
-            top: 20.0,
+            top: 12.0,
             bottom: 24.0,
             left: 20.0,
             right: 20.0,
@@ -763,22 +892,77 @@ impl App {
         .style(style::scroll)
         .height(Fill);
 
-        container(body)
+        container(column![nav, body])
             .width(Fill)
             .height(Fill)
             .style(style::page)
             .into()
     }
 
+    fn anim(&self, key: Anim, fallback: f32) -> f32 {
+        self.motion.value(key, fallback, self.clock)
+    }
+
+    fn tabs(&self) -> Element<'_, Message> {
+        let options: Vec<(&str, Tab)> = Tab::ALL.iter().map(|t| (t.label(), *t)).collect();
+        let at = Tab::ALL.iter().position(|t| *t == self.tab).unwrap_or(0);
+        container(slide_control(
+            &options,
+            self.tab,
+            Some(self.anim(Anim::Tab, at as f32)),
+            true,
+            Message::SelectTab,
+            Shape::TABS,
+        ))
+        .width(Length::Fixed(276.0))
+        .into()
+    }
+
+    // ------------------------------------------------------------- AirPods
+
+    fn airpods_tab(&self) -> Element<'_, Message> {
+        match (self.snap.adapter, self.primary()) {
+            (AdapterState::Off, _) => empty_state(
+                Glyph::Bluetooth,
+                "Bluetooth is off",
+                "Turn on Bluetooth from the system tray or System Settings › Bluetooth. \
+                 BazzitePods reconnects on its own.",
+            ),
+            (AdapterState::Missing, None) if self.started.elapsed() < ADAPTER_GRACE => {
+                empty_state(Glyph::Bluetooth, "Looking for Bluetooth…", "One moment.")
+            }
+            (AdapterState::Missing, None) => empty_state(
+                Glyph::Bluetooth,
+                "Bluetooth unavailable",
+                "No Bluetooth adapter was found. Check that Bluetooth is enabled \
+                 in System Settings and the adapter is plugged in.",
+            ),
+            (_, None) => empty_state(
+                Glyph::Earbuds,
+                "No AirPods yet",
+                "Pair your AirPods in System Settings › Bluetooth. \
+                 BazzitePods finds them automatically — nothing to set up here.",
+            ),
+            (_, Some(d)) => {
+                let mut page = column![self.hero(d)].spacing(0);
+                if d.in_use_elsewhere() {
+                    page = page.push(gap(18.0)).push(self.elsewhere_banner(d));
+                }
+                if let Some(controls) = self.controls(d) {
+                    page = page.push(controls);
+                } else if !d.is_connected() {
+                    page = page.push(gap(22.0)).push(away_hint(d));
+                }
+                page.into()
+            }
+        }
+    }
+
     fn hero<'a>(&self, d: &'a DeviceSnapshot) -> Element<'a, Message> {
-        let (label, tone) = format::connection_label(d);
         let mut subtitle = format::model_name(d.model).to_string();
         if let (true, Some(audio)) = (d.is_connected(), d.audio.as_deref()) {
             subtitle.push_str(" · ");
             subtitle.push_str(audio);
-        } else if let (false, Some(seen)) = (d.is_connected(), d.last_seen) {
-            subtitle.push_str(" · ");
-            subtitle.push_str(&format::last_seen_text(seen, self.now));
         }
         if d.is_connected() && !d.in_use_elsewhere() && d.other_devices > 0 {
             subtitle.push_str(&match d.other_devices {
@@ -787,51 +971,71 @@ impl App {
             });
         }
 
-        let header = row![
-            column![
-                text(d.name.clone())
-                    .size(21)
-                    .font(style::INTER_SEMIBOLD)
-                    .wrapping(text::Wrapping::WordOrGlyph),
-                text(subtitle).size(13).style(dim_text),
-            ]
-            .spacing(3)
-            .width(Fill),
-            status_pill(label, tone),
-        ]
-        .align_y(Center)
-        .spacing(12);
-
         let gauges = format::gauges(d, self.now);
-        let size = if gauges.len() == 1 { 116.0 } else { 86.0 };
-        let mut ring_row = row![].spacing(8).align_y(iced::Alignment::Start);
-        for g in &gauges {
-            ring_row = ring_row.push(gauge_cell(g, size));
+        let size = if gauges.len() == 1 { 132.0 } else { 104.0 };
+        let mut rings = row![].spacing(4).align_y(iced::Alignment::Start);
+        for (i, g) in gauges.iter().enumerate() {
+            let fill = g.level.map(|l| l.min(100) as f32 / 100.0);
+            let f = fill.map(|f| self.anim(Anim::Ring(i), f).max(0.0));
+            rings =
+                rings.push(container(widgets::gauge_view::<Message>(g, size, f)).center_x(Fill));
         }
 
-        let mut body = column![header].spacing(22);
-        if d.in_use_elsewhere() {
-            body = body.push(self.elsewhere_banner(d.elsewhere_name.as_deref()));
+        column![
+            self.status_island(d),
+            gap(18.0),
+            text(d.name.clone())
+                .size(26)
+                .font(style::INTER_SEMIBOLD)
+                .align_x(Center)
+                .wrapping(text::Wrapping::WordOrGlyph),
+            gap(4.0),
+            text(subtitle).size(13).style(dim_text).align_x(Center),
+            gap(20.0),
+            rings,
+        ]
+        .align_x(Center)
+        .width(Fill)
+        .into()
+    }
+
+    /// The window's own little Dynamic Island: what matters right now, with an edge light
+    /// that pulses when it changes.
+    fn status_island<'a>(&self, d: &DeviceSnapshot) -> Element<'a, Message> {
+        let s = format::status(d, self.now);
+        let tone = s.tone;
+        let mut line = row![
+            container(Space::new())
+                .width(7)
+                .height(7)
+                .style(style::status_dot(tone)),
+            text(s.headline).size(13).font(style::INTER_SEMIBOLD),
+        ]
+        .spacing(8)
+        .align_y(Center);
+        if let Some(detail) = s.detail {
+            line = line.push(
+                text(format!("· {detail}"))
+                    .size(13)
+                    .font(style::INTER_MEDIUM)
+                    .style(style::status_detail(tone)),
+            );
         }
-        container(body.push(ring_row))
+        let glow = self.anim(Anim::Glow, 1.0);
+        container(line)
             .padding(Padding {
-                top: 20.0,
-                bottom: 20.0,
-                left: 20.0,
-                right: 20.0,
+                top: 9.0,
+                bottom: 9.0,
+                left: 14.0,
+                right: 16.0,
             })
-            .width(Fill)
-            .style(style::hero)
+            .style(style::status_island(tone, glow))
             .into()
     }
 
     /// Shown while another Apple device has the audio: the AirPods are still connected
     /// here, and one press brings the sound back to this PC.
-    fn elsewhere_banner<'a>(&self, device: Option<&str>) -> Element<'a, Message> {
-        let headline = match device {
-            Some(name) => format!("Playing on {name}"),
-            None => "Playing on another device".to_string(),
-        };
+    fn elsewhere_banner<'a>(&self, d: &DeviceSnapshot) -> Element<'a, Message> {
         let switching = self
             .taking_audio
             .is_some_and(|t| t.elapsed() < Duration::from_secs(6));
@@ -840,22 +1044,23 @@ impl App {
         } else {
             "Use on this PC"
         };
-        let mut take = button(text(label).size(12).font(style::INTER_MEDIUM))
+        let device = d.elsewhere_name.as_deref().unwrap_or("another device");
+        let take = button(text(label).size(13).font(style::INTER_SEMIBOLD))
             .padding(Padding {
-                top: 6.0,
-                bottom: 6.0,
-                left: 12.0,
-                right: 12.0,
+                top: 7.0,
+                bottom: 7.0,
+                left: 14.0,
+                right: 14.0,
             })
-            .style(style::segment(true));
-        if !switching {
-            take = take.on_press(Message::TakeAudio);
-        }
-        container(
+            .style(style::primary)
+            .on_press_maybe((!switching).then_some(Message::TakeAudio));
+        group(vec![
             row![
                 column![
-                    text(headline).size(13).font(style::INTER_SEMIBOLD),
-                    text("Still connected here. Starting playback also switches back.")
+                    text(format!("Sound is on {device}"))
+                        .size(14)
+                        .font(style::INTER_MEDIUM),
+                    text("Still connected here. Playing something also switches back.")
                         .size(12)
                         .style(dim_text),
                 ]
@@ -864,12 +1069,9 @@ impl App {
                 take,
             ]
             .align_y(Center)
-            .spacing(10),
-        )
-        .padding(12)
-        .width(Fill)
-        .style(style::segment_track)
-        .into()
+            .spacing(12)
+            .into(),
+        ])
     }
 
     fn controls<'a>(&self, d: &'a DeviceSnapshot) -> Option<Element<'a, Message>> {
@@ -882,168 +1084,469 @@ impl App {
             return None;
         }
         let enabled = format::controls_enabled(d);
-        let current = self
-            .pending_mode
-            .map(|(m, _)| m)
-            .or(d.listening_mode)
-            .and_then(ListeningMode::from_byte);
 
-        let mut col = column![].spacing(14);
-        let has_modes = !modes.is_empty();
-        if has_modes {
-            let mut tiles = row![].spacing(8);
-            for m in modes {
-                tiles = tiles.push(mode_tile(m, current == Some(m), enabled));
-            }
-            col = col.push(column![section_label("Listening mode"), tiles].spacing(10));
+        let mut col = column![].spacing(0);
+        if !modes.is_empty() {
+            let selected = self.mode_index(d);
+            let pos = selected.map(|i| self.anim(Anim::Mode, i as f32));
+            col = col
+                .push(section_label("Listening mode"))
+                .push(mode_tiles(&modes, selected, pos, enabled));
         }
         if show_ca {
-            if has_modes {
-                col = col.push(divider());
-            }
             let on = self
                 .pending_ca
                 .map(|(v, _)| v)
                 .or(d.conversation_awareness)
                 .unwrap_or(false);
-            col = col.push(setting_row(
+            col = col.push(gap(10.0)).push(group(vec![setting_row(
                 "Conversation awareness",
                 Some("Lowers media and lets voices in when you speak"),
                 switch(
                     on,
                     enabled.then_some(Message::SetConversation as fn(bool) -> Message),
                 ),
-            ));
+            )]));
         }
         if !enabled {
-            col = col.push(
+            col = col.push(gap(10.0)).push(
                 text("Controls return once the connection is back.")
                     .size(12)
-                    .style(faint_text),
+                    .style(faint_text)
+                    .width(Fill)
+                    .align_x(Center),
             );
         }
-        Some(card(col.into()))
+        Some(col.into())
     }
 
-    fn settings_card(&self) -> Element<'_, Message> {
+    // -------------------------------------------------------------- Island
+
+    fn island_tab(&self) -> Element<'_, Message> {
         let s = &self.settings;
         let overlay_on = s.overlay_mode != OverlayMode::Off;
-        let mode = segmented_wide(
-            &[
-                ("Pop-up", OverlayMode::Auto),
-                ("Compact", OverlayMode::Compact),
-                ("Full", OverlayMode::Always),
-                ("Off", OverlayMode::Off),
-            ],
-            s.overlay_mode,
-            true,
-            Message::SetOverlayMode,
+        let mode_pos = self.anim(
+            Anim::OverlayMode,
+            OVERLAY_MODES
+                .iter()
+                .position(|(_, m)| *m == s.overlay_mode)
+                .unwrap_or(0) as f32,
         );
-        let col = column![
-            setting_block(
-                "Overlay in games",
-                Some(match s.overlay_mode {
-                    OverlayMode::Auto => "Island opens on changes, then hides",
-                    OverlayMode::Always => "Full island always on screen",
-                    OverlayMode::Compact => "Slim island, opens on changes",
-                    OverlayMode::Off => "Never shown",
-                }),
-                mode,
+
+        let preview = column![
+            self.island_screen(),
+            row![
+                text(if overlay_on {
+                    "Click a spot to move the island"
+                } else {
+                    "The island is off"
+                })
+                .size(12)
+                .style(dim_text)
+                .width(Fill),
+                button(text("Show on screen").size(13).font(style::INTER_MEDIUM))
+                    .padding(Padding {
+                        top: 7.0,
+                        bottom: 7.0,
+                        left: 14.0,
+                        right: 14.0,
+                    })
+                    .style(style::secondary)
+                    .on_press_maybe(overlay_on.then_some(Message::PreviewOverlay)),
+            ]
+            .align_y(Center)
+            .padding(Padding {
+                top: 10.0,
+                left: 4.0,
+                ..Padding::ZERO
+            }),
+        ];
+
+        let behaviour = group(vec![setting_block(
+            "In games",
+            Some(match s.overlay_mode {
+                OverlayMode::Auto => "Opens on changes, then hides",
+                OverlayMode::Always => "Full island always on screen",
+                OverlayMode::Compact => "Slim island, opens on changes",
+                OverlayMode::Off => "Never shown",
+            }),
+            slide_control(
+                &OVERLAY_MODES,
+                s.overlay_mode,
+                Some(mode_pos),
+                true,
+                Message::SetOverlayMode,
+                Shape::WIDE,
             ),
-            divider(),
-            setting_row(
-                "Overlay position",
-                None,
-                row![
-                    button(text("Preview").size(12).font(style::INTER_MEDIUM))
-                        .padding(Padding {
-                            top: 6.0,
-                            bottom: 6.0,
-                            left: 12.0,
-                            right: 12.0,
-                        })
-                        .style(style::secondary)
-                        .on_press_maybe(overlay_on.then_some(Message::PreviewOverlay)),
-                    corner_picker(s.overlay_position, overlay_on),
-                ]
-                .spacing(10)
-                .align_y(Center)
-                .into(),
-            ),
-            divider(),
+        )]);
+
+        let look = group(vec![
             setting_row(
                 "Glass",
-                Some("Island black to clear glass"),
-                row![
-                    slider(0.0..=1.0, s.overlay_glass, Message::SetOverlayGlass)
-                        .step(0.05_f32)
-                        .on_release(Message::CommitOverlaySliders)
-                        .width(Length::Fixed(120.0)),
-                    text(format!("{}%", (s.overlay_glass * 100.0).round() as u32))
-                        .size(12)
-                        .font(style::INTER_MEDIUM)
-                        .width(Length::Fixed(36.0)),
-                ]
-                .spacing(10)
-                .align_y(Center)
-                .into(),
+                Some("Black to clear glass"),
+                percent_slider(
+                    0.0..=1.0,
+                    s.overlay_glass,
+                    Message::SetOverlayGlass,
+                    overlay_on,
+                ),
             ),
-            divider(),
             setting_row(
-                "Game opacity",
-                Some("Over fullscreen games and video"),
-                row![
-                    slider(0.2..=1.0, s.overlay_opacity, Message::SetOverlayOpacity)
-                        .step(0.05_f32)
-                        .on_release(Message::CommitOverlaySliders)
-                        .width(Length::Fixed(120.0)),
-                    text(format!("{}%", (s.overlay_opacity * 100.0).round() as u32))
-                        .size(12)
-                        .font(style::INTER_MEDIUM)
-                        .width(Length::Fixed(36.0)),
-                ]
-                .spacing(10)
-                .align_y(Center)
+                "Opacity over games",
+                Some("Over fullscreen games"),
+                percent_slider(
+                    0.2..=1.0,
+                    s.overlay_opacity,
+                    Message::SetOverlayOpacity,
+                    overlay_on,
+                ),
+            ),
+        ]);
+
+        column![
+            preview,
+            section_label("Behaviour"),
+            behaviour,
+            section_label("Look"),
+            look,
+        ]
+        .into()
+    }
+
+    /// A little screen with the island where it will appear; the other spots are buttons.
+    fn island_screen(&self) -> Element<'_, Message> {
+        let s = &self.settings;
+        let enabled = s.overlay_mode != OverlayMode::Off;
+        let align = |p: OverlayPosition| match p {
+            OverlayPosition::TopLeft | OverlayPosition::BottomLeft => {
+                iced::alignment::Horizontal::Left
+            }
+            OverlayPosition::TopCenter | OverlayPosition::BottomCenter => {
+                iced::alignment::Horizontal::Center
+            }
+            _ => iced::alignment::Horizontal::Right,
+        };
+        let spot = |p: OverlayPosition| -> Element<'_, Message> {
+            let mut b = button(Space::new())
+                .width(34)
+                .height(11)
+                .padding(0)
+                .style(style::spot);
+            if p != s.overlay_position {
+                b = b.on_press_maybe(enabled.then_some(Message::SetOverlayPosition(p)));
+            }
+            container(b).width(Fill).align_x(align(p)).into()
+        };
+        // Each row: three spots, and over them the miniature island where it sits, free to
+        // be wider than its third of the screen.
+        let line = |a: OverlayPosition, b: OverlayPosition, c: OverlayPosition| {
+            let mut layers = stack![row![spot(a), spot(b), spot(c)].height(Fill).align_y(Center)];
+            if let Some(p) = [a, b, c].into_iter().find(|p| *p == s.overlay_position) {
+                layers = layers.push(
+                    container(self.mini_island(enabled))
+                        .width(Fill)
+                        .height(Fill)
+                        .align_x(align(p))
+                        .align_y(Center),
+                );
+            }
+            layers.width(Fill).height(24)
+        };
+        let [tl, tc, tr, bl, bc, br] = OVERLAY_POSITIONS;
+        container(
+            column![
+                line(tl, tc, tr),
+                Space::new().height(Fill),
+                line(bl, bc, br)
+            ]
+            .height(Fill),
+        )
+        .padding(10)
+        .width(Fill)
+        .height(150)
+        .style(style::screen)
+        .into()
+    }
+
+    /// The compact island in miniature, with the real readings when there are some.
+    fn mini_island(&self, enabled: bool) -> Element<'_, Message> {
+        let gauges = self
+            .primary()
+            .map(|d| format::gauges(d, self.now))
+            .unwrap_or_default();
+        let mut line = row![widgets::icon(Glyph::Earbuds, 11.0, Ink::Text)]
+            .spacing(5)
+            .align_y(Center);
+        let small = |t: String, dim: bool| {
+            text(t)
+                .size(9.5)
+                .font(style::INTER_SEMIBOLD)
+                .wrapping(text::Wrapping::None)
+                .style(move |_: &Theme| text::Style {
+                    color: Some(Color::from_rgba(
+                        1.0,
+                        1.0,
+                        1.0,
+                        if dim { 0.55 } else { 0.92 },
+                    )),
+                })
+        };
+        for g in &gauges {
+            let label = match g.label {
+                "Left" => "L",
+                "Right" => "R",
+                "Case" => "Case",
+                _ => "",
+            };
+            let mut item = row![].spacing(3).align_y(Center);
+            if !label.is_empty() {
+                item = item.push(small(label.to_string(), true));
+            }
+            item = item.push(small(g.text.clone(), g.dimmed));
+            line = line.push(item);
+        }
+        button(line)
+            .padding(Padding {
+                top: 5.0,
+                bottom: 5.0,
+                left: 9.0,
+                right: 10.0,
+            })
+            .style(style::mini_island(enabled))
+            .on_press_maybe(enabled.then_some(Message::PreviewOverlay))
+            .into()
+    }
+
+    // ------------------------------------------------------------ Settings
+
+    fn settings_tab(&self) -> Element<'_, Message> {
+        let s = &self.settings;
+        let appearance = [
+            ("System", Appearance::System),
+            ("Light", Appearance::Light),
+            ("Dark", Appearance::Dark),
+        ];
+        let general = group(vec![
+            setting_row(
+                "Appearance",
+                None,
+                container(slide_control(
+                    &appearance,
+                    s.appearance,
+                    Some(self.anim(Anim::Appearance, 0.0)),
+                    true,
+                    Message::SetAppearance,
+                    Shape::COMPACT,
+                ))
+                .width(Length::Fixed(196.0))
                 .into(),
             ),
-            divider(),
             setting_row(
                 "Start at login",
                 Some("Runs quietly in the tray"),
                 switch(
                     s.start_at_login,
-                    Some(Message::SetStartAtLogin as fn(bool) -> Message)
+                    Some(Message::SetStartAtLogin as fn(bool) -> Message),
                 ),
             ),
-        ]
-        .spacing(14);
-        card(col.into())
+        ]);
+
+        let mut airpods: Vec<Element<'_, Message>> = Vec::new();
+        let device = self.primary();
+        if let Some(d) = device {
+            airpods.push(self.rename_row(d));
+        }
+        airpods.push(setting_row(
+            "Stem press track control",
+            Some("Double-press for next track, triple-press for previous"),
+            switch(
+                s.stem_control,
+                Some(Message::SetStemControl as fn(bool) -> Message),
+            ),
+        ));
+        airpods.push(setting_row(
+            "AirPods mic switch",
+            Some(
+                "Hold the left stem to swap between your desk mic and the AirPods mic. \
+                 Hold the right stem to change noise control.",
+            ),
+            switch(
+                s.airpods_mic_switch,
+                Some(Message::SetMicSwitch as fn(bool) -> Message),
+            ),
+        ));
+        if let Some(d) = device
+            && let Some(mic) = d.mic.filter(|_| d.is_connected())
+        {
+            let on = mic == crate::hub::MicRoute::AirPods;
+            let caption = match (&d.mic_problem, on) {
+                (Some(problem), false) => problem.as_str(),
+                (_, true) => "The AirPods mic is the default mic now",
+                (None, false) => "Your desk mic is the default mic",
+            };
+            airpods.push(setting_row(
+                "Use AirPods mic",
+                Some(caption),
+                switch(
+                    on,
+                    format::controls_enabled(d)
+                        .then_some((|_| Message::ToggleAirPodsMic) as fn(bool) -> Message),
+                ),
+            ));
+        }
+        if let Some(d) = device {
+            let enabled = format::controls_enabled(d);
+            if d.model.info().has_anc {
+                airpods.push(setting_row(
+                    "Off listening mode",
+                    Some("Adds Off to the listening modes"),
+                    switch(
+                        d.allow_off_mode.unwrap_or(false),
+                        enabled.then_some(Message::SetAllowOff as fn(bool) -> Message),
+                    ),
+                ));
+            }
+            for setting in format::device_settings(d) {
+                airpods.push(self.device_setting(setting, enabled));
+            }
+        }
+
+        let mut page = column![
+            general,
+            section_label("AirPods"),
+            group(airpods),
+            section_label("This PC"),
+            group(vec![self.apple_mode_row()]),
+        ];
+
+        if let Some(d) = device {
+            page = page.push(section_label("About")).push(self.about(d));
+        }
+        for (mac, mode) in &self.nothing {
+            let mac_c = mac.clone();
+            page = page.push(section_label("Nothing Ear")).push(group(vec![
+                column![
+                    text(mac.clone()).size(12).style(faint_text),
+                    pick_list(NothingMode::ALL, *mode, move |m| {
+                        Message::SetNothingMode(mac_c.clone(), m)
+                    })
+                    .placeholder("Noise control")
+                    .text_size(13)
+                    .width(Fill),
+                ]
+                .spacing(8)
+                .into(),
+            ]));
+        }
+        page.into()
     }
 
-    fn more_toggle(&self) -> Element<'_, Message> {
-        button(
+    fn rename_row<'a>(&'a self, d: &'a DeviceSnapshot) -> Element<'a, Message> {
+        let can_rename = format::controls_enabled(d) && !self.rename.trim().is_empty();
+        let mut col = column![
+            text("Name").size(14).font(style::INTER_MEDIUM),
             row![
-                text(if self.more_open {
-                    "Fewer options"
-                } else {
-                    "More options"
-                })
-                .size(13)
-                .font(style::INTER_MEDIUM),
-                widgets::icon(Glyph::Chevron { up: self.more_open }, 14.0, Ink::Dim),
+                text_input(&d.name, &self.rename)
+                    .on_input(Message::RenameInput)
+                    .on_submit_maybe(can_rename.then_some(Message::RenameSubmit))
+                    .padding(Padding {
+                        top: 8.0,
+                        bottom: 8.0,
+                        left: 12.0,
+                        right: 12.0,
+                    })
+                    .size(14)
+                    .style(style::input)
+                    .width(Fill),
+                button(text("Rename").size(13).font(style::INTER_MEDIUM))
+                    .padding(Padding {
+                        top: 8.0,
+                        bottom: 8.0,
+                        left: 14.0,
+                        right: 14.0,
+                    })
+                    .style(style::secondary)
+                    .on_press_maybe(can_rename.then_some(Message::RenameSubmit)),
             ]
-            .spacing(6)
+            .spacing(8)
             .align_y(Center),
-        )
-        .padding(Padding {
-            top: 6.0,
-            bottom: 6.0,
-            left: 12.0,
-            right: 10.0,
-        })
-        .style(style::link)
-        .on_press(Message::ToggleMore)
-        .into()
+        ]
+        .spacing(8);
+        if let Some(status) = &self.rename_status {
+            col = col.push(text(status.clone()).size(12).style(dim_text));
+        }
+        col.into()
+    }
+
+    /// One of the AirPods' own settings (see [`format::device_settings`]).
+    fn device_setting<'a>(&self, setting: DeviceSetting, enabled: bool) -> Element<'a, Message> {
+        match setting {
+            DeviceSetting::Toggle {
+                id,
+                title,
+                caption,
+                on,
+            } => setting_row(
+                title,
+                Some(caption),
+                toggler(on)
+                    .on_toggle_maybe(
+                        enabled.then_some(move |v| Message::SetControl(id, format::toggle_byte(v))),
+                    )
+                    .size(24)
+                    .spacing(0)
+                    .style(style::toggle)
+                    .into(),
+            ),
+            DeviceSetting::Choice {
+                id,
+                title,
+                caption,
+                options,
+                selected,
+            } => {
+                let options: Vec<(&str, (u8, u8))> =
+                    options.iter().map(|&(label, v)| (label, (id, v))).collect();
+                let at = options
+                    .iter()
+                    .position(|(_, (_, v))| *v == selected)
+                    .map(|i| self.anim(Anim::Control(id), i as f32));
+                setting_block(
+                    title,
+                    Some(caption),
+                    slide_control(
+                        &options,
+                        (id, selected),
+                        at,
+                        enabled,
+                        |(id, v)| Message::SetControl(id, v),
+                        Shape::WIDE,
+                    ),
+                )
+            }
+        }
+    }
+
+    fn about<'a>(&self, d: &'a DeviceSnapshot) -> Element<'a, Message> {
+        let mut rows = vec![kv("Model", format::model_name(d.model).to_string())];
+        if let Some(n) = &d.model_number {
+            rows.push(kv("Model number", n.clone()));
+        }
+        if let Some(DeviceInformation::AirPods(i)) =
+            self.saved.get(&d.mac).and_then(|s| s.information.as_ref())
+        {
+            if !i.serial_number.is_empty() {
+                rows.push(kv("Serial number", i.serial_number.clone()));
+            }
+            if !i.version1.is_empty() {
+                rows.push(kv("Firmware", i.version1.clone()));
+            }
+        }
+        rows.push(kv("Address", d.mac.clone()));
+        if let Some(a) = &d.audio {
+            rows.push(kv("Audio", a.clone()));
+        }
+        group(rows)
     }
 
     /// Opt-in Apple DeviceID ("VendorID spoofing"). The sandboxed app can't edit
@@ -1081,158 +1584,6 @@ impl App {
             .align_y(Center)
             .into(),
         )
-    }
-
-    fn more_card(&self) -> Element<'_, Message> {
-        let s = &self.settings;
-        let mut col = column![setting_row(
-            "Appearance",
-            None,
-            segmented(
-                &[
-                    ("System", Appearance::System),
-                    ("Light", Appearance::Light),
-                    ("Dark", Appearance::Dark),
-                ],
-                s.appearance,
-                true,
-                Message::SetAppearance,
-            ),
-        )]
-        .spacing(14);
-
-        col = col.push(divider()).push(self.apple_mode_row());
-        col = col.push(divider()).push(setting_row(
-            "Stem press track control",
-            Some("Double-press for next track, triple-press for previous."),
-            switch(
-                s.stem_control,
-                Some(Message::SetStemControl as fn(bool) -> Message),
-            ),
-        ));
-        col = col.push(divider()).push(setting_row(
-            "AirPods mic switch",
-            Some(
-                "Hold the left stem to swap between your desk mic and the AirPods mic, \
-                 with music still in full quality. Hold the right stem to change noise control.",
-            ),
-            switch(
-                s.airpods_mic_switch,
-                Some(Message::SetMicSwitch as fn(bool) -> Message),
-            ),
-        ));
-        if let Some(d) = self.primary()
-            && let Some(mic) = d.mic.filter(|_| d.is_connected())
-        {
-            let on = mic == crate::hub::MicRoute::AirPods;
-            let caption = match (&d.mic_problem, on) {
-                (Some(problem), false) => problem.as_str(),
-                (_, true) => "The AirPods mic is the default mic now",
-                (None, false) => "Your desk mic is the default mic",
-            };
-            col = col.push(divider()).push(setting_row(
-                "Use AirPods mic",
-                Some(caption),
-                switch(
-                    on,
-                    format::controls_enabled(d)
-                        .then_some((|_| Message::ToggleAirPodsMic) as fn(bool) -> Message),
-                ),
-            ));
-        }
-
-        if let Some(d) = self.primary() {
-            let info = d.model.info();
-            let enabled = format::controls_enabled(d);
-            if info.has_anc {
-                col = col.push(divider()).push(setting_row(
-                    "Off listening mode",
-                    Some("Adds Off to the listening modes"),
-                    switch(
-                        d.allow_off_mode.unwrap_or(false),
-                        enabled.then_some(Message::SetAllowOff as fn(bool) -> Message),
-                    ),
-                ));
-            }
-            for setting in format::device_settings(d) {
-                col = col.push(divider()).push(device_setting(setting, enabled));
-            }
-
-            let can_rename = enabled && !self.rename.trim().is_empty();
-            let mut rename_col = column![
-                text("Name").size(14).font(style::INTER_MEDIUM),
-                row![
-                    text_input(&d.name, &self.rename)
-                        .on_input(Message::RenameInput)
-                        .on_submit_maybe(can_rename.then_some(Message::RenameSubmit))
-                        .padding(Padding {
-                            top: 8.0,
-                            bottom: 8.0,
-                            left: 12.0,
-                            right: 12.0,
-                        })
-                        .size(14)
-                        .style(style::input)
-                        .width(Fill),
-                    button(text("Rename").size(13).font(style::INTER_MEDIUM))
-                        .padding(Padding {
-                            top: 8.0,
-                            bottom: 8.0,
-                            left: 14.0,
-                            right: 14.0,
-                        })
-                        .style(style::secondary)
-                        .on_press_maybe(can_rename.then_some(Message::RenameSubmit)),
-                ]
-                .spacing(8)
-                .align_y(Center),
-            ]
-            .spacing(8);
-            if let Some(status) = &self.rename_status {
-                rename_col = rename_col.push(text(status.clone()).size(12).style(dim_text));
-            }
-            col = col.push(divider()).push(rename_col);
-
-            let mut info_col = column![section_label("About")].spacing(6);
-            info_col = info_col.push(kv("Model", format::model_name(d.model).to_string()));
-            if let Some(n) = &d.model_number {
-                info_col = info_col.push(kv("Model number", n.clone()));
-            }
-            if let Some(DeviceInformation::AirPods(i)) =
-                self.saved.get(&d.mac).and_then(|s| s.information.as_ref())
-            {
-                if !i.serial_number.is_empty() {
-                    info_col = info_col.push(kv("Serial number", i.serial_number.clone()));
-                }
-                if !i.version1.is_empty() {
-                    info_col = info_col.push(kv("Firmware", i.version1.clone()));
-                }
-            }
-            info_col = info_col.push(kv("Address", d.mac.clone()));
-            if let Some(a) = &d.audio {
-                info_col = info_col.push(kv("Audio", a.clone()));
-            }
-            col = col.push(divider()).push(info_col);
-        }
-
-        for (mac, mode) in &self.nothing {
-            let mac_c = mac.clone();
-            col = col.push(divider()).push(
-                column![
-                    text("Nothing Ear").size(14).font(style::INTER_MEDIUM),
-                    text(mac.clone()).size(12).style(faint_text),
-                    pick_list(NothingMode::ALL, *mode, move |m| {
-                        Message::SetNothingMode(mac_c.clone(), m)
-                    })
-                    .placeholder("Noise control")
-                    .text_size(13)
-                    .width(Fill),
-                ]
-                .spacing(6),
-            );
-        }
-
-        card(col.into())
     }
 }
 
@@ -1274,6 +1625,14 @@ fn load_apple_mode() -> Task<Message> {
     )
 }
 
+/// Overlay modes in the order the Island tab offers them.
+const OVERLAY_MODES: [(&str, OverlayMode); 4] = [
+    ("Pop-up", OverlayMode::Auto),
+    ("Compact", OverlayMode::Compact),
+    ("Full", OverlayMode::Always),
+    ("Off", OverlayMode::Off),
+];
+
 fn dim_text(theme: &Theme) -> text::Style {
     text::Style {
         color: Some(Tokens::of(theme).text_dim),
@@ -1286,92 +1645,65 @@ fn faint_text(theme: &Theme) -> text::Style {
     }
 }
 
-fn card(content: Element<'_, Message>) -> Element<'_, Message> {
-    container(content)
-        .padding(18)
-        .width(Fill)
-        .style(style::card)
-        .into()
+fn gap<'a>(height: f32) -> Element<'a, Message> {
+    Space::new().height(height).into()
 }
 
-fn divider<'a>() -> Element<'a, Message> {
-    container(Space::new())
-        .width(Fill)
-        .height(1)
-        .style(style::divider)
-        .into()
+/// A grouped panel: rows separated by hairlines inset from the left edge, iOS style.
+fn group(rows: Vec<Element<'_, Message>>) -> Element<'_, Message> {
+    let mut col = column![];
+    for (i, r) in rows.into_iter().enumerate() {
+        if i > 0 {
+            col = col.push(
+                container(
+                    container(Space::new())
+                        .width(Fill)
+                        .height(1)
+                        .style(style::divider),
+                )
+                .padding(Padding {
+                    left: 16.0,
+                    ..Padding::ZERO
+                }),
+            );
+        }
+        col = col.push(
+            container(r)
+                .padding(Padding {
+                    top: 13.0,
+                    bottom: 13.0,
+                    left: 16.0,
+                    right: 16.0,
+                })
+                .width(Fill),
+        );
+    }
+    container(col).width(Fill).style(style::group).into()
 }
 
-fn section_label<'a>(label: &'a str) -> Element<'a, Message> {
-    text(label)
-        .size(12)
-        .font(style::INTER_SEMIBOLD)
-        .style(dim_text)
-        .into()
+fn section_label<'a>(label: &str) -> Element<'a, Message> {
+    container(
+        text(label.to_uppercase())
+            .size(12)
+            .font(style::INTER_SEMIBOLD)
+            .style(dim_text),
+    )
+    .padding(Padding {
+        top: 22.0,
+        bottom: 8.0,
+        left: 8.0,
+        right: 0.0,
+    })
+    .into()
 }
 
 fn kv<'a>(k: &'a str, v: String) -> Element<'a, Message> {
     row![
-        text(k).size(13).style(dim_text).width(Fill),
-        text(v).size(13),
+        text(k).size(14).width(Fill),
+        text(v).size(14).style(dim_text),
     ]
     .spacing(12)
     .into()
-}
-
-fn status_pill<'a>(label: &'a str, tone: PillTone) -> Element<'a, Message> {
-    container(
-        row![
-            container(Space::new())
-                .width(7)
-                .height(7)
-                .style(style::dot(tone)),
-            text(label).size(12).font(style::INTER_MEDIUM),
-        ]
-        .spacing(6)
-        .align_y(Center),
-    )
-    .padding(Padding {
-        top: 5.0,
-        bottom: 5.0,
-        left: 10.0,
-        right: 11.0,
-    })
-    .style(style::pill(tone))
-    .into()
-}
-
-fn gauge_cell<'a>(g: &Gauge, size: f32) -> Element<'a, Message> {
-    container(widgets::gauge_view(g, size))
-        .center_x(Fill)
-        .into()
-}
-
-fn mode_tile<'a>(m: ListeningMode, selected: bool, enabled: bool) -> Element<'a, Message> {
-    let ink = if selected { Ink::OnAccent } else { Ink::Text };
-    let content = column![
-        widgets::icon(Glyph::Mode(m), 22.0, ink),
-        text(m.label())
-            .size(11.5)
-            .font(style::INTER_MEDIUM)
-            .align_x(Center)
-            .wrapping(text::Wrapping::Word),
-    ]
-    .spacing(7)
-    .align_x(Center)
-    .width(Fill);
-    button(content)
-        .width(Fill)
-        .height(Length::Fixed(78.0))
-        .padding(Padding {
-            top: 12.0,
-            bottom: 8.0,
-            left: 4.0,
-            right: 4.0,
-        })
-        .style(style::tile(selected))
-        .on_press_maybe(enabled.then_some(Message::SetMode(m)))
-        .into()
 }
 
 /// A setting whose control needs the full width: title and caption above it.
@@ -1402,177 +1734,255 @@ fn setting_row<'a>(
         .into()
 }
 
-/// One of the AirPods' own settings (see [`format::device_settings`]).
-fn device_setting<'a>(setting: DeviceSetting, enabled: bool) -> Element<'a, Message> {
-    match setting {
-        DeviceSetting::Toggle {
-            id,
-            title,
-            caption,
-            on,
-        } => setting_row(
-            title,
-            Some(caption),
-            toggler(on)
-                .on_toggle_maybe(
-                    enabled.then_some(move |v| Message::SetControl(id, format::toggle_byte(v))),
-                )
-                .size(22)
-                .spacing(0)
-                .style(style::toggle)
-                .into(),
-        ),
-        DeviceSetting::Choice {
-            id,
-            title,
-            caption,
-            options,
-            selected,
-        } => {
-            let options: Vec<(&str, (u8, u8))> =
-                options.iter().map(|&(label, v)| (label, (id, v))).collect();
-            setting_block(
-                title,
-                Some(caption),
-                segmented_wide(&options, (id, selected), enabled, |(id, v)| {
-                    Message::SetControl(id, v)
-                }),
-            )
-        }
-    }
-}
-
 fn switch<'a>(on: bool, msg: Option<fn(bool) -> Message>) -> Element<'a, Message> {
     toggler(on)
         .on_toggle_maybe(msg)
-        .size(22)
+        .size(24)
         .spacing(0)
         .style(style::toggle)
         .into()
 }
 
-fn segmented<'a, T: Copy + PartialEq + 'a>(
-    options: &[(&'a str, T)],
-    selected: T,
+fn percent_slider<'a>(
+    range: std::ops::RangeInclusive<f32>,
+    value: f32,
+    msg: fn(f32) -> Message,
     enabled: bool,
-    msg: fn(T) -> Message,
 ) -> Element<'a, Message> {
-    segmented_impl(options, selected, enabled, msg, false)
+    let pct = text(format!("{}%", (value * 100.0).round() as u32))
+        .size(12)
+        .font(style::INTER_MEDIUM)
+        .style(if enabled { dim_text } else { faint_text })
+        .align_x(iced::alignment::Horizontal::Right)
+        .width(Length::Fixed(34.0));
+    row![
+        slider(range, value, msg)
+            .step(0.05_f32)
+            .on_release(Message::CommitOverlaySliders)
+            .style(style::slide)
+            .width(Length::Fixed(116.0)),
+        pct,
+    ]
+    .spacing(8)
+    .align_y(Center)
+    .into()
 }
 
-/// Like [`segmented`], stretched to the full width with equal segments.
-fn segmented_wide<'a, T: Copy + PartialEq + 'a>(
-    options: &[(&'a str, T)],
-    selected: T,
-    enabled: bool,
-    msg: fn(T) -> Message,
-) -> Element<'a, Message> {
-    segmented_impl(options, selected, enabled, msg, true)
+/// Size and type of a [`slide_control`].
+#[derive(Debug, Clone, Copy)]
+struct Shape {
+    height: f32,
+    radius: f32,
+    text: f32,
 }
 
-fn segmented_impl<'a, T: Copy + PartialEq + 'a>(
+impl Shape {
+    const TABS: Shape = Shape {
+        height: 36.0,
+        radius: 18.0,
+        text: 13.0,
+    };
+    const WIDE: Shape = Shape {
+        height: 32.0,
+        radius: 10.0,
+        text: 12.5,
+    };
+    const COMPACT: Shape = Shape {
+        height: 30.0,
+        radius: 10.0,
+        text: 12.5,
+    };
+}
+
+/// The row a sliding highlight rides in: `pos` (index, fractional while moving) of `n` equal
+/// slots. Built from fill portions, so it needs no pixel widths.
+fn sliding<'a>(
+    n: usize,
+    pos: f32,
+    thumb: impl Fn(&Theme) -> container::Style + 'a,
+) -> Element<'a, Message> {
+    const UNIT: f32 = 1000.0;
+    let max = n.saturating_sub(1) as f32;
+    let left = (pos.clamp(0.0, max) * UNIT).round() as u16;
+    let right = (max * UNIT) as u16 - left;
+    let mut r = row![];
+    if left > 0 {
+        r = r.push(Space::new().width(FillPortion(left)));
+    }
+    r = r.push(
+        container(Space::new())
+            .width(FillPortion(UNIT as u16))
+            .height(Fill)
+            .style(thumb),
+    );
+    if right > 0 {
+        r = r.push(Space::new().width(FillPortion(right)));
+    }
+    r.height(Fill).into()
+}
+
+/// Segmented control whose selection glides between options on a spring. `pos` is the
+/// animated index of the selected option (None hides the highlight).
+fn slide_control<'a, T: Copy + PartialEq + 'a>(
     options: &[(&'a str, T)],
     selected: T,
+    pos: Option<f32>,
     enabled: bool,
     msg: fn(T) -> Message,
-    wide: bool,
+    shape: Shape,
 ) -> Element<'a, Message> {
-    let mut r = row![].spacing(2);
+    let inner = shape.radius - 2.0;
+    let mut labels = row![];
     for &(label, value) in options {
         let is_sel = value == selected;
-        let label = text(label).size(12).font(if is_sel {
-            style::INTER_SEMIBOLD
-        } else {
-            style::INTER_MEDIUM
-        });
-        let label = if wide {
-            label.width(Fill).align_x(Center)
-        } else {
-            label
-        };
-        r = r.push(
-            button(label)
-                .width(if wide { Fill } else { Length::Shrink })
-                .padding(Padding {
-                    top: 5.0,
-                    bottom: 5.0,
-                    left: 10.0,
-                    right: 10.0,
-                })
-                .style(style::segment(is_sel))
-                .on_press_maybe(enabled.then_some(msg(value))),
+        labels = labels.push(
+            button(
+                text(label)
+                    .size(shape.text)
+                    .font(if is_sel {
+                        style::INTER_SEMIBOLD
+                    } else {
+                        style::INTER_MEDIUM
+                    })
+                    .wrapping(text::Wrapping::None)
+                    .align_x(Center)
+                    .align_y(Center)
+                    .width(Fill)
+                    .height(Fill),
+            )
+            .width(Fill)
+            .height(Fill)
+            .padding(0)
+            .style(style::segment(is_sel))
+            .on_press_maybe(enabled.then_some(msg(value))),
         );
     }
-    let track = container(r).padding(2).style(style::segment_track);
-    if wide {
-        track.width(Fill).into()
-    } else {
-        track.into()
+    let mut layers = stack![];
+    if let Some(p) = pos {
+        layers = layers.push(sliding(options.len(), p, style::thumb(inner)));
     }
+    layers = layers.push(labels.height(Fill));
+    container(layers.width(Fill).height(Fill))
+        .padding(2)
+        .width(Fill)
+        .height(Length::Fixed(shape.height))
+        .style(style::track(shape.radius))
+        .into()
 }
 
-fn corner_picker<'a>(selected: OverlayPosition, enabled: bool) -> Element<'a, Message> {
-    let spot = |p: OverlayPosition| -> Element<'a, Message> {
-        button(Space::new())
-            .width(14)
-            .height(9)
-            .padding(0)
-            .style(style::corner(p == selected))
-            .on_press_maybe(enabled.then_some(Message::SetOverlayPosition(p)))
-            .into()
-    };
-    let [tl, tc, tr, bl, bc, br] = OVERLAY_POSITIONS;
-    let line = |a, b, c| {
-        row![
-            spot(a),
-            Space::new().width(Fill),
-            spot(b),
-            Space::new().width(Fill),
-            spot(c)
+/// The listening mode tiles, with a glowing highlight that glides to the selected mode.
+fn mode_tiles<'a>(
+    modes: &[ListeningMode],
+    selected: Option<usize>,
+    pos: Option<f32>,
+    enabled: bool,
+) -> Element<'a, Message> {
+    let mut tiles = row![];
+    for (i, &m) in modes.iter().enumerate() {
+        let is_sel = selected == Some(i);
+        let ink = match (enabled, is_sel) {
+            (false, _) => Ink::Faint,
+            (true, true) => Ink::Accent,
+            (true, false) => Ink::Dim,
+        };
+        let content = column![
+            widgets::icon(Glyph::Mode(m), 22.0, ink),
+            text(m.label())
+                .size(12)
+                .font(if is_sel {
+                    style::INTER_SEMIBOLD
+                } else {
+                    style::INTER_MEDIUM
+                })
+                .align_x(Center)
+                .wrapping(text::Wrapping::Word),
         ]
-        .align_y(Center)
-    };
-    container(
-        column![
-            line(tl, tc, tr),
-            Space::new().height(Fill),
-            line(bl, bc, br)
-        ]
+        .spacing(7)
+        .align_x(Center)
+        .width(Fill);
+        tiles = tiles.push(
+            button(content)
+                .width(Fill)
+                .height(Fill)
+                .padding(Padding {
+                    top: 13.0,
+                    bottom: 8.0,
+                    left: 4.0,
+                    right: 4.0,
+                })
+                .style(style::tile(is_sel))
+                .on_press_maybe(enabled.then_some(Message::SetMode(m))),
+        );
+    }
+    let mut layers = stack![];
+    if let Some(p) = pos {
+        layers = layers.push(sliding(modes.len(), p, style::mode_thumb(enabled)));
+    }
+    layers = layers.push(tiles.height(Fill));
+    container(layers.width(Fill).height(Fill))
+        .padding(6)
         .width(Fill)
-        .height(Fill),
-    )
-    .width(76)
-    .height(48)
-    .padding(4)
-    .style(style::screen(enabled))
-    .into()
+        .height(Length::Fixed(88.0))
+        .style(style::group)
+        .into()
+}
+
+/// Under the rings while the AirPods are away: what the readings mean and what to do.
+fn away_hint<'a>(d: &DeviceSnapshot) -> Element<'a, Message> {
+    let (title, body) = if format::is_nearby(d) {
+        (
+            "Nearby",
+            "These levels are live from the AirPods themselves. They connect as soon as \
+             you start using them.",
+        )
+    } else if d.in_case {
+        (
+            "In the case",
+            "Open the lid near this PC to update the levels. AirPods reconnect on their own \
+             when you take them out.",
+        )
+    } else {
+        (
+            "Out of range",
+            "These are the last levels seen. BazzitePods reconnects on its own when your \
+             AirPods are back.",
+        )
+    };
+    group(vec![
+        column![
+            text(title).size(14).font(style::INTER_MEDIUM),
+            text(body).size(12).style(dim_text),
+        ]
+        .spacing(3)
+        .into(),
+    ])
 }
 
 fn empty_state<'a>(glyph: Glyph, title: &'a str, body: &'a str) -> Element<'a, Message> {
     let disc = container(widgets::icon(glyph, 34.0, Ink::Dim))
-        .center_x(Length::Fixed(72.0))
-        .center_y(Length::Fixed(72.0))
+        .center_x(Length::Fixed(76.0))
+        .center_y(Length::Fixed(76.0))
         .style(style::icon_disc);
     container(
         column![
             disc,
-            text(title).size(18).font(style::INTER_SEMIBOLD),
+            gap(8.0),
+            text(title).size(20).font(style::INTER_SEMIBOLD),
             text(body)
                 .size(13)
                 .align_x(Center)
                 .style(dim_text)
                 .width(Length::Fixed(300.0)),
         ]
-        .spacing(10)
+        .spacing(8)
         .align_x(Center),
     )
     .padding(Padding {
-        top: 34.0,
+        top: 64.0,
         bottom: 30.0,
         left: 20.0,
         right: 20.0,
     })
     .center_x(Fill)
-    .style(style::hero)
     .into()
 }
