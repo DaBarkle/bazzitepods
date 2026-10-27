@@ -52,6 +52,12 @@ All notable changes to BazzitePods are documented here. The format follows
   two seconds. ([#17])
 - An app that keeps going back to the desk mic is left there instead of being moved back
   and forth every two seconds. ([#21])
+- **Swapping back to the desk mic no longer drops your sound onto the speakers.** The
+  AirPods cut their music connection when their mic stops; the speakers are now muted
+  before that happens and stay muted until the AirPods play again, and if they don't
+  start playing, BazzitePods repairs the connection straight away instead of after a few
+  seconds of silence. ([#22])
+- **The switch chime is heard even when system notification sounds are muted.** ([#22])
 
 ### Notes
 - *Purist* is the new default. If you had never changed the overlay's look, it switches to
@@ -231,6 +237,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
 [#21]: https://github.com/DaBarkle/bazzitepods/pull/21
 [#18]: https://github.com/DaBarkle/bazzitepods/pull/18
+[#22]: https://github.com/DaBarkle/bazzitepods/pull/22
 [#17]: https://github.com/DaBarkle/bazzitepods/pull/17
 [#16]: https://github.com/DaBarkle/bazzitepods/pull/16
 [#19]: https://github.com/DaBarkle/bazzitepods/pull/19

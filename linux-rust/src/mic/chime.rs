@@ -35,7 +35,7 @@ fn pcm(to: MicRoute) -> Vec<u8> {
         .collect()
 }
 
-/// Plays the chime on the default output and waits for it (at most a second).
+/// Plays the chime on the default output as a plain stream and waits for it (at most a second).
 pub async fn play(to: MicRoute) {
     let child = Command::new("paplay")
         .args([
@@ -45,7 +45,8 @@ pub async fn play(to: MicRoute) {
             "--client-name=BazzitePods",
         ])
         .arg(format!("--rate={RATE}"))
-        .arg("--property=media.role=event")
+        // No media.role=event: KDE's muted "Notification" volume would silence it,
+        // and this is feedback for a press, not a notification.
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

@@ -938,3 +938,63 @@ async fn rebuild_waits_while_another_device_plays() {
     settle(600).await;
     assert_eq!(lock(&world).count("profile:off"), 0);
 }
+
+#[tokio::test]
+async fn hush_keeps_the_speakers_quiet_until_the_rebuilt_output_plays() {
+    // Stopping the AirPods mic drops the music output: the speakers are muted before
+    // that, and stay muted until the rebuilt output is playing again.
+    let mut w = World::new();
+    w.playing = true;
+    w.add_card("a2dp-sink-aac");
+    w.transports = vec!["active".into()];
+    w.transport_after_toggle = Some("active".into());
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    handle.hush();
+    settle(50).await;
+    assert!(
+        lock(&world)
+            .snap
+            .sinks
+            .iter()
+            .any(|s| s.index == SPEAKERS && s.muted)
+    );
+    handle.rebuild();
+    settle(600).await;
+    let w = lock(&world);
+    let at = |entry: &str| w.log.iter().position(|l| l == entry);
+    let muted = at(&format!("mute:{SPEAKERS}:true")).expect("speakers muted");
+    let off = at("profile:off").expect("toggled");
+    let unmuted = at(&format!("mute:{SPEAKERS}:false")).expect("speakers unmuted");
+    assert!(muted < off && off < unmuted, "log: {:?}", w.log);
+    assert_eq!(
+        w.count(&format!("mute:{SPEAKERS}:true")),
+        1,
+        "log: {:?}",
+        w.log
+    );
+    assert!(!w.snap.sinks.iter().any(|s| s.muted));
+}
+
+#[tokio::test]
+async fn rebuild_that_leaves_the_airpods_silent_recovers_straight_away() {
+    // After the mic stream stops the AirPods can refuse audio on the rebuilt output.
+    // That is repaired right after the rebuild, and the speakers end up unmuted.
+    let mut w = World::new();
+    w.playing = true;
+    w.add_card("a2dp-sink-aac");
+    w.transports = vec!["active".into()];
+    w.transport_after_toggle = Some("idle".into());
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    handle.hush();
+    handle.rebuild();
+    settle(600).await;
+    let w = lock(&world);
+    assert!(w.count("profile:off") >= 2, "log: {:?}", w.log);
+    assert!(!w.snap.sinks.iter().any(|s| s.muted), "log: {:?}", w.log);
+}

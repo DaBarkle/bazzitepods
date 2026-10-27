@@ -148,6 +148,10 @@ impl MicLink for Link {
         w.ca = Some(on);
     }
 
+    fn hush_output(&self) {
+        lock(&self.0).log.push("hush".into());
+    }
+
     fn rebuild_output(&self) {
         lock(&self.0).log.push("rebuild".into());
     }
@@ -283,6 +287,7 @@ async fn left_hold_switches_to_the_airpods_mic_and_back() {
             "chime:Desk",
             "default:yeti",
             "move:41->yeti",
+            "hush",
             "stop",
             "unload:500",
             "ca:true",

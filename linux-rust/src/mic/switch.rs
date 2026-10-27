@@ -62,6 +62,8 @@ pub trait MicLink: Send + Sync + 'static {
     fn stop_stream(&self) -> impl Future<Output = ()> + Send;
     fn conversation_awareness(&self) -> impl Future<Output = Option<bool>> + Send;
     fn set_conversation_awareness(&self, on: bool) -> impl Future<Output = ()> + Send;
+    /// Mutes the speakers before the mic stream stops, which drops the music output.
+    fn hush_output(&self);
     /// Rebuilds the music output (audio guard).
     fn rebuild_output(&self);
 }
@@ -418,6 +420,7 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
                 }
             }
         }
+        self.link.hush_output();
         self.link.stop_stream().await;
         if let Err(e) = self.host.unload(active.module).await {
             warn!("[mic] could not remove the virtual mic: {e}");

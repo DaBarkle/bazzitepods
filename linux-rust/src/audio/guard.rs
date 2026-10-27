@@ -95,6 +95,11 @@ pub(crate) enum Cmd {
     /// stopped, after which AirPods 4 ANC keep playing on one pod only although the
     /// transport looks healthy. Not rate limited and not counted as a recovery.
     Rebuild,
+    /// The AirPods mic stream is about to stop, and AirPods 4 ANC drop the music
+    /// transport with it: mute the speakers now, so the moment the AirPods output
+    /// vanishes nothing plays there. The rebuild that follows unmutes them, or
+    /// [`HUSH_LIMIT`] does if none comes.
+    Hush,
     Shutdown,
 }
 
@@ -111,6 +116,8 @@ const FAST_STALL: Duration = Duration::from_millis(800);
 /// streams back onto the AirPods.
 const UNHUSH_WAIT: Duration = Duration::from_secs(2);
 const UNHUSH_MARGIN: Duration = Duration::from_millis(250);
+/// The longest the speakers stay muted after [`Cmd::Hush`] without a rebuild.
+const HUSH_LIMIT: Duration = Duration::from_secs(8);
 /// Two take-backs this close together share one rebuild. Bouncing between devices is
 /// prevented where it starts (devices/airpods.rs), so this only merges duplicates: a
 /// longer limit left the AirPods silent after a quick switch back.
@@ -311,6 +318,10 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     away: bool,
     /// Other outputs muted while ours is rebuilt, so nothing plays on the speakers.
     hushed: Vec<u32>,
+    /// A [`Cmd::Hush`] waiting to be applied.
+    hush_pending: bool,
+    /// When outputs muted by [`Cmd::Hush`] get unmuted if no rebuild did it first.
+    hush_until: Option<Instant>,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -344,6 +355,8 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             we_were_default: was_default(&mac.to_string().to_uppercase()),
             wearing: false,
             fast_until: None,
+            hush_pending: false,
+            hush_until: None,
             repair_pending: false,
             rebuild_pending: false,
             last_repair: None,
@@ -357,7 +370,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         info!("[audio {}] guard started", self.mac_str);
         self.startup_cleanup().await;
         while !self.shutdown {
-            let wake = [self.ensure_at, self.next_monitor]
+            let wake = [self.ensure_at, self.next_monitor, self.hush_until]
                 .into_iter()
                 .flatten()
                 .min();
@@ -372,6 +385,10 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 Some(Some(c)) => self.on_cmd(c),
                 Some(None) => self.shutdown = true,
                 None => self.on_timer().await,
+            }
+            if std::mem::take(&mut self.hush_pending) {
+                self.hush().await;
+                self.hush_until = Some(Instant::now() + HUSH_LIMIT);
             }
         }
         info!("[audio {}] guard stopped", self.mac_str);
@@ -480,10 +497,21 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             }
             Cmd::Rebuild => {
                 if self.linked && !self.away {
+                    // Like a take-back: if the AirPods still don't play after the
+                    // rebuild, act on it within about a second, not after four.
+                    self.fast_until = Some(now + FAST_WINDOW);
+                    self.last_ladder = None;
+                    self.ladders_this_link = 0;
+                    self.stall_since = None;
                     self.rebuild_pending = true;
                     if self.ready {
                         self.next_monitor = Some(now);
                     }
+                }
+            }
+            Cmd::Hush => {
+                if self.linked && !self.away {
+                    self.hush_pending = true;
                 }
             }
             Cmd::Shutdown => self.shutdown = true,
@@ -517,6 +545,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         } else if self.next_monitor.is_some_and(|t| t <= now) {
             self.next_monitor = None;
             self.monitor().await;
+        } else if self.hush_until.is_some_and(|t| t <= now) {
+            debug!(
+                "[audio {}] no rebuild came; unmuting the speakers",
+                self.mac_str
+            );
+            self.unmute_hushed().await;
         }
         self.busy = false;
         self.restart = false;
@@ -838,6 +872,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
     /// unmuting before that lets the tail end play on the speakers.
     async fn unhush(&mut self) {
         if self.hushed.is_empty() {
+            self.hush_until = None;
             return;
         }
         let deadline = Instant::now() + UNHUSH_WAIT;
@@ -859,6 +894,11 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             }
             sleep(self.cfg.poll).await;
         }
+        self.unmute_hushed().await;
+    }
+
+    async fn unmute_hushed(&mut self) {
+        self.hush_until = None;
         for sink in std::mem::take(&mut self.hushed) {
             if let Err(e) = self.pulse.set_sink_mute(sink, false).await {
                 debug!(
@@ -1119,6 +1159,19 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         let result = self.apply_profile(&order).await;
         self.restore_streams(&streams).await;
         self.ensure_not_off().await;
+        // The profile is back, but the AirPods can take a few seconds more to accept
+        // audio. Keep the speakers muted until they do; if they don't, recover now.
+        if result.is_ok() && !self.stall_resolved().await {
+            info!(
+                "[audio {}] output rebuilt but the AirPods aren't playing yet, recovering",
+                self.mac_str
+            );
+            self.maybe_run_ladder().await;
+            // A rate-limited ladder leaves the speakers muted; never keep them that way.
+            self.unhush().await;
+            self.last_repair = Some(Instant::now());
+            return;
+        }
         self.unhush().await;
         self.last_repair = Some(Instant::now());
         self.stall_since = None;

@@ -131,6 +131,11 @@ impl AudioGuardHandle {
         self.send(Cmd::Rebuild);
     }
 
+    /// Mute the speakers now: the AirPods output is about to drop (the mic stream stops).
+    pub fn hush(&self) {
+        self.send(Cmd::Hush);
+    }
+
     pub fn health(&self) -> watch::Receiver<AudioHealth> {
         self.health_rx.clone()
     }

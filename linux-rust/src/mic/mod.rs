@@ -185,6 +185,12 @@ impl MicLink for AacpMicLink {
         }
     }
 
+    fn hush_output(&self) {
+        if let Some(audio) = &self.audio {
+            audio.hush();
+        }
+    }
+
     fn rebuild_output(&self) {
         crate::devices::airpods::rebuild_output(self.audio.as_ref());
     }
