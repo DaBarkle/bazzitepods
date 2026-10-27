@@ -95,6 +95,15 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.3.2" date="2026-10-27">
+      <description>
+        <p>AirPods come back when you do.</p>
+        <ul>
+          <li>AirPods that left with you reconnect when you come home, however long you were away</li>
+          <li>AirPods you disconnect on this PC stay disconnected</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.3.1" date="2026-10-27">
       <description>
         <p>More of your AirPods, and clearer battery when they are away from the PC.</p>
