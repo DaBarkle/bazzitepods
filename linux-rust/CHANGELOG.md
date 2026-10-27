@@ -4,6 +4,27 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-10-27
+
+### Added
+- **More of your AirPods' settings**, read from the AirPods themselves: automatic ear
+  detection, Adaptive Audio strength, noise cancellation with one AirPod, which AirPod's
+  microphone to use, and whether to connect to this PC automatically. Each appears only when
+  your model reports it. ([#12])
+- **"In case".** With both pods put away in a closed case, the window and tray say *In case*
+  instead of *Not connected*, and the case's last reading carries the hint *open the lid to
+  update*. ([#12])
+
+### Fixed
+- **Charging now shows when the AirPods are away from this PC.** Readings broadcast by the
+  AirPods (for example pods charging in an open case nearby) were greyed out and their
+  charging bolt hidden whenever the AirPods weren't connected here. Fresh readings are now
+  shown live, charging included. ([#12])
+- When the AirPods disconnect, their last levels turn into *last seen* at once instead of
+  looking live for up to a minute. ([#12])
+- **Personalized Volume shows its real state.** The switch used to start Off after every
+  launch whatever the AirPods were set to. ([#12])
+
 ## [0.3.0] - 2026-10-27
 
 ### Added
@@ -110,4 +131,5 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
+[#12]: https://github.com/DaBarkle/bazzitepods/pull/12
 [#11]: https://github.com/DaBarkle/bazzitepods/pull/11

@@ -143,6 +143,8 @@ struct SlotState {
     aacp_at: Option<Instant>,
     /// Last time any source freshly reported a valid level.
     fresh_at: Option<Instant>,
+    /// Which source gave the current fresh level.
+    fresh_src: Option<BatterySource>,
 }
 
 #[derive(Debug, Clone)]
@@ -197,9 +199,10 @@ impl BatteryTracker {
         &mut self.slots[s as usize]
     }
 
-    fn set_fresh(&mut self, s: Slot, level: u8, charging: bool, now: Instant) {
+    fn set_fresh(&mut self, s: Slot, level: u8, charging: bool, src: BatterySource, now: Instant) {
         let wall = self.wall(now);
         let st = self.slot(s);
+        st.fresh_src = Some(src);
         st.battery.level = Some(level);
         st.battery.charging = charging;
         st.battery.present = true;
@@ -227,10 +230,11 @@ impl BatteryTracker {
             let valid = info.level <= 100;
             match info.status {
                 BatteryStatus::Charging | BatteryStatus::NotCharging if valid => {
-                    self.set_fresh(s, info.level, info.status == BatteryStatus::Charging, now);
+                    let charging = info.status == BatteryStatus::Charging;
+                    self.set_fresh(s, info.level, charging, BatterySource::Aacp, now);
                 }
                 BatteryStatus::Unknown if valid && info.level > 0 => {
-                    self.set_fresh(s, info.level, false, now);
+                    self.set_fresh(s, info.level, false, BatterySource::Aacp, now);
                 }
                 _ => self.set_absent(s),
             }
@@ -263,7 +267,7 @@ impl BatteryTracker {
             if !self.aacp_owns(Slot::Headphone, now)
                 && let Some((l, c)) = valid(r.headphone)
             {
-                self.set_fresh(Slot::Headphone, l, c, now);
+                self.set_fresh(Slot::Headphone, l, c, BatterySource::Ble, now);
                 applied = true;
             }
         } else {
@@ -272,7 +276,7 @@ impl BatteryTracker {
                     continue;
                 }
                 match valid(v) {
-                    Some((l, c)) => self.set_fresh(s, l, c, now),
+                    Some((l, c)) => self.set_fresh(s, l, c, BatterySource::Ble, now),
                     None => self.set_absent(s),
                 }
                 applied = true;
@@ -280,7 +284,9 @@ impl BatteryTracker {
             if !self.aacp_owns(Slot::Case, now) {
                 let any_in_case = r.left_in_case || r.right_in_case;
                 match valid(r.case) {
-                    Some((l, c)) if any_in_case => self.set_fresh(Slot::Case, l, c, now),
+                    Some((l, c)) if any_in_case => {
+                        self.set_fresh(Slot::Case, l, c, BatterySource::Ble, now)
+                    }
                     _ => self.set_absent(Slot::Case),
                 }
                 applied = true;
@@ -298,6 +304,21 @@ impl BatteryTracker {
         if !connected {
             for st in &mut self.slots {
                 st.aacp_at = None;
+            }
+        }
+    }
+
+    /// The AirPods dropped this PC. What the control channel last said becomes "last seen"
+    /// at once (nothing refreshes it any more); readings from adverts stay live until they
+    /// expire, because the AirPods keep advertising wherever they are.
+    pub fn link_lost(&mut self) {
+        self.set_aacp_connected(false);
+        for st in &mut self.slots {
+            if st.fresh_src == Some(BatterySource::Aacp) && st.battery.level.is_some() {
+                st.battery.present = false;
+                st.battery.charging = false;
+                st.battery.stale = true;
+                st.fresh_src = None;
             }
         }
     }
