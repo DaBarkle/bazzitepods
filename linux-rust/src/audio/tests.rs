@@ -1022,3 +1022,15 @@ async fn rebuild_the_airpods_refuse_switches_codec_then_returns_to_aac() {
     let w = lock(&world);
     assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"), "{:?}", w.log);
 }
+
+#[tokio::test]
+async fn a_remembered_fallback_codec_goes_back_to_aac_on_connect() {
+    // WirePlumber saved SBC-XQ from an earlier recovery: the next connect returns to AAC.
+    let mut w = World::new();
+    w.add_card("a2dp-sink-sbc_xq");
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    settle(400).await;
+    let w = lock(&world);
+    assert_eq!(w.active().as_deref(), Some("a2dp-sink-aac"), "{:?}", w.log);
+}
