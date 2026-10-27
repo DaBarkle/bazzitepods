@@ -172,6 +172,14 @@ pub enum Message {
     NothingConnected(Option<String>),
     SavedDevices(HashMap<String, DeviceData>),
     AppleMode(Option<bool>),
+    /// Whether the app can ask for admin rights itself (pkexec on the host).
+    AppleCanChange(bool),
+    /// The Apple device mode switch was flipped: show the confirm step.
+    AppleToggle(bool),
+    AppleCancel,
+    /// "Restart Bluetooth" in the confirm step: password prompt, then restart.
+    AppleConfirm,
+    AppleDone(Result<bool, crate::apple_mode::Failure>),
     CopyAppleCommand,
     TakeAudio,
     SetNothingMode(String, NothingMode),
@@ -224,6 +232,18 @@ impl std::fmt::Display for NothingMode {
     }
 }
 
+/// Where the Apple device mode switch is in its flow.
+#[derive(Debug, Clone, PartialEq)]
+enum AppleFlow {
+    Idle,
+    /// Explains what's about to happen; turning it on (true) or off (false).
+    Confirm(bool),
+    /// Password prompt open or Bluetooth restarting.
+    Working(bool),
+    Done(bool),
+    Failed(String),
+}
+
 pub struct App {
     hub: Hub,
     active_commands: Arc<Mutex<Option<CommandSender>>>,
@@ -250,6 +270,9 @@ pub struct App {
     rename: String,
     /// Bluetooth adapter reports Apple's vendor id (DeviceID spoofing); None = unknown.
     apple_mode: Option<bool>,
+    apple_flow: AppleFlow,
+    /// None until probed; false shows the copy-a-command fallback.
+    apple_can_change: Option<bool>,
     apple_copied: bool,
     rename_status: Option<String>,
     nothing: BTreeMap<String, Option<NothingMode>>,
@@ -298,6 +321,12 @@ impl App {
             taking_audio: None,
             rename: String::new(),
             apple_mode: demo.then_some(false),
+            apple_flow: if demo {
+                demo_apple_flow()
+            } else {
+                AppleFlow::Idle
+            },
+            apple_can_change: demo.then_some(true),
             apple_copied: false,
             rename_status: None,
             nothing: BTreeMap::new(),
@@ -317,7 +346,10 @@ impl App {
         let apple = if demo {
             Task::none()
         } else {
-            load_apple_mode()
+            Task::batch([
+                load_apple_mode(),
+                Task::perform(crate::apple_mode::can_change(), Message::AppleCanChange),
+            ])
         };
         (app, Task::batch([theme, open, saved, apple]))
     }
@@ -539,6 +571,9 @@ impl App {
             Message::ToggleMore => {
                 self.more_open = !self.more_open;
                 self.apple_copied = false;
+                if !matches!(self.apple_flow, AppleFlow::Working(_)) {
+                    self.apple_flow = AppleFlow::Idle;
+                }
                 if self.more_open && !self.demo {
                     load_apple_mode()
                 } else {
@@ -549,6 +584,41 @@ impl App {
                 self.apple_mode = on;
                 Task::none()
             }
+            Message::AppleCanChange(can) => {
+                self.apple_can_change = Some(can);
+                Task::none()
+            }
+            Message::AppleToggle(on) => {
+                if !matches!(self.apple_flow, AppleFlow::Working(_)) {
+                    self.apple_flow = AppleFlow::Confirm(on);
+                }
+                Task::none()
+            }
+            Message::AppleCancel => {
+                self.apple_flow = AppleFlow::Idle;
+                Task::none()
+            }
+            Message::AppleConfirm => {
+                let AppleFlow::Confirm(on) = self.apple_flow else {
+                    return Task::none();
+                };
+                self.apple_flow = AppleFlow::Working(on);
+                if self.demo {
+                    return Task::none();
+                }
+                Task::perform(crate::apple_mode::set(on), Message::AppleDone)
+            }
+            Message::AppleDone(res) => {
+                self.apple_flow = match res {
+                    Ok(on) => {
+                        self.apple_mode = Some(on);
+                        AppleFlow::Done(on)
+                    }
+                    Err(crate::apple_mode::Failure::Cancelled) => AppleFlow::Idle,
+                    Err(e) => AppleFlow::Failed(e.message()),
+                };
+                load_apple_mode()
+            }
             Message::TakeAudio => {
                 self.taking_audio = Some(Instant::now());
                 self.send(ControlCommandIdentifiers::OwnsConnection, 0x01)
@@ -556,9 +626,9 @@ impl App {
             Message::CopyAppleCommand => {
                 self.apple_copied = true;
                 let cmd = if self.apple_mode == Some(true) {
-                    APPLE_MODE_OFF
+                    crate::apple_mode::MANUAL_OFF
                 } else {
-                    APPLE_MODE_ON
+                    crate::apple_mode::MANUAL_ON
                 };
                 iced::clipboard::write(cmd.to_string())
             }
@@ -1046,41 +1116,84 @@ impl App {
         .into()
     }
 
-    /// Opt-in Apple DeviceID ("VendorID spoofing"). The sandboxed app can't edit
-    /// /etc/bluetooth/main.conf, so it hands the user a one-line command instead.
+    /// Opt-in Apple DeviceID ("VendorID spoofing"): a switch, a short confirm step that
+    /// warns about the Bluetooth restart, the system password prompt, then the result.
+    /// Falls back to copying a terminal command when the app can't ask for admin rights.
     fn apple_mode_row(&self) -> Element<'_, Message> {
-        let (state, action) = match self.apple_mode {
-            Some(true) => ("On", "Copy command to turn off"),
-            Some(false) => ("Off", "Copy command to turn on"),
-            None => ("Unknown", "Copy command to turn on"),
+        const CAPTION: &str = "Lets your AirPods switch between this PC and your iPhone or iPad \
+                               the way they do with a Mac, by having this PC introduce itself \
+                               as an Apple device.";
+        let can_change = self.apple_can_change != Some(false);
+        let working = matches!(self.apple_flow, AppleFlow::Working(_));
+        let shown_on = match self.apple_flow {
+            AppleFlow::Confirm(on) | AppleFlow::Working(on) => on,
+            _ => self.apple_mode.unwrap_or(false),
         };
-        let button_label = if self.apple_copied {
+        let toggle = (can_change && !working && self.apple_mode.is_some())
+            .then_some(Message::AppleToggle as fn(bool) -> Message);
+        let header = setting_row("Apple device mode", Some(CAPTION), switch(shown_on, toggle));
+
+        let detail: Option<Element<'_, Message>> = match &self.apple_flow {
+            _ if !can_change => Some(self.apple_manual_fallback()),
+            AppleFlow::Idle if self.apple_mode.is_none() => Some(
+                text("Turn on Bluetooth to change this.")
+                    .size(12)
+                    .style(faint_text)
+                    .into(),
+            ),
+            AppleFlow::Idle => None,
+            AppleFlow::Confirm(on) => Some(apple_confirm(*on)),
+            AppleFlow::Working(_) => Some(apple_note(
+                "Enter your password in the system prompt. Bluetooth restarts right after, \
+                 so your AirPods will drop for a few seconds.",
+                dim_text,
+            )),
+            AppleFlow::Done(true) => Some(apple_note(
+                "Apple device mode is on. Your AirPods will reconnect on their own.",
+                dim_text,
+            )),
+            AppleFlow::Done(false) => Some(apple_note(
+                "Apple device mode is off and your original Bluetooth settings are back.",
+                dim_text,
+            )),
+            AppleFlow::Failed(msg) => Some(apple_note(msg.as_str(), red_text)),
+        };
+        match detail {
+            Some(d) => column![header, d].spacing(10).into(),
+            None => header,
+        }
+    }
+
+    /// No pkexec, or the sandbox can't start host commands: hand over a command instead.
+    fn apple_manual_fallback(&self) -> Element<'_, Message> {
+        let action = if self.apple_mode == Some(true) {
+            "Copy command to turn off"
+        } else {
+            "Copy command to turn on"
+        };
+        let label = if self.apple_copied {
             "Copied. Paste it in a terminal"
         } else {
             action
         };
-        setting_block(
-            "Apple device mode",
-            Some(
-                "Makes this PC introduce itself as an Apple device, so AirPods can stay paired \
-                 with your iPhone and this PC and switch between them. Restarts Bluetooth \
-                 for a few seconds; needs your password once.",
-            ),
-            row![
-                text(state).size(12).font(style::INTER_SEMIBOLD).width(Fill),
-                button(text(button_label).size(12).font(style::INTER_MEDIUM))
-                    .padding(Padding {
-                        top: 6.0,
-                        bottom: 6.0,
-                        left: 12.0,
-                        right: 12.0,
-                    })
-                    .style(style::secondary)
-                    .on_press(Message::CopyAppleCommand),
-            ]
-            .align_y(Center)
-            .into(),
-        )
+        row![
+            text("This build can't ask for your password, so it needs one terminal command.")
+                .size(12)
+                .style(dim_text)
+                .width(Fill),
+            button(text(label).size(12).font(style::INTER_MEDIUM))
+                .padding(Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 12.0,
+                    right: 12.0,
+                })
+                .style(style::secondary)
+                .on_press(Message::CopyAppleCommand),
+        ]
+        .spacing(12)
+        .align_y(Center)
+        .into()
     }
 
     fn more_card(&self) -> Element<'_, Message> {
@@ -1254,29 +1367,31 @@ fn load_saved_devices() -> Task<Message> {
     )
 }
 
-/// Adds Apple's Bluetooth vendor id (0x004C) to BlueZ, keeping a backup of the config.
-const APPLE_MODE_ON: &str = "sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-bazzitepods && \
-sudo sed -i '/^\\[General\\]/a DeviceID = bluetooth:004C:0000:0000' /etc/bluetooth/main.conf && \
-sudo systemctl restart bluetooth";
-const APPLE_MODE_OFF: &str = "sudo sed -i '/^DeviceID = bluetooth:004C:/d' /etc/bluetooth/main.conf && \
-sudo systemctl restart bluetooth";
-
-/// Reads the adapter's modalias: BlueZ reports the configured DeviceID there.
+/// Reads the adapter's modalias: BlueZ reports the DeviceID it's running with there.
 fn load_apple_mode() -> Task<Message> {
-    Task::perform(
-        async {
-            let session = bluer::Session::new().await.ok()?;
-            let adapter = session.default_adapter().await.ok()?;
-            let m = adapter.modalias().await.ok()??;
-            Some(m.vendor == 0x004C)
-        },
-        Message::AppleMode,
-    )
+    Task::perform(crate::apple_mode::status(), Message::AppleMode)
+}
+
+/// Demo/screenshots only: LIBREPODS_UI_APPLE=confirm|working|done|failed.
+fn demo_apple_flow() -> AppleFlow {
+    match std::env::var("LIBREPODS_UI_APPLE").as_deref() {
+        Ok("confirm") => AppleFlow::Confirm(true),
+        Ok("working") => AppleFlow::Working(true),
+        Ok("done") => AppleFlow::Done(true),
+        Ok("failed") => AppleFlow::Failed(crate::apple_mode::Failure::NotAuthorized.message()),
+        _ => AppleFlow::Idle,
+    }
 }
 
 fn dim_text(theme: &Theme) -> text::Style {
     text::Style {
         color: Some(Tokens::of(theme).text_dim),
+    }
+}
+
+fn red_text(theme: &Theme) -> text::Style {
+    text::Style {
+        color: Some(Tokens::of(theme).red),
     }
 }
 
@@ -1375,6 +1490,70 @@ fn mode_tile<'a>(m: ListeningMode, selected: bool, enabled: bool) -> Element<'a,
 }
 
 /// A setting whose control needs the full width: title and caption above it.
+/// The confirm step under the Apple device mode switch.
+fn apple_confirm<'a>(on: bool) -> Element<'a, Message> {
+    let (title, body, action) = if on {
+        (
+            "Turn on Apple device mode?",
+            "Bluetooth will restart, so your AirPods and other Bluetooth devices disconnect \
+             for a few seconds and reconnect on their own. Your system will ask for your \
+             password once.",
+            "Restart Bluetooth",
+        )
+    } else {
+        (
+            "Turn off Apple device mode?",
+            "Your original Bluetooth settings come back. Bluetooth restarts, so devices \
+             disconnect for a few seconds, and your system will ask for your password.",
+            "Turn Off",
+        )
+    };
+    let pad = Padding {
+        top: 7.0,
+        bottom: 7.0,
+        left: 14.0,
+        right: 14.0,
+    };
+    container(
+        column![
+            text(title).size(13).font(style::INTER_SEMIBOLD),
+            text(body).size(12).style(dim_text),
+            row![
+                Space::new().width(Fill),
+                button(text("Cancel").size(12).font(style::INTER_MEDIUM))
+                    .padding(pad)
+                    .style(style::secondary)
+                    .on_press(Message::AppleCancel),
+                button(text(action).size(12).font(style::INTER_SEMIBOLD))
+                    .padding(pad)
+                    .style(style::primary)
+                    .on_press(Message::AppleConfirm),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        ]
+        .spacing(8),
+    )
+    .padding(14)
+    .width(Fill)
+    .style(style::inset)
+    .into()
+}
+
+/// A one-line status under the Apple device mode switch.
+fn apple_note<'a>(msg: &'a str, style: fn(&Theme) -> text::Style) -> Element<'a, Message> {
+    container(text(msg).size(12).style(style))
+        .padding(Padding {
+            top: 10.0,
+            bottom: 10.0,
+            left: 14.0,
+            right: 14.0,
+        })
+        .width(Fill)
+        .style(style::inset)
+        .into()
+}
+
 fn setting_block<'a>(
     title: &'a str,
     caption: Option<&'a str>,

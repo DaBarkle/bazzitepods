@@ -4,6 +4,15 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Apple device mode is now one switch.** Flip it in More options, confirm, and enter
+  your password in the system prompt; BazzitePods makes the change and restarts Bluetooth
+  for you, then shows when it's on. Turning it off restores your original Bluetooth
+  settings. No terminal needed. If the app can't ask for your password (no `pkexec`), it
+  still offers the command to copy.
+
 ## [0.4.0] - 2026-10-27
 
 ### Added

@@ -63,6 +63,12 @@ finish-args:
   - --talk-name=org.freedesktop.Notifications
   # Ear detection: pause/resume media players over MPRIS.
   - --talk-name=org.mpris.MediaPlayer2.*
+  # Apple device mode (Settings): runs one fixed script on the host through
+  # `flatpak-spawn --host pkexec`, which edits /etc/bluetooth/main.conf and restarts
+  # bluetoothd. There is no portal for system config. This lets the app start host
+  # commands as the user; root still needs the user's password in the polkit prompt every
+  # time, and the script is a constant in the binary (see src/apple_mode.rs).
+  - --talk-name=org.freedesktop.Flatpak
 
   # Deliberately absent:
   #  * --socket=session-bus / --socket=system-bus (only the names above are needed)

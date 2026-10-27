@@ -1,3 +1,4 @@
+mod apple_mode;
 mod audio;
 mod autostart;
 mod battery_service;

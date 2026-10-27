@@ -484,3 +484,49 @@ pub fn scroll(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
     s.horizontal_rail = rail;
     s
 }
+
+/// Filled accent button for the one action a sheet asks for (e.g. "Restart Bluetooth").
+pub fn primary(theme: &Theme, status: button::Status) -> button::Style {
+    let t = Tokens::of(theme);
+    let bg = match status {
+        button::Status::Hovered => mix(
+            t.accent,
+            Color {
+                a: 0.12,
+                ..t.on_accent
+            },
+        ),
+        button::Status::Pressed => mix(
+            t.accent,
+            Color {
+                a: 0.12,
+                ..Color::BLACK
+            },
+        ),
+        button::Status::Disabled => Color { a: 0.4, ..t.accent },
+        button::Status::Active => t.accent,
+    };
+    button::Style {
+        background: Some(Background::Color(bg)),
+        text_color: t.on_accent,
+        border: Border {
+            radius: 10.0.into(),
+            ..Default::default()
+        },
+        shadow: Shadow::default(),
+        snap: true,
+    }
+}
+
+/// Inset panel inside a card: a confirm step or a status note under a setting.
+pub fn inset(theme: &Theme) -> container::Style {
+    let t = Tokens::of(theme);
+    container::Style {
+        background: Some(Background::Color(t.surface_alt)),
+        border: Border {
+            radius: 12.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
