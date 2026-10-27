@@ -334,7 +334,14 @@ impl Conn {
     fn open(deadline: Instant) -> Result<Conn, PulseError> {
         let mainloop = Mainloop::new()
             .ok_or_else(|| PulseError::Connect("mainloop creation failed".into()))?;
-        let mut context = Context::new(&mainloop, "BazzitePods")
+        // Inside the Flatpak, the sound server only lets "Manager" clients (mixers, and apps
+        // such as Discord and EasyEffects) change the default mic or move streams; anything
+        // else gets "Access denied" (measured on Bazzite, WirePlumber 0.5.17).
+        let mut props = Proplist::new()
+            .ok_or_else(|| PulseError::Connect("proplist creation failed".into()))?;
+        let _ = props.set_str("application.name", "BazzitePods");
+        let _ = props.set_str("media.category", "Manager");
+        let mut context = Context::new_with_proplist(&mainloop, "BazzitePods", &props)
             .ok_or_else(|| PulseError::Connect("context creation failed".into()))?;
         context
             .connect(None, ContextFlagSet::NOAUTOSPAWN, None)
