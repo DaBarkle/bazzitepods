@@ -5,7 +5,7 @@ pub enum BluetoothUIMessage {
     OpenWindow,
     DeviceConnected(String),    // mac
     DeviceDisconnected(String), // mac
-    #[allow(dead_code)] // Nothing reads the event since settings moved to the hub.
+    #[allow(dead_code)] // Sent for every AACP event; the window reads what it needs from the hub.
     AACPUIEvent(String, AACPEvent), // mac, event
     #[allow(dead_code)] // Reserved for Nothing ANC notifications.
     ATTNotification(String, u16, Vec<u8>), // mac, handle, data
