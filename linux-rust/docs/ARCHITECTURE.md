@@ -105,9 +105,11 @@ and released again when the setting is turned off.
 * **Virtual mic:** pipewire-pulse `module-pipe-source` named `bazzitepods_airpods_mic`
   ("AirPods mic"), reading that FIFO from the app's runtime directory.
 * **Switching (`switch.rs`):** the desk mic is remembered on disk (`mic_switch.json`, for
-  crash recovery), the virtual mic becomes the default, and recordings pinned to the desk
-  mic are moved after 1.5 s. Going back reverses it in order: desk mic default, move those
-  apps back, STOP, unload, restore Conversation Awareness (paused while the mic runs), then
+  crash recovery), and the virtual mic becomes the default. After 1.5 s, and every 2 s
+  after that, every app still recording from another mic is moved to it: apps set to a mic
+  by name, and apps on a virtual mic such as EasyEffects' (EasyEffects records the desk mic
+  natively, so its own input never shows up as a recording). Going back reverses it in
+  order: desk mic default, move those apps back, STOP, unload, restore Conversation Awareness (paused while the mic runs), then
   `AudioGuardHandle::rebuild`.
 * **The rebuild is required:** after STOP the right pod goes silent while the transport
   still looks healthy (measured 2026-10-27). One off -> A2DP toggle fixes it.
