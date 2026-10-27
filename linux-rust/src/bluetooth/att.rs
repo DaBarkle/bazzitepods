@@ -1,3 +1,7 @@
+// AirPods ATT features (transparency, loud sound reduction, hearing aid) need a BlueZ
+// config change and are not wired up yet; their handles and helpers are kept for that.
+#![allow(dead_code)]
+
 use bluer::l2cap::{SeqPacket, Socket, SocketAddr};
 use bluer::{Address, AddressType, Error, Result};
 use hex;
