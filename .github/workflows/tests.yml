@@ -19,11 +19,9 @@ on:
       - 'linux-rust/**'
       - '!linux-rust/**/*.md'
       - '.github/workflows/tests.yml'
+  # Every pull request runs this, docs-only ones included: it is a required check on main,
+  # and a check that never starts would leave the PR unmergeable.
   pull_request:
-    paths:
-      - 'linux-rust/**'
-      - '!linux-rust/**/*.md'
-      - '.github/workflows/tests.yml'
   workflow_dispatch:
 
 concurrency:
