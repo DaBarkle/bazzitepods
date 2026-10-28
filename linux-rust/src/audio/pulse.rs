@@ -431,7 +431,10 @@ impl Drop for Conn {
     }
 }
 
-fn success_slot() -> (Rc<Cell<Option<bool>>>, Box<dyn FnMut(bool) + 'static>) {
+/// Where a PulseAudio success callback leaves its result, and the callback that fills it.
+type SuccessSlot = (Rc<Cell<Option<bool>>>, Box<dyn FnMut(bool) + 'static>);
+
+fn success_slot() -> SuccessSlot {
     let slot = Rc::new(Cell::new(None));
     let s = slot.clone();
     (slot, Box::new(move |ok| s.set(Some(ok))))
@@ -563,8 +566,8 @@ pub fn set_card_profile_sync(
 
 pub fn set_default_sink_sync(name: &str, timeout: Duration) -> Result<(), PulseError> {
     let mut conn = Conn::open(Instant::now() + timeout)?;
-    let (slot, mut cb) = success_slot();
-    let _op = conn.context.set_default_sink(name, move |ok| cb(ok));
+    let (slot, cb) = success_slot();
+    let _op = conn.context.set_default_sink(name, cb);
     conn.wait_success("set default sink", &slot)
 }
 

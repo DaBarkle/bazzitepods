@@ -1,6 +1,6 @@
 //! Fake states for `--demo`, so the design can be tried without AirPods.
 
-use crate::overlay_protocol::{ComponentState, OverlayCommand, OverlayState};
+use kase::overlay_protocol::{ComponentState, OverlayCommand, OverlayState};
 
 fn c(level: u8, charging: bool, present: bool) -> Option<ComponentState> {
     Some(ComponentState {
@@ -79,10 +79,10 @@ pub fn states() -> Vec<(&'static str, OverlayState)> {
 /// A scripted run through every island state, for recordings: (seconds from start,
 /// command). Starts in compact mode.
 pub fn story() -> Vec<(f32, OverlayCommand)> {
-    use crate::overlay_protocol::ListeningMode;
+    use kase::overlay_protocol::ListeningMode;
     let mut s = buds("AirPods 4", "airpods4_anc");
     s.listening_mode = Some(ListeningMode::NoiseCancellation);
-    s.mic = Some(crate::overlay_protocol::MicChoice::Desk);
+    s.mic = Some(kase::overlay_protocol::MicChoice::Desk);
     let mut out = vec![];
     let mut at = |t: f32, state: &OverlayState| {
         out.push((
@@ -118,7 +118,7 @@ pub fn story() -> Vec<(f32, OverlayCommand)> {
     s.mic_failures += 1;
     at(33.5, &s);
     // The left stem hold swaps to the AirPods mic.
-    s.mic = Some(crate::overlay_protocol::MicChoice::AirPods);
+    s.mic = Some(kase::overlay_protocol::MicChoice::AirPods);
     at(37.0, &s);
     // Disconnect.
     s.connected = false;

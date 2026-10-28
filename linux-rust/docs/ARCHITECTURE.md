@@ -18,25 +18,30 @@ and keeps audio working across range loss. No user input should ever be required
 
 ## Modules (src/)
 
+The app is a library (`src/lib.rs`, crate `kase`) plus two binaries: `src/main.rs` (arguments,
+logging, window or headless) and `src/bin/librepods-overlay/` (the island). Large modules are
+folders whose `mod.rs` holds the state and entry points, with one file per job beside it.
+
 | Module | Owner | Purpose |
 |---|---|---|
 | `core/battery.rs` | battery | Pure battery model: merges AACP + BLE readings per component, source arbitration, stale handling. Unit tested. |
 | `core/models.rs` | battery | AirPods model table (model numbers, BLE product IDs) -> `ModelInfo` with capabilities. |
-| `core/hub.rs` | lifecycle | `AppSnapshot` published on a `tokio::sync::watch` channel. UI, tray and overlay only read from it. |
-| `bluetooth/aacp.rs` | battery | AACP L2CAP protocol. Parsing must be bounds-checked. |
+| `hub.rs` | lifecycle | `AppSnapshot` published on a `tokio::sync::watch` channel. UI, tray and overlay only read from it. |
+| `store.rs` | lifecycle | The app's JSON files (`devices.json`, settings, case battery): durable atomic writes, `devices.json` updates under a lock. |
+| `bluetooth/aacp/` | battery | AACP L2CAP protocol: connection (`mod.rs`), `receive.rs`, `commands.rs`, and the bounds-checked parsers in `parse.rs`. |
 | `bluetooth/le.rs` | battery | BLE proximity adverts -> `BleBatteryReading`. No auto-connect via `bluetoothctl`. |
-| `audio/` | audio | `AudioGuard`: per-device state machine that keeps A2DP alive (reconnect bug fix). |
+| `audio/` | audio | `AudioGuard` (`audio/guard/`): per-device state machine that keeps A2DP alive. `decide.rs` holds the pure decisions; `monitor.rs`, `rebuild.rs` and `hush.rs` the ready state, recovery and muting. |
 | `mic/` | audio | The AirPods mic switch: the AACP 0x58 AAC-ELD mic stream, its FFmpeg decoder (loaded at run time), the virtual "AirPods mic" and the desk/AirPods state machine. See "AirPods mic switch" below. |
 | `media_controller.rs` | audio | MPRIS pause/resume, conversational awareness volume. Never sets the card to `off`. |
-| `devices/airpods.rs`, `main.rs` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. |
-| `overlay_client.rs` + `src/bin/librepods-overlay.rs` | overlay | Spawns and feeds the overlay process over stdin (JSON lines). |
+| `supervisor.rs`, `devices/airpods/` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. The AirPods session splits into `controls.rs` (handshake, settings, AACP events) and `route.rs` (who owns the audio). |
+| `overlay_client.rs` + `src/bin/librepods-overlay/` | overlay | Spawns and feeds the overlay process over stdin (JSON lines, `overlay_protocol.rs`). |
 | `autostart.rs` | packaging | Requests autostart through the XDG Background portal. |
-| `ui/` | ui | Main window and tray, reading `AppSnapshot`. |
+| `ui/` | ui | Tray and main window (`ui/window/`: one file per tab plus shared `controls.rs`), reading `AppSnapshot`. |
 
 ## Data flow
 
 ```
-BlueZ (D-Bus) ──> supervisor (main.rs) ──spawns──> AirPodsDevice task (per MAC)
+BlueZ (D-Bus) ──> supervisor (supervisor.rs) ──spawns──> AirPodsDevice task (per MAC)
                                                   ├─ AACPManager (L2CAP PSM 0x1001) ─┐
 BLE adverts ──> le.rs ──BleBatteryReading────────────────────────────────────────────┤
                                                   ├─ AudioGuard (libpulse + BlueZ)  ─┤

@@ -21,6 +21,8 @@ impl Display for DeviceType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
+// Nearly every entry is AirPods; boxing it to shrink the rare legacy variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 pub enum DeviceInformation {
     AirPods(AirPodsInformation),
     /// Kept as-is from a LibrePods `devices.json`; see [`DeviceType::Nothing`].

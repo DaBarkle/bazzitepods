@@ -14,24 +14,13 @@
 //! it redraws only during a transition, paced by the compositor's frame callbacks, and
 //! otherwise sleeps until the next thing it has to do (no polling).
 
-#[path = "../overlay_protocol.rs"]
-mod overlay_protocol;
-
-#[path = "librepods-overlay/demo.rs"]
 mod demo;
-#[path = "librepods-overlay/glyphs.rs"]
 mod glyphs;
-#[path = "librepods-overlay/island.rs"]
 mod island;
-#[path = "librepods-overlay/logic.rs"]
 mod logic;
-#[path = "librepods-overlay/probe.rs"]
 mod probe;
-#[path = "librepods-overlay/purist.rs"]
 mod purist;
-#[path = "librepods-overlay/spring.rs"]
 mod spring;
-#[path = "librepods-overlay/view.rs"]
 mod view;
 
 use std::io::BufRead;
@@ -50,11 +39,11 @@ use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 use iced_layershell::to_layer_message;
 use log::{debug, info, warn};
 
-use logic::{Controller, SurfaceAction};
-use overlay_protocol::{
+use kase::overlay_protocol::{
     EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayMode, OverlayPosition, OverlaySize,
     OverlayState, OverlayStyle,
 };
+use logic::{Controller, SurfaceAction};
 
 const NAMESPACE: &str = "librepods-overlay";
 
@@ -501,11 +490,9 @@ fn main() -> ExitCode {
     // forcing the integrated one breaks on hybrid PCs where the compositor runs on the
     // discrete card, because it can't import buffers drawn on the other GPU. Both can be
     // overridden from outside (WGPU_BACKEND, WGPU_POWER_PREF).
-    for (key, value) in [("WGPU_BACKEND", "vulkan")] {
-        if std::env::var_os(key).is_none() {
-            // SAFETY: first thing in main, before any other thread exists.
-            unsafe { std::env::set_var(key, value) };
-        }
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe { std::env::set_var("WGPU_BACKEND", "vulkan") };
     }
 
     let (args, probe_only) = match parse_args() {
@@ -554,10 +541,10 @@ fn main() -> ExitCode {
         id: Some(NAMESPACE.into()),
         // Inter for the purist island (the classic one keeps the system sans).
         fonts: vec![
-            include_bytes!("../../assets/font/Inter-Medium.ttf")
+            include_bytes!("../../../assets/font/Inter-Medium.ttf")
                 .as_slice()
                 .into(),
-            include_bytes!("../../assets/font/Inter-SemiBold.ttf")
+            include_bytes!("../../../assets/font/Inter-SemiBold.ttf")
                 .as_slice()
                 .into(),
         ],

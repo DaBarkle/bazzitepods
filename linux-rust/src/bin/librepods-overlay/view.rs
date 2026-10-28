@@ -19,8 +19,8 @@ use crate::island::{
     RIGHT, Tint, ease_out_back, shape, text_width,
 };
 use crate::logic::Controller;
-use crate::overlay_protocol::{ComponentState, OverlayPosition, OverlayState, OverlayStyle};
 use crate::purist;
+use kase::overlay_protocol::{ComponentState, OverlayPosition, OverlayState, OverlayStyle};
 
 /// Transparent room around the island for its shadow.
 pub const PAD: f32 = 14.0;
@@ -345,7 +345,7 @@ fn key_color(content: Option<&Content>) -> Color {
             Alert::Charging(_) => Some(GREEN),
             Alert::Low(_) => Some(RED),
             Alert::Elsewhere(_) | Alert::Back => Some(BLUE),
-            Alert::Mic(crate::overlay_protocol::MicChoice::AirPods) => Some(ORANGE),
+            Alert::Mic(kase::overlay_protocol::MicChoice::AirPods) => Some(ORANGE),
             _ => None,
         },
         _ => None,

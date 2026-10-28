@@ -7,7 +7,7 @@ use crate::island::{
     ALERT_MAX_W, Alert, Content, EXPANDED_H, EXPANDED_W_BUDS, Motion, Parts, display_name,
     elsewhere_label, glow_for, shape,
 };
-use crate::overlay_protocol::{
+use kase::overlay_protocol::{
     ComponentState, OverlayCommand, OverlayConfig, OverlayMode, OverlayState, OverlayStyle,
 };
 

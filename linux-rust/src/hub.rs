@@ -134,6 +134,12 @@ pub struct Hub {
     tx: watch::Sender<AppSnapshot>,
 }
 
+impl Default for Hub {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Hub {
     pub fn new() -> Self {
         let (tx, _rx) = watch::channel(AppSnapshot::default());

@@ -11,6 +11,7 @@ use crate::hub::{Hub, LinkState};
 use bluer::Address;
 use log::debug;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 use tokio::sync::mpsc;
 
@@ -31,7 +32,7 @@ pub struct BatteryService {
 impl BatteryService {
     pub fn spawn(hub: Hub) -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
-        tokio::spawn(run(hub, rx));
+        tokio::spawn(run(hub, rx, case_cache_path()));
         Self { tx }
     }
 
@@ -42,7 +43,7 @@ impl BatteryService {
 
 /// Last real case level per AirPods, so "Case 53% · 2h ago" survives a restart. The case
 /// only reports while a pod sits in it, so this is often the only value there is.
-fn case_cache_path() -> std::path::PathBuf {
+fn case_cache_path() -> PathBuf {
     crate::utils::get_devices_path().with_file_name("case_battery.json")
 }
 
@@ -53,8 +54,8 @@ struct CachedCase {
     at: u64,
 }
 
-fn load_case_cache() -> HashMap<String, CachedCase> {
-    std::fs::read_to_string(case_cache_path())
+fn load_case_cache(path: &Path) -> HashMap<String, CachedCase> {
+    std::fs::read_to_string(path)
         .ok()
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default()
@@ -74,9 +75,9 @@ fn tracker_for<'a>(
     })
 }
 
-async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
+async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>, cache_path: PathBuf) {
     let mut trackers: HashMap<Address, BatteryTracker> = HashMap::new();
-    let mut case_cache = load_case_cache();
+    let mut case_cache = load_case_cache(&cache_path);
     // Periodic tick so staleness (e.g. AACP silent for 60 s) is re-evaluated without new input.
     let mut tick = tokio::time::interval(std::time::Duration::from_secs(15));
     loop {
@@ -141,7 +142,7 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
                 if changed {
                     case_cache.insert(mac_s.clone(), CachedCase { level, at });
                     if let Ok(json) = serde_json::to_string(&case_cache)
-                        && let Err(e) = crate::store::write_atomic(&case_cache_path(), &json)
+                        && let Err(e) = crate::store::write_atomic(&cache_path, &json)
                     {
                         debug!("could not save case battery: {e}");
                     }
@@ -186,3 +187,7 @@ fn known_name(hub: &Hub, mac: &str) -> String {
     }
     crate::devices::airpods::saved_device_name(mac).unwrap_or_else(|| "AirPods".to_string())
 }
+
+#[cfg(test)]
+#[path = "battery_service_tests.rs"]
+mod service_tests;

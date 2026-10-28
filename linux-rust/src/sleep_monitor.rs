@@ -21,7 +21,7 @@ pub fn spawn(kick_tx: UnboundedSender<Kick>) {
 async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {
     let (resource, conn) = dbus_tokio::connection::new_system_sync()?;
     // The resource future only ends when the connection is lost.
-    let lost = tokio::spawn(async move { resource.await });
+    let lost = tokio::spawn(resource);
 
     let rule = MatchRule::new_signal("org.freedesktop.login1.Manager", "PrepareForSleep");
     let tx = kick_tx.clone();

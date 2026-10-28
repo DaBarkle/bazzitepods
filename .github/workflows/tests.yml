@@ -35,8 +35,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Lines covered by tests, in percent. 45.2% when this was set up (2026-10-25).
-  COVERAGE_FLOOR: 44
+  # Lines covered by tests, in percent. 45.2% when this was set up (2026-10-25), 47.6% on
+  # 2026-10-28 after the restructure.
+  COVERAGE_FLOOR: 47
 
 jobs:
   test:
@@ -61,7 +62,7 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: llvm-tools-preview
+          components: llvm-tools-preview, clippy, rustfmt
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@v2
@@ -75,6 +76,12 @@ jobs:
         with:
           workspaces: linux-rust
           shared-key: tests
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Lint
+        run: cargo clippy --all-targets --locked -- -D warnings
 
       - name: Run tests with coverage
         run: |

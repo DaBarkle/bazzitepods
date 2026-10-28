@@ -323,6 +323,7 @@ impl BatteryTracker {
         }
     }
 
+    #[cfg(test)]
     pub fn aacp_connected(&self) -> bool {
         self.aacp_connected
     }
@@ -361,6 +362,7 @@ impl BatteryTracker {
     }
 
     /// Forget everything (e.g. a different device).
+    #[cfg(test)]
     pub fn reset(&mut self) {
         self.slots = Default::default();
         self.source = None;
@@ -374,14 +376,6 @@ impl BatteryTracker {
             headphone: self.slots[Slot::Headphone as usize].battery.clone(),
             source: self.source,
         }
-    }
-
-    pub fn min_pod_level(&self) -> Option<u8> {
-        self.snapshot().min_pod_level()
-    }
-
-    pub fn is_low(&self, threshold: u8) -> bool {
-        self.snapshot().is_low(threshold)
     }
 }
 
@@ -614,11 +608,11 @@ mod tests {
         let (mut t, t0, _) = setup();
         t.set_aacp_connected(true);
         t.apply_aacp(&[bi(Left, 10, Charging), bi(Right, 30, NotCharging)], t0);
-        assert_eq!(t.min_pod_level(), Some(10));
-        assert!(!t.is_low(15), "charging pod is not low");
-        assert!(t.is_low(30));
+        assert_eq!(t.snapshot().min_pod_level(), Some(10));
+        assert!(!t.snapshot().is_low(15), "charging pod is not low");
+        assert!(t.snapshot().is_low(30));
         t.apply_aacp(&[bi(Left, 10, NotCharging), bi(Right, 30, NotCharging)], t0);
-        assert!(t.is_low(15));
+        assert!(t.snapshot().is_low(15));
         assert!(!t.snapshot().left.charging);
     }
 
