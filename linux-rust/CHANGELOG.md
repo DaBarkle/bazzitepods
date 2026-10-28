@@ -63,6 +63,11 @@ All notable changes to BazzitePods are documented here. The format follows
   across reconnects. A refused restart now switches codec once to get the sound back
   within about two seconds (instead of a second, slower reset), and BazzitePods
   returns to AAC as soon as nothing is playing. ([#22])
+- **Battery and connection status can't silently stop updating any more.** After a
+  reconnect, the AirPods' control connection could stop responding while music kept
+  playing, so the app showed them disconnected with no battery. BazzitePods now notices
+  when that connection stalls and reopens it on its own within about 20 seconds, and
+  sending to the AirPods no longer blocks their battery and ear reports. ([#22])
 - The speakers are never left muted if BazzitePods stops in the middle of a switch,
   for example when the PC goes to sleep. ([#22])
 

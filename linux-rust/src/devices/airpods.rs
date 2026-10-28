@@ -49,6 +49,39 @@ const RETRY_DELAYS: [u64; 6] = [1, 2, 3, 5, 8, 13];
 const HEALTH_INTERVAL: Duration = Duration::from_secs(2);
 /// When the stem claim is sent a second time after connecting.
 const CLAIM_RESEND_AFTER: Duration = Duration::from_secs(6);
+/// A session step that takes longer than this is stuck: the control channel is dropped
+/// and opened again, so battery and controls come back without restarting the app.
+const SESSION_STUCK: Duration = Duration::from_secs(20);
+
+/// What the session is doing right now, for the stuck-session watchdog.
+#[derive(Clone, Default)]
+struct Progress(Arc<std::sync::Mutex<Option<(&'static str, Instant)>>>);
+
+impl Progress {
+    fn busy(&self, step: &'static str) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((step, Instant::now()));
+    }
+
+    fn idle(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// The step the session has been on for longer than `limit`, if any.
+    fn stuck(&self, limit: Duration) -> Option<&'static str> {
+        let current = *self.0.lock().unwrap_or_else(|e| e.into_inner());
+        current.and_then(|(step, since)| (since.elapsed() >= limit).then_some(step))
+    }
+
+    /// Resolves with the step once one has taken longer than `limit`.
+    async fn watch(&self, limit: Duration) -> &'static str {
+        loop {
+            sleep(limit / 4).await;
+            if let Some(step) = self.stuck(limit) {
+                return step;
+            }
+        }
+    }
+}
 
 pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: CancellationToken) {
     let mac_s = mac.to_string();
@@ -107,7 +140,14 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         };
         attempt = 0;
 
-        session(mac, &name, &aacp, &ctx, &media, audio.as_ref(), &cancel).await;
+        let progress = Progress::default();
+        tokio::select! {
+            _ = session(mac, &name, &aacp, &ctx, &media, audio.as_ref(), &cancel, &progress) => {}
+            step = progress.watch(SESSION_STUCK) => warn!(
+                "Control channel to {} stopped responding (stuck in {} for over {:?}); reconnecting",
+                mac_s, step, SESSION_STUCK
+            ),
+        }
 
         aacp.shutdown().await;
         media.lock().await.stop_playback_listener().await;
@@ -200,9 +240,11 @@ async fn session(
     media: &Arc<Mutex<MediaController>>,
     audio: Option<&AudioGuardHandle>,
     cancel: &CancellationToken,
+    progress: &Progress,
 ) {
     let mac_s = mac.to_string();
     let mut tasks = JoinSet::new();
+    progress.busy("handshake");
 
     let (event_tx, mut event_rx) = mpsc::unbounded_channel();
     aacp.set_event_channel(event_tx).await;
@@ -260,6 +302,7 @@ async fn session(
         });
     }
 
+    progress.busy("subscribing to controls");
     subscribe_controls(aacp, ctx, &mac_s, name, media, audio, &route, &mut tasks).await;
 
     let mut stems = StemSettings::read();
@@ -270,12 +313,14 @@ async fn session(
     let mic = spawn_mic_switch(aacp, audio, ctx, &mac_s, name);
     let mut mic_requests = crate::mic::subscribe_requests();
 
+    progress.busy("starting the playback listener");
     {
         let controller = media.lock().await;
         controller
             .start_playback_listener(aacp.clone(), command_tx.clone())
             .await;
     }
+    progress.idle();
 
     ctx.battery.send(BatteryInput::AacpLink(mac, true));
     ctx.hub.set_link(&mac_s, LinkState::Connected);
@@ -294,6 +339,7 @@ async fn session(
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = health.tick() => {
+                progress.busy("health check");
                 if !aacp.is_connected().await {
                     break;
                 }
@@ -321,11 +367,13 @@ async fn session(
                 }
             }
             _ = route_watch.tick() => {
+                progress.busy("watching the audio route");
                 watch_route(aacp, ctx, &mac_s, &route, &command_tx).await;
                 keep_mic_allowed(aacp, ctx, &mac_s, &route, &mic).await;
             }
             event = event_rx.recv() => {
                 let Some(event) = event else { break };
+                progress.busy("handling an AirPods event");
                 handle_event(event, mac, name, aacp, ctx, media, audio, &command_tx, &route, &stems, &mic).await;
                 keep_mic_allowed(aacp, ctx, &mac_s, &route, &mic).await;
             }
@@ -334,11 +382,13 @@ async fn session(
                     continue;
                 }
                 if stems.mic_switch {
+                    progress.busy("handling a mic request");
                     let allowed = mic_allowed(aacp, ctx, &mac_s, &route).await;
                     mic.request(MicRequest::Toggle { allowed });
                 }
             }
         }
+        progress.idle();
     }
     // Back to the desk mic before the control channel goes (STOP needs it).
     mic.shutdown().await;
@@ -1303,6 +1353,29 @@ pub struct AirPodsInformation {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_step_that_never_finishes_is_reported_as_stuck() {
+        let progress = Progress::default();
+        progress.busy("handshake");
+        progress.idle();
+        progress.busy("watching the audio route");
+        let limit = Duration::from_millis(200);
+        let step = tokio::time::timeout(Duration::from_secs(2), progress.watch(limit))
+            .await
+            .expect("stuck step reported");
+        assert_eq!(step, "watching the audio route");
+    }
+
+    #[tokio::test]
+    async fn an_idle_session_is_never_stuck() {
+        let progress = Progress::default();
+        progress.busy("health check");
+        progress.idle();
+        let limit = Duration::from_millis(100);
+        let watch = tokio::time::timeout(Duration::from_millis(500), progress.watch(limit));
+        assert!(watch.await.is_err());
+    }
 
     fn source(mac: &str, r#type: AudioSourceType) -> AudioSource {
         AudioSource {
