@@ -4,18 +4,22 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-10-28
 
 ### Changed
-- **BazzitePods is now Kase**, "AirPods for KDE Plasma". The name says who it's for
-  without tying it to one distro: it works on any KDE Plasma desktop, Bazzite included.
-  The app id is now `io.github.dabarkle.Kase` and the release bundle is `Kase.flatpak`.
+- **BazzitePods is now Kase**, "AirPods for KDE Plasma". The new name says who the app is
+  for without tying it to one distro: it works on any KDE Plasma desktop, Bazzite
+  included. The app id is now `io.github.dabarkle.Kase`, the release bundle is
+  `Kase.flatpak`, and the repository is now `DaBarkle/kase` (old links redirect). ([#23])
 - **Updating moves you across by itself.** Run the install command as usual: it copies
   your settings, saved AirPods and Flatpak overrides from BazzitePods to Kase, then
   removes BazzitePods and its old autostart entry. Apple device mode is a system setting
-  and stays as it is.
-- The README is rewritten from scratch, with new screenshots and animations of the
-  current app.
+  and stays as it is. ([#23])
+- **A new README,** rewritten from scratch with new screenshots and animations of the
+  current app. ([#23])
+
+### Notes
+- Nothing else about the app changes in this release: same features, same settings.
 
 ## [0.5.0] - 2026-10-28
 
@@ -270,3 +274,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#15]: https://github.com/DaBarkle/kase/pull/15
 [#12]: https://github.com/DaBarkle/kase/pull/12
 [#11]: https://github.com/DaBarkle/kase/pull/11
+[#23]: https://github.com/DaBarkle/kase/pull/23

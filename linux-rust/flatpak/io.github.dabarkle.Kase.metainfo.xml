@@ -97,6 +97,16 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.6.0" date="2026-10-28">
+      <description>
+        <p>BazzitePods is now Kase: AirPods for KDE Plasma.</p>
+        <ul>
+          <li>New name and app id; updating with the install command moves your settings and saved AirPods across</li>
+          <li>The old BazzitePods app and its autostart entry are removed for you</li>
+          <li>No other changes: same features, same settings</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.5.0" date="2026-10-28">
       <description>
         <p>A purist Dynamic Island, a redesigned app window, one-click Apple device mode, and a mic switch that works on AirPods 4.</p>
