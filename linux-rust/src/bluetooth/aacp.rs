@@ -372,6 +372,12 @@ pub struct AACPManager {
     tasks: Arc<Mutex<JoinSet<()>>>,
 }
 
+impl Default for AACPManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AACPManager {
     pub fn new() -> Self {
         AACPManager {
@@ -842,9 +848,10 @@ impl AACPManager {
         key_types: Vec<ProximityKeyType>,
     ) -> Result<()> {
         let opcode = [opcodes::PROXIMITY_KEYS_REQ, 0x00];
-        let mut data = Vec::with_capacity(2);
-        data.push(key_types.iter().fold(0u8, |acc, kt| acc | (*kt as u8)));
-        data.push(0x00);
+        let data = [
+            key_types.iter().fold(0u8, |acc, kt| acc | (*kt as u8)),
+            0x00,
+        ];
         let packet = [opcode.as_slice(), data.as_slice()].concat();
         self.send_data_packet(&packet).await
     }

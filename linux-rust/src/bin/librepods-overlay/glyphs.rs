@@ -5,7 +5,7 @@ use std::f32::consts::PI;
 use iced::widget::canvas::{self, Frame, Path, Stroke, gradient, path::Arc, stroke};
 use iced::{Color, Point, Size, border::Radius};
 
-use crate::overlay_protocol::ListeningMode;
+use kase::overlay_protocol::ListeningMode;
 
 /// Lightning bolt centered at `c`, about 12 px tall at scale 1.
 pub fn draw_bolt(frame: &mut Frame, c: Point, s: f32, color: Color) {

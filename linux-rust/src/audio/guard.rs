@@ -997,10 +997,11 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             }
             sleep(self.cfg.poll).await;
         };
-        if self.we_were_default && snap.default_sink.as_deref() != Some(sink.name.as_str()) {
-            if let Err(e) = self.pulse.set_default_sink(&sink.name).await {
-                debug!("[audio {}] set default sink failed: {}", self.mac_str, e);
-            }
+        if self.we_were_default
+            && snap.default_sink.as_deref() != Some(sink.name.as_str())
+            && let Err(e) = self.pulse.set_default_sink(&sink.name).await
+        {
+            debug!("[audio {}] set default sink failed: {}", self.mac_str, e);
         }
         for input in snap
             .sink_inputs

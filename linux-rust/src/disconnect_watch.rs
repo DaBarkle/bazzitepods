@@ -106,7 +106,7 @@ where
 async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {
     let (resource, conn) = dbus_tokio::connection::new_system_sync()?;
     // The resource future only ends when the connection is lost.
-    let lost = tokio::spawn(async move { resource.await });
+    let lost = tokio::spawn(resource);
 
     let rule = MatchRule::new_signal("org.bluez.Device1", "Disconnected");
     let _match = conn

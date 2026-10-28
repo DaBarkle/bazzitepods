@@ -8,9 +8,6 @@
 //! exits with code 3 (no layer-shell, e.g. GNOME), so the app can fall back to
 //! desktop notifications (check [`OverlayClient::unsupported`]).
 
-// Integrated by the main app; not every helper is used yet.
-#![allow(dead_code)]
-
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::PathBuf;
@@ -23,12 +20,7 @@ use std::time::{Duration, Instant};
 
 use log::{debug, info, warn};
 
-// Re-exported so callers only need `overlay_client::*`.
-#[allow(unused_imports)]
-pub use crate::overlay_protocol::{
-    ComponentState, EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayMode, OverlayPosition,
-    OverlayState,
-};
+use crate::overlay_protocol::{EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayState};
 
 pub const OVERLAY_BIN: &str = "librepods-overlay";
 
@@ -45,7 +37,6 @@ enum Msg {
 pub struct OverlayClient {
     tx: Sender<Msg>,
     unsupported: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -59,7 +50,6 @@ impl OverlayClient {
     fn spawn_with_binary(config: OverlayConfig, binary: Option<PathBuf>) -> OverlayClient {
         let (tx, rx) = mpsc::channel();
         let unsupported = Arc::new(AtomicBool::new(false));
-        let running = Arc::new(AtomicBool::new(false));
         let sup = Supervisor {
             binary,
             config,
@@ -71,7 +61,6 @@ impl OverlayClient {
             next_start: Instant::now(),
             backoff: Duration::from_secs(1),
             unsupported: unsupported.clone(),
-            running: running.clone(),
             late_retries: 0,
             quick_exits: 0,
             gave_up: false,
@@ -91,7 +80,6 @@ impl OverlayClient {
         OverlayClient {
             tx,
             unsupported,
-            running,
             thread,
         }
     }
@@ -130,11 +118,6 @@ impl OverlayClient {
     /// Wayland, or the binary is missing). Use desktop notifications instead.
     pub fn unsupported(&self) -> bool {
         self.unsupported.load(Ordering::SeqCst)
-    }
-
-    /// True while an overlay process is alive.
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
     }
 
     /// Asks the overlay to quit and stops the supervisor. Does not block.
@@ -190,7 +173,6 @@ struct Supervisor {
     next_start: Instant,
     backoff: Duration,
     unsupported: Arc<AtomicBool>,
-    running: Arc<AtomicBool>,
     /// Retries after an "unsupported" exit. At login autostart the compositor socket may not be
     /// ready yet, which looks the same as a compositor without layer-shell.
     late_retries: u8,
@@ -270,7 +252,6 @@ impl Supervisor {
                 self.stdin = child.stdin.take();
                 self.child = Some(child);
                 self.started_at = Some(Instant::now());
-                self.running.store(true, Ordering::SeqCst);
                 let replay = [
                     Some(OverlayCommand::Config(self.config.clone())),
                     self.state
@@ -332,7 +313,6 @@ impl Supervisor {
         };
         self.child = None;
         self.stdin = None;
-        self.running.store(false, Ordering::SeqCst);
         if status.code() == Some(EXIT_UNSUPPORTED) {
             info!("overlay: not supported by this compositor; falling back to notifications");
             self.unsupported.store(true, Ordering::SeqCst);
@@ -387,7 +367,6 @@ impl Supervisor {
                 }
             }
         }
-        self.running.store(false, Ordering::SeqCst);
     }
 }
 
@@ -459,7 +438,6 @@ mod tests {
             next_start: Instant::now(),
             backoff: Duration::from_secs(1),
             unsupported: Arc::new(AtomicBool::new(false)),
-            running: Arc::new(AtomicBool::new(false)),
             late_retries: 0,
             quick_exits: 0,
             gave_up: false,

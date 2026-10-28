@@ -14,24 +14,13 @@
 //! it redraws only during a transition, paced by the compositor's frame callbacks, and
 //! otherwise sleeps until the next thing it has to do (no polling).
 
-#[path = "../overlay_protocol.rs"]
-mod overlay_protocol;
-
-#[path = "librepods-overlay/demo.rs"]
 mod demo;
-#[path = "librepods-overlay/glyphs.rs"]
 mod glyphs;
-#[path = "librepods-overlay/island.rs"]
 mod island;
-#[path = "librepods-overlay/logic.rs"]
 mod logic;
-#[path = "librepods-overlay/probe.rs"]
 mod probe;
-#[path = "librepods-overlay/purist.rs"]
 mod purist;
-#[path = "librepods-overlay/spring.rs"]
 mod spring;
-#[path = "librepods-overlay/view.rs"]
 mod view;
 
 use std::io::BufRead;
@@ -50,11 +39,11 @@ use iced_layershell::settings::{LayerShellSettings, Settings, StartMode};
 use iced_layershell::to_layer_message;
 use log::{debug, info, warn};
 
-use logic::{Controller, SurfaceAction};
-use overlay_protocol::{
+use kase::overlay_protocol::{
     EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayMode, OverlayPosition, OverlaySize,
     OverlayState, OverlayStyle,
 };
+use logic::{Controller, SurfaceAction};
 
 const NAMESPACE: &str = "librepods-overlay";
 
@@ -554,10 +543,10 @@ fn main() -> ExitCode {
         id: Some(NAMESPACE.into()),
         // Inter for the purist island (the classic one keeps the system sans).
         fonts: vec![
-            include_bytes!("../../assets/font/Inter-Medium.ttf")
+            include_bytes!("../../../assets/font/Inter-Medium.ttf")
                 .as_slice()
                 .into(),
-            include_bytes!("../../assets/font/Inter-SemiBold.ttf")
+            include_bytes!("../../../assets/font/Inter-SemiBold.ttf")
                 .as_slice()
                 .into(),
         ],

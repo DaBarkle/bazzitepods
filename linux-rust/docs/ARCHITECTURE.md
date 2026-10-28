@@ -28,15 +28,15 @@ and keeps audio working across range loss. No user input should ever be required
 | `audio/` | audio | `AudioGuard`: per-device state machine that keeps A2DP alive (reconnect bug fix). |
 | `mic/` | audio | The AirPods mic switch: the AACP 0x58 AAC-ELD mic stream, its FFmpeg decoder (loaded at run time), the virtual "AirPods mic" and the desk/AirPods state machine. See "AirPods mic switch" below. |
 | `media_controller.rs` | audio | MPRIS pause/resume, conversational awareness volume. Never sets the card to `off`. |
-| `devices/airpods.rs`, `main.rs` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. |
-| `overlay_client.rs` + `src/bin/librepods-overlay.rs` | overlay | Spawns and feeds the overlay process over stdin (JSON lines). |
+| `devices/airpods.rs`, `supervisor.rs` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. |
+| `overlay_client.rs` + `src/bin/librepods-overlay/` | overlay | Spawns and feeds the overlay process over stdin (JSON lines). |
 | `autostart.rs` | packaging | Requests autostart through the XDG Background portal. |
 | `ui/` | ui | Main window and tray, reading `AppSnapshot`. |
 
 ## Data flow
 
 ```
-BlueZ (D-Bus) ──> supervisor (main.rs) ──spawns──> AirPodsDevice task (per MAC)
+BlueZ (D-Bus) ──> supervisor (supervisor.rs) ──spawns──> AirPodsDevice task (per MAC)
                                                   ├─ AACPManager (L2CAP PSM 0x1001) ─┐
 BLE adverts ──> le.rs ──BleBatteryReading────────────────────────────────────────────┤
                                                   ├─ AudioGuard (libpulse + BlueZ)  ─┤

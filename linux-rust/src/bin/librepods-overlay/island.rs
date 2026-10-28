@@ -12,8 +12,8 @@
 //! in, and numbers roll when a level changes. All of it is plain data here so it can be
 //! unit tested; `view.rs` only draws what this says.
 
-use crate::overlay_protocol::{ComponentState, ListeningMode, MicChoice, OverlayState};
 use crate::spring::{Feel, Spring};
+use kase::overlay_protocol::{ComponentState, ListeningMode, MicChoice, OverlayState};
 
 // --- Geometry (logical px) ------------------------------------------------------
 

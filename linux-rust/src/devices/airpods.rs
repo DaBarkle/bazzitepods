@@ -251,6 +251,7 @@ async fn connect_aacp(mac: Address) -> Option<AACPManager> {
 }
 
 /// One control-channel session. Returns when the channel drops or the task is cancelled.
+#[allow(clippy::too_many_arguments)]
 async fn session(
     mac: Address,
     name: &str,
@@ -690,6 +691,7 @@ async fn cycle_listening_mode(aacp: &AACPManager, command_tx: &CommandSender) {
 }
 
 /// Mirror control-command state (listening mode, etc.) into the hub, and react to ownership changes.
+#[allow(clippy::too_many_arguments)]
 async fn subscribe_controls(
     aacp: &AACPManager,
     ctx: &DeviceContext,

@@ -1,7 +1,7 @@
 //! When the island shows what, and that every transition finishes and stops drawing.
 
 use super::*;
-use crate::overlay_protocol::{ListeningMode, OverlayPosition};
+use kase::overlay_protocol::{ListeningMode, OverlayPosition};
 
 fn comp(level: u8, charging: bool, present: bool) -> Option<ComponentState> {
     Some(ComponentState {
@@ -154,7 +154,7 @@ fn route_and_noise_control_changes_alert() {
 
 #[test]
 fn mic_switch_changes_pop_an_alert() {
-    use crate::overlay_protocol::MicChoice;
+    use kase::overlay_protocol::MicChoice;
     let mut desk = buds(80, 75, 40);
     desk.mic = Some(MicChoice::Desk);
     desk.listening_mode = Some(ListeningMode::NoiseCancellation);
@@ -723,7 +723,7 @@ fn purist_preview_shows_the_light_once() {
 
 #[test]
 fn surface_room_follows_the_size_setting() {
-    use crate::overlay_protocol::OverlaySize;
+    use kase::overlay_protocol::OverlaySize;
     let at = |size| {
         Controller::new(OverlayConfig {
             size,

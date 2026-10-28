@@ -2,11 +2,8 @@
 //!
 //! The parent writes one JSON object per line on the overlay's stdin (see
 //! `docs/ARCHITECTURE.md`, "Overlay protocol"). This file is compiled into both
-//! binaries (the overlay includes it with `#[path]`), so it must stay free of
+//! binaries (the overlay uses it through the `kase` library), so it must stay free of
 //! dependencies on the rest of the crate.
-
-// Each binary uses a different subset of this shared file.
-#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 

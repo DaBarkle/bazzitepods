@@ -26,13 +26,17 @@ iced_layershell = { version = "0.19.1", default-features = false }
 wayland-client = "0.31"
 libc = "0.2.184"
 
+[lib]
+name = "kase"
+path = "src/lib.rs"
+
 [[bin]]
 name = "librepods"
 path = "src/main.rs"
 
 [[bin]]
 name = "librepods-overlay"
-path = "src/bin/librepods-overlay.rs"
+path = "src/bin/librepods-overlay/main.rs"
 
 [profile.release]
 opt-level = "s"
