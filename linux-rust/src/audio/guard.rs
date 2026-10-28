@@ -95,7 +95,10 @@ pub async fn unmute_left_hushed<P: PulseApi>(pulse: &P, file: &std::path::Path) 
     let names: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
     if let Ok(snap) = pulse.snapshot().await {
         for sink in snap.sinks.iter().filter(|s| names.contains(&s.name)) {
-            info!("Unmuting {} (left muted by an interrupted rebuild)", sink.name);
+            info!(
+                "Unmuting {} (left muted by an interrupted rebuild)",
+                sink.name
+            );
             if let Err(e) = pulse.set_sink_mute(sink.index, false).await {
                 warn!("Could not unmute {}: {}", sink.name, e);
             }
@@ -922,10 +925,8 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             && !self.hushed_names.is_empty()
             && let Ok(json) = serde_json::to_string(&self.hushed_names)
         {
-            let _ = tokio::task::spawn_blocking(move || {
-                crate::store::write_atomic(&file, &json)
-            })
-            .await;
+            let _ =
+                tokio::task::spawn_blocking(move || crate::store::write_atomic(&file, &json)).await;
         }
     }
 

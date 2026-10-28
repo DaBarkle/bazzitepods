@@ -215,7 +215,10 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
             .await
             .is_err()
     {
-        warn!("Audio guard for {} is still busy; not waiting longer", mac_s);
+        warn!(
+            "Audio guard for {} is still busy; not waiting longer",
+            mac_s
+        );
     }
     info!("Device task finished for {}", mac_s);
 }

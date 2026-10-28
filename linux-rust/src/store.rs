@@ -54,10 +54,7 @@ where
 /// [`update_devices`] for the file at `path`. Re-reading avoids clobbering entries written
 /// by other device tasks. A file that exists but cannot be parsed is moved aside to
 /// `<path>.bak` rather than lost.
-pub async fn update_devices_at<F>(
-    path: &Path,
-    f: F,
-) -> std::io::Result<HashMap<String, DeviceData>>
+pub async fn update_devices_at<F>(path: &Path, f: F) -> std::io::Result<HashMap<String, DeviceData>>
 where
     F: FnOnce(&mut HashMap<String, DeviceData>),
 {

@@ -38,8 +38,9 @@ pub fn auto_paused_recently() -> bool {
 }
 
 /// Volumes a conversation lowered when the link dropped mid-conversation, by AirPods MAC.
-static PENDING_RESTORE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, u32>>> =
-    std::sync::LazyLock::new(Default::default);
+static PENDING_RESTORE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, u32>>,
+> = std::sync::LazyLock::new(Default::default);
 
 const DBUS_TIMEOUT: Duration = Duration::from_secs(2);
 const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
@@ -505,7 +506,9 @@ impl MediaController {
                 // Without a reading we have nothing safe to restore later (a guessed 0
                 // would silence the AirPods when the conversation ends), so leave it alone.
                 let Some(original) = current_volume_opt else {
-                    warn!("Conversation start: could not read the volume of {sink}; not lowering it");
+                    warn!(
+                        "Conversation start: could not read the volume of {sink}; not lowering it"
+                    );
                     return;
                 };
                 debug!("Conversation start (1). Current volume: {}", original);

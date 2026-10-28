@@ -220,11 +220,7 @@ impl Supervisor {
                 break;
             }
             // A late retry that stays up means the overlay works after all.
-            if self.child.is_some()
-                && self
-                    .started_at
-                    .is_some_and(|t| t.elapsed() > QUICK_EXIT)
-            {
+            if self.child.is_some() && self.started_at.is_some_and(|t| t.elapsed() > QUICK_EXIT) {
                 self.unsupported.store(false, Ordering::SeqCst);
             }
             if self.child.is_none() && Instant::now() >= self.next_start {
@@ -451,10 +447,7 @@ mod tests {
         let log =
             std::env::temp_dir().join(format!("librepods-overlay-late-{}", std::process::id()));
         let _ = std::fs::remove_file(&log);
-        let bin = script(
-            "late",
-            &format!("echo run >> '{}'; exit 3", log.display()),
-        );
+        let bin = script("late", &format!("echo run >> '{}'; exit 3", log.display()));
         let mut sup = Supervisor {
             binary: Some(bin.clone()),
             config: OverlayConfig::default(),

@@ -192,9 +192,10 @@ async fn async_main(
 ) {
     tokio::spawn(async {
         use tokio::signal::unix::{SignalKind, signal};
-        let (Ok(mut term), Ok(mut int)) =
-            (signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
-        else {
+        let (Ok(mut term), Ok(mut int)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::interrupt()),
+        ) else {
             warn!("Could not listen for SIGTERM/SIGINT");
             return;
         };
@@ -206,8 +207,7 @@ async fn async_main(
     });
     // Speakers a crash or kill left muted in the middle of an audio rebuild.
     tokio::spawn(async {
-        audio::guard::unmute_left_hushed(&audio::pulse::LibPulse, &audio::guard::hush_file())
-            .await;
+        audio::guard::unmute_left_hushed(&audio::pulse::LibPulse, &audio::guard::hush_file()).await;
     });
     let battery = BatteryService::spawn(hub.clone());
     overlay_feed::spawn(hub.clone(), settings);

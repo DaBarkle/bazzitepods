@@ -6,7 +6,6 @@ use bluer::{
 };
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -595,7 +594,10 @@ impl AACPManager {
             }
             opcodes::EAR_DETECTION => {
                 let Some((primary, secondary)) = parse_ear_detection(packet) else {
-                    debug!("Ignoring short or unknown Ear Detection packet: {}", hex::encode(packet));
+                    debug!(
+                        "Ignoring short or unknown Ear Detection packet: {}",
+                        hex::encode(packet)
+                    );
                     return;
                 };
                 let statuses = vec![primary, secondary];
