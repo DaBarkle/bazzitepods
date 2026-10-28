@@ -73,6 +73,8 @@ impl OverlayClient {
             unsupported: unsupported.clone(),
             running: running.clone(),
             late_retries: 0,
+            quick_exits: 0,
+            gave_up: false,
             started_at: None,
         };
         let thread = std::thread::Builder::new()
@@ -192,11 +194,19 @@ struct Supervisor {
     /// Retries after an "unsupported" exit. At login autostart the compositor socket may not be
     /// ready yet, which looks the same as a compositor without layer-shell.
     late_retries: u8,
+    /// Crashes in a row within `QUICK_EXIT` of starting (a GPU or Vulkan setup failure).
+    quick_exits: u8,
+    /// No more starts: the overlay can't run here, so notifications stand in for it.
+    gave_up: bool,
     started_at: Option<Instant>,
 }
 
 const LATE_RETRIES: u8 = 2;
 const LATE_RETRY_DELAY: Duration = Duration::from_secs(30);
+/// An overlay that dies this soon after starting never got going.
+const QUICK_EXIT: Duration = Duration::from_secs(5);
+/// Quick crashes in a row after which the overlay is treated as unsupported.
+const MAX_QUICK_EXITS: u8 = 3;
 
 impl Supervisor {
     fn run(mut self, rx: mpsc::Receiver<Msg>) {
@@ -206,14 +216,14 @@ impl Supervisor {
             return;
         };
         loop {
-            if self.unsupported.load(Ordering::SeqCst) && self.late_retries >= LATE_RETRIES {
+            if self.gave_up {
                 break;
             }
             // A late retry that stays up means the overlay works after all.
             if self.child.is_some()
                 && self
                     .started_at
-                    .is_some_and(|t| t.elapsed() > Duration::from_secs(5))
+                    .is_some_and(|t| t.elapsed() > QUICK_EXIT)
             {
                 self.unsupported.store(false, Ordering::SeqCst);
             }
@@ -333,7 +343,23 @@ impl Supervisor {
             if self.late_retries < LATE_RETRIES {
                 self.late_retries += 1;
                 self.next_start = Instant::now() + LATE_RETRY_DELAY;
+            } else {
+                self.gave_up = true;
             }
+            return;
+        }
+        if self.started_at.is_some_and(|t| t.elapsed() < QUICK_EXIT) {
+            self.quick_exits += 1;
+        } else {
+            self.quick_exits = 0;
+        }
+        if self.quick_exits >= MAX_QUICK_EXITS {
+            warn!(
+                "overlay: crashed {} times right after starting ({status}); falling back to notifications",
+                self.quick_exits
+            );
+            self.unsupported.store(true, Ordering::SeqCst);
+            self.gave_up = true;
             return;
         }
         warn!(
@@ -418,6 +444,58 @@ mod tests {
         // Calls after that are harmless no-ops.
         c.show("x");
         c.update(OverlayState::default());
+    }
+
+    #[test]
+    fn unsupported_gets_every_late_retry() {
+        let log =
+            std::env::temp_dir().join(format!("librepods-overlay-late-{}", std::process::id()));
+        let _ = std::fs::remove_file(&log);
+        let bin = script(
+            "late",
+            &format!("echo run >> '{}'; exit 3", log.display()),
+        );
+        let mut sup = Supervisor {
+            binary: Some(bin.clone()),
+            config: OverlayConfig::default(),
+            state: None,
+            fullscreen: false,
+            child: None,
+            stdin: None,
+            starts: VecDeque::new(),
+            next_start: Instant::now(),
+            backoff: Duration::from_secs(1),
+            unsupported: Arc::new(AtomicBool::new(false)),
+            running: Arc::new(AtomicBool::new(false)),
+            late_retries: 0,
+            quick_exits: 0,
+            gave_up: false,
+            started_at: None,
+        };
+        // The first run plus LATE_RETRIES retries, then no more.
+        for _ in 0..=LATE_RETRIES {
+            assert!(!sup.gave_up);
+            sup.start(&bin);
+            assert!(wait_for(|| {
+                sup.reap();
+                sup.child.is_none()
+            }));
+        }
+        assert!(sup.gave_up);
+        let runs = std::fs::read_to_string(&log).unwrap().lines().count();
+        assert_eq!(runs, 1 + LATE_RETRIES as usize);
+    }
+
+    #[test]
+    fn crash_loop_falls_back_to_notifications() {
+        // E.g. no Vulkan: the overlay dies at once with a plain error.
+        let bin = script("crashloop", "exit 1");
+        let c = OverlayClient::spawn_with_binary(OverlayConfig::default(), Some(bin));
+        let end = Instant::now() + Duration::from_secs(10);
+        while !c.unsupported() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(c.unsupported());
     }
 
     #[test]
