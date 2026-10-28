@@ -907,7 +907,6 @@ impl App {
                 self.nothing.remove(&mac);
                 Task::none()
             }
-            _ => Task::none(),
         }
     }
 

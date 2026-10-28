@@ -126,6 +126,8 @@ fn main() -> iced::Result {
 
     if args.no_tray {
         info!("Running in headless mode (no GUI)");
+        // Nothing reads window messages without a window; don't let them pile up.
+        drop(ui_rx);
         runtime.block_on(async_main(
             ui_tx,
             device_managers,

@@ -1020,12 +1020,7 @@ async fn handle_event(
                 _ => {}
             }
         }
-        _ => {}
     }
-    // The legacy window still consumes raw events; it ignores the ones it doesn't know.
-    let _ = ctx
-        .ui_tx
-        .send(BluetoothUIMessage::AACPUIEvent(mac_s, event));
 }
 
 /// Another device has the AirPods now. When it is playing media (YouTube on the iPhone),

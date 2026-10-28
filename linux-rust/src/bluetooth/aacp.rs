@@ -305,7 +305,6 @@ pub enum AACPEvent {
     ControlCommand(ControlCommandStatus),
     EarDetection(Vec<EarDetectionStatus>, Vec<EarDetectionStatus>),
     ConversationalAwareness(u8),
-    ProximityKeys(#[allow(dead_code)] Vec<(u8, Vec<u8>)>),
     AudioSource(AudioSource),
     ConnectedDevices(Vec<ConnectedDevice>, Vec<ConnectedDevice>),
     OwnershipToFalseRequest,
@@ -701,9 +700,6 @@ impl AACPManager {
                 match result {
                     Ok(devices) => self.state.lock().await.devices = devices,
                     Err(e) => error!("Failed to save devices: {}", e),
-                }
-                if let Some(ref tx) = self.state.lock().await.event_tx {
-                    let _ = tx.send(AACPEvent::ProximityKeys(keys));
                 }
             }
             opcodes::STEM_PRESS => {
