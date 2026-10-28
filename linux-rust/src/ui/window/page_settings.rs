@@ -1,0 +1,304 @@
+//! The Settings tab: app, AirPods and Apple device mode settings.
+
+use super::*;
+use iced::widget::{column, row};
+
+impl App {
+    pub(super) fn settings_tab(&self) -> Element<'_, Message> {
+        let s = &self.settings;
+        let appearance = [
+            ("System", Appearance::System),
+            ("Light", Appearance::Light),
+            ("Dark", Appearance::Dark),
+        ];
+        let general = group(vec![
+            setting_row(
+                "Appearance",
+                None,
+                container(slide_control(
+                    &appearance,
+                    s.appearance,
+                    Some(self.anim(Anim::Appearance, 0.0)),
+                    true,
+                    Message::SetAppearance,
+                    Shape::COMPACT,
+                ))
+                .width(Length::Fixed(196.0))
+                .into(),
+            ),
+            setting_row(
+                "Start at login",
+                Some("Runs quietly in the tray"),
+                switch(
+                    s.start_at_login,
+                    Some(Message::SetStartAtLogin as fn(bool) -> Message),
+                ),
+            ),
+        ]);
+
+        let mut airpods: Vec<Element<'_, Message>> = Vec::new();
+        let device = self.primary();
+        if let Some(d) = device {
+            airpods.push(self.rename_row(d));
+        }
+        airpods.push(setting_row(
+            "Stem press track control",
+            Some("Double-press for next track, triple-press for previous"),
+            switch(
+                s.stem_control,
+                Some(Message::SetStemControl as fn(bool) -> Message),
+            ),
+        ));
+        airpods.push(setting_row(
+            "AirPods mic switch",
+            Some(
+                "Hold the left stem to swap between your desk mic and the AirPods mic. \
+                 Hold the right stem to change noise control.",
+            ),
+            switch(
+                s.airpods_mic_switch,
+                Some(Message::SetMicSwitch as fn(bool) -> Message),
+            ),
+        ));
+        if let Some(d) = device
+            && let Some(mic) = d.mic.filter(|_| d.is_connected())
+        {
+            let on = mic == crate::hub::MicRoute::AirPods;
+            let caption = match (&d.mic_problem, on) {
+                (Some(problem), false) => problem.as_str(),
+                (_, true) => "The AirPods mic is the default mic now",
+                (None, false) => "Your desk mic is the default mic",
+            };
+            airpods.push(setting_row(
+                "Use AirPods mic",
+                Some(caption),
+                switch(
+                    on,
+                    format::controls_enabled(d)
+                        .then_some((|_| Message::ToggleAirPodsMic) as fn(bool) -> Message),
+                ),
+            ));
+        }
+        if let Some(d) = device {
+            let enabled = format::controls_enabled(d);
+            if d.model.info().has_anc {
+                airpods.push(setting_row(
+                    "Off listening mode",
+                    Some("Adds Off to the listening modes"),
+                    switch(
+                        d.allow_off_mode.unwrap_or(false),
+                        enabled.then_some(Message::SetAllowOff as fn(bool) -> Message),
+                    ),
+                ));
+            }
+            for setting in format::device_settings(d) {
+                airpods.push(self.device_setting(setting, enabled));
+            }
+        }
+
+        let mut page = column![
+            general,
+            section_label("AirPods"),
+            group(airpods),
+            section_label("This PC"),
+            group(vec![self.apple_mode_row()]),
+        ];
+
+        if let Some(d) = device {
+            page = page.push(section_label("About")).push(self.about(d));
+        }
+        page.into()
+    }
+
+    pub(super) fn rename_row<'a>(&'a self, d: &'a DeviceSnapshot) -> Element<'a, Message> {
+        let can_rename = format::controls_enabled(d) && !self.rename.trim().is_empty();
+        let mut col = column![
+            text("Name").size(14).font(style::INTER_MEDIUM),
+            row![
+                text_input(&d.name, &self.rename)
+                    .on_input(Message::RenameInput)
+                    .on_submit_maybe(can_rename.then_some(Message::RenameSubmit))
+                    .padding(Padding {
+                        top: 8.0,
+                        bottom: 8.0,
+                        left: 12.0,
+                        right: 12.0,
+                    })
+                    .size(14)
+                    .style(style::input)
+                    .width(Fill),
+                button(text("Rename").size(13).font(style::INTER_MEDIUM))
+                    .padding(Padding {
+                        top: 8.0,
+                        bottom: 8.0,
+                        left: 14.0,
+                        right: 14.0,
+                    })
+                    .style(style::secondary)
+                    .on_press_maybe(can_rename.then_some(Message::RenameSubmit)),
+            ]
+            .spacing(8)
+            .align_y(Center),
+        ]
+        .spacing(8);
+        if let Some(status) = &self.rename_status {
+            col = col.push(text(status.clone()).size(12).style(dim_text));
+        }
+        col.into()
+    }
+
+    /// One of the AirPods' own settings (see [`format::device_settings`]).
+    pub(super) fn device_setting<'a>(
+        &self,
+        setting: DeviceSetting,
+        enabled: bool,
+    ) -> Element<'a, Message> {
+        match setting {
+            DeviceSetting::Toggle {
+                id,
+                title,
+                caption,
+                on,
+            } => setting_row(
+                title,
+                Some(caption),
+                toggler(on)
+                    .on_toggle_maybe(
+                        enabled.then_some(move |v| Message::SetControl(id, format::toggle_byte(v))),
+                    )
+                    .size(24)
+                    .spacing(0)
+                    .style(style::toggle)
+                    .into(),
+            ),
+            DeviceSetting::Choice {
+                id,
+                title,
+                caption,
+                options,
+                selected,
+            } => {
+                let options: Vec<(&str, (u8, u8))> =
+                    options.iter().map(|&(label, v)| (label, (id, v))).collect();
+                let at = options
+                    .iter()
+                    .position(|(_, (_, v))| *v == selected)
+                    .map(|i| self.anim(Anim::Control(id), i as f32));
+                setting_block(
+                    title,
+                    Some(caption),
+                    slide_control(
+                        &options,
+                        (id, selected),
+                        at,
+                        enabled,
+                        |(id, v)| Message::SetControl(id, v),
+                        Shape::WIDE,
+                    ),
+                )
+            }
+        }
+    }
+
+    pub(super) fn about<'a>(&self, d: &'a DeviceSnapshot) -> Element<'a, Message> {
+        let mut rows = vec![kv("Model", format::model_name(d.model).to_string())];
+        if let Some(n) = &d.model_number {
+            rows.push(kv("Model number", n.clone()));
+        }
+        if let Some(DeviceInformation::AirPods(i)) =
+            self.saved.get(&d.mac).and_then(|s| s.information.as_ref())
+        {
+            if !i.serial_number.is_empty() {
+                rows.push(kv("Serial number", i.serial_number.clone()));
+            }
+            if !i.version1.is_empty() {
+                rows.push(kv("Firmware", i.version1.clone()));
+            }
+        }
+        rows.push(kv("Address", d.mac.clone()));
+        if let Some(a) = &d.audio {
+            rows.push(kv("Audio", a.clone()));
+        }
+        group(rows)
+    }
+
+    /// Opt-in Apple DeviceID ("VendorID spoofing"): a switch, a short confirm step that
+    /// warns about the Bluetooth restart, the system password prompt, then the result.
+    /// Falls back to copying a terminal command when the app can't ask for admin rights.
+    pub(super) fn apple_mode_row(&self) -> Element<'_, Message> {
+        const CAPTION: &str = "Lets your AirPods switch between this PC and your iPhone or iPad \
+                               the way they do with a Mac, by having this PC introduce itself \
+                               as an Apple device.";
+        let can_change = self.apple_can_change != Some(false);
+        let working = matches!(self.apple_flow, AppleFlow::Working(_));
+        let shown_on = match self.apple_flow {
+            AppleFlow::Confirm(on) | AppleFlow::Working(on) => on,
+            _ => self.apple_mode.unwrap_or(false),
+        };
+        let toggle = (can_change && !working && self.apple_mode.is_some())
+            .then_some(Message::AppleToggle as fn(bool) -> Message);
+        let header = setting_row("Apple device mode", Some(CAPTION), switch(shown_on, toggle));
+
+        let detail: Option<Element<'_, Message>> = match &self.apple_flow {
+            _ if !can_change => Some(self.apple_manual_fallback()),
+            AppleFlow::Idle if self.apple_mode.is_none() => Some(
+                text("Turn on Bluetooth to change this.")
+                    .size(12)
+                    .style(faint_text)
+                    .into(),
+            ),
+            AppleFlow::Idle => None,
+            AppleFlow::Confirm(on) => Some(apple_confirm(*on)),
+            AppleFlow::Working(_) => Some(apple_note(
+                "Enter your password in the system prompt. Bluetooth restarts right after, \
+                 so your AirPods will drop for a few seconds.",
+                dim_text,
+            )),
+            AppleFlow::Done(true) => Some(apple_note(
+                "Apple device mode is on. Your AirPods will reconnect on their own.",
+                dim_text,
+            )),
+            AppleFlow::Done(false) => Some(apple_note(
+                "Apple device mode is off and your original Bluetooth settings are back.",
+                dim_text,
+            )),
+            AppleFlow::Failed(msg) => Some(apple_note(msg.as_str(), red_text)),
+        };
+        match detail {
+            Some(d) => column![header, d].spacing(10).into(),
+            None => header,
+        }
+    }
+
+    /// No pkexec, or the sandbox can't start host commands: hand over a command instead.
+    pub(super) fn apple_manual_fallback(&self) -> Element<'_, Message> {
+        let action = if self.apple_mode == Some(true) {
+            "Copy command to turn off"
+        } else {
+            "Copy command to turn on"
+        };
+        let label = if self.apple_copied {
+            "Copied. Paste it in a terminal"
+        } else {
+            action
+        };
+        row![
+            text("This build can't ask for your password, so it needs one terminal command.")
+                .size(12)
+                .style(dim_text)
+                .width(Fill),
+            button(text(label).size(12).font(style::INTER_MEDIUM))
+                .padding(Padding {
+                    top: 6.0,
+                    bottom: 6.0,
+                    left: 12.0,
+                    right: 12.0,
+                })
+                .style(style::secondary)
+                .on_press(Message::CopyAppleCommand),
+        ]
+        .spacing(12)
+        .align_y(Center)
+        .into()
+    }
+}
