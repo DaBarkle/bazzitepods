@@ -21,7 +21,7 @@ use tokio::process::Command;
 
 /// Runs as root under pkexec, with `$1` = `on` | `off`. Idempotent both ways.
 ///
-/// * on: backs up main.conf once, drops any earlier BazzitePods line, comments out a
+/// * on: backs up main.conf once, drops any earlier Kase line, comments out a
 ///   DeviceID the user set themselves (marked so `off` can restore it), then adds ours
 ///   under `[General]`.
 /// * off: removes our line and restores anything `on` commented out.

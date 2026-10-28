@@ -1,4 +1,4 @@
-name: Flatpak (BazzitePods)
+name: Flatpak (Kase)
 
 on:
   push:
@@ -38,17 +38,17 @@ jobs:
       - name: Validate desktop file and metainfo
         run: |
           if command -v desktop-file-validate >/dev/null; then
-            desktop-file-validate linux-rust/assets/io.github.dabarkle.BazzitePods.desktop
+            desktop-file-validate linux-rust/assets/io.github.dabarkle.Kase.desktop
           fi
           if command -v appstreamcli >/dev/null; then
-            appstreamcli validate --no-net linux-rust/flatpak/io.github.dabarkle.BazzitePods.metainfo.xml
+            appstreamcli validate --no-net linux-rust/flatpak/io.github.dabarkle.Kase.metainfo.xml
           fi
 
       - name: Build
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6
         with:
-          manifest-path: linux-rust/flatpak/io.github.dabarkle.BazzitePods.yml
-          bundle: BazzitePods.flatpak
+          manifest-path: linux-rust/flatpak/io.github.dabarkle.Kase.yml
+          bundle: Kase.flatpak
           # cargo-sources.json lists only third-party crates, so unlike Cargo.lock it does
           # not change with every version bump of the app itself.
           cache-key: flatpak-builder-${{ hashFiles('linux-rust/flatpak/cargo-sources.json') }}
@@ -57,8 +57,8 @@ jobs:
       - name: Upload bundle artifact
         uses: actions/upload-artifact@v7
         with:
-          name: BazzitePods.flatpak
-          path: BazzitePods.flatpak
+          name: Kase.flatpak
+          path: Kase.flatpak
           if-no-files-found: error
 
       - name: Attach bundle to GitHub Release
@@ -66,7 +66,7 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
-          files: BazzitePods.flatpak
+          files: Kase.flatpak
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -78,7 +78,7 @@ fn airpods4_menu_has_battery_but_no_noise_control() {
     assert!(menu[1].starts_with("L 80%"), "{menu:?}");
     assert!(!menu.iter().any(|l| l.starts_with("radio")));
     assert!(!menu.iter().any(|l| l.contains("Conversation")));
-    assert_eq!(&menu[menu.len() - 2..], ["Open BazzitePods", "Quit"]);
+    assert_eq!(&menu[menu.len() - 2..], ["Open Kase", "Quit"]);
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn no_device_shows_a_hint() {
     let (t, _, _) = tray(None);
     let menu = labels(&t.menu());
     assert_eq!(menu[0], "No AirPods paired");
-    assert_eq!(t.tool_tip().title, "BazzitePods");
+    assert_eq!(t.tool_tip().title, "Kase");
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn clicking_the_icon_or_open_item_opens_the_window() {
         .menu()
         .into_iter()
         .find_map(|i| match i {
-            MenuItem::Standard(s) if s.label == "Open BazzitePods" => Some(s),
+            MenuItem::Standard(s) if s.label == "Open Kase" => Some(s),
             _ => None,
         })
         .unwrap();
@@ -206,5 +206,5 @@ fn icons_are_cached_and_badge_only_while_connected() {
     let (t, _, _) = tray(Some(pods(ModelKind::AirPods4, LinkState::Disconnected)));
     assert!(t.overlay_icon_pixmap().is_empty());
     assert_eq!(t.icon_name(), ICON_NAME);
-    assert_eq!(t.title(), "BazzitePods");
+    assert_eq!(t.title(), "Kase");
 }

@@ -1,4 +1,4 @@
-# Merges Dependabot security updates for the BazzitePods app by itself, but only
+# Merges Dependabot security updates for the Kase app by itself, but only
 # when they are safe to take without a human look:
 #   * the PR was opened by Dependabot,
 #   * it only touches the Rust (Cargo) dependency files under linux-rust/,

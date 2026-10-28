@@ -1,15 +1,15 @@
 [Desktop Entry]
 Type=Application
-Name=BazzitePods
+Name=Kase
 GenericName=Earbuds Companion
-Comment=AirPods battery, controls and overlay for Linux
+Comment=AirPods battery, controls and island overlay for KDE Plasma
 Exec=librepods
-Icon=io.github.dabarkle.BazzitePods
+Icon=io.github.dabarkle.Kase
 Terminal=false
 Categories=Utility;
-Keywords=airpods;bluetooth;battery;earbuds;headphones;anc;noise;
+Keywords=kase;bazzitepods;airpods;bluetooth;battery;earbuds;headphones;anc;noise;
 StartupNotify=true
-StartupWMClass=io.github.dabarkle.BazzitePods
+StartupWMClass=io.github.dabarkle.Kase
 SingleMainWindow=true
 X-GNOME-UsesNotifications=true
 X-GNOME-Autostart-enabled=true

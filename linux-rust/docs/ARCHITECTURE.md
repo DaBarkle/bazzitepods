@@ -1,4 +1,4 @@
-# LibrePods for Bazzite: architecture
+# Kase: architecture
 
 Goal: a zero-config AirPods companion for Bazzite (Fedora Atomic, KDE Plasma 6 Wayland by default),
 shipped as a Flatpak. It autostarts, finds AirPods on its own, shows accurate left/right/case battery,

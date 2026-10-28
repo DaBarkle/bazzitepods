@@ -42,7 +42,7 @@ pub async fn play(to: MicRoute) {
             "--raw",
             "--format=s16le",
             "--channels=1",
-            "--client-name=BazzitePods",
+            "--client-name=Kase",
         ])
         .arg(format!("--rate={RATE}"))
         // No media.role=event: KDE's muted "Notification" volume would silence it,

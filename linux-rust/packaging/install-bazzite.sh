@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# BazzitePods installer for Bazzite (and any Flatpak-based Linux desktop).
+# Kase installer for Bazzite (and any Flatpak-based Linux desktop).
 #
 #   Install / update the latest release:
-#     curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh | bash
 #   Install a bundle you already downloaded:
-#     ./install-bazzite.sh ~/Downloads/BazzitePods.flatpak
+#     ./install-bazzite.sh ~/Downloads/Kase.flatpak
 #   Uninstall (app, its data and the autostart entry):
 #     ./install-bazzite.sh --uninstall
 #
@@ -12,16 +12,17 @@
 
 set -euo pipefail
 
-readonly APP_ID="io.github.dabarkle.BazzitePods"
-readonly REPO="DaBarkle/bazzitepods"
+readonly APP_ID="io.github.dabarkle.Kase"
+readonly REPO="DaBarkle/kase"
 readonly API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-readonly ONE_LINER="curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh | bash -s --"
+readonly ONE_LINER="curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh | bash -s --"
 readonly FLATHUB_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
-readonly ASSET_NAME="BazzitePods.flatpak"
+readonly ASSET_NAME="Kase.flatpak"
 readonly AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 readonly AUTOSTART_FILE="${AUTOSTART_DIR}/${APP_ID}.desktop"
-# The app's id before it was renamed to BazzitePods; removed on install.
-readonly OLD_APP_ID="io.github.dabarkle.LibrePods"
+# Earlier ids of this app, newest first: BazzitePods (until 0.5.0), then LibrePods.
+# Installing moves the newest one's settings across and removes them all.
+readonly OLD_APP_IDS=("io.github.dabarkle.BazzitePods" "io.github.dabarkle.LibrePods")
 
 if [[ -t 1 ]]; then
     BOLD=$'\e[1m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'; RED=$'\e[31m'; RESET=$'\e[0m'
@@ -38,11 +39,11 @@ usage() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS] [BUNDLE.flatpak]
 
-Installs or updates BazzitePods as a per-user Flatpak.
+Installs or updates Kase as a per-user Flatpak.
 
   BUNDLE.flatpak   install this local bundle instead of downloading the latest release
-  --uninstall      remove BazzitePods, its data and its autostart entry
-  --no-launch      do not start BazzitePods after installing
+  --uninstall      remove Kase, its data and its autostart entry
+  --no-launch      do not start Kase after installing
   -h, --help       show this help
 EOF
 }
@@ -87,17 +88,48 @@ download_latest() {
     printf '%s\n' "${dest_dir}/${ASSET_NAME}"
 }
 
-remove_old_id() {
-    if ! flatpak info --user "$OLD_APP_ID" >/dev/null 2>&1; then
-        return
+# Copies settings, saved AirPods keys and Flatpak overrides from an earlier id, unless
+# this id already has its own. Runs before the old app is uninstalled (which deletes its data).
+migrate_from() {
+    local old=$1 moved=""
+    local old_dir="${HOME}/.var/app/${old}" new_dir="${HOME}/.var/app/${APP_ID}"
+    if [[ -d "$old_dir" && ! -e "$new_dir" ]]; then
+        mkdir -p -- "$new_dir"
+        for sub in config data; do
+            if [[ -d "${old_dir}/${sub}" ]]; then
+                cp -a -- "${old_dir}/${sub}" "${new_dir}/"
+            fi
+        done
+        moved="settings"
     fi
-    step "Replacing the pre-rename build (${OLD_APP_ID})"
-    flatpak kill "$OLD_APP_ID" >/dev/null 2>&1 || true
-    flatpak uninstall --user --noninteractive -y --delete-data "$OLD_APP_ID" >/dev/null
-    flatpak override --user --reset "$OLD_APP_ID" >/dev/null 2>&1 || true
-    flatpak permission-remove background background "$OLD_APP_ID" >/dev/null 2>&1 || true
-    rm -f -- "${AUTOSTART_DIR}/${OLD_APP_ID}.desktop"
-    ok "Old build removed"
+    local overrides="${XDG_DATA_HOME:-$HOME/.local/share}/flatpak/overrides"
+    if [[ -f "${overrides}/${old}" && ! -e "${overrides}/${APP_ID}" ]]; then
+        cp -a -- "${overrides}/${old}" "${overrides}/${APP_ID}"
+        moved="${moved:+$moved, }Flatpak overrides"
+    fi
+    if [[ -n "$moved" ]]; then
+        ok "Moved your ${moved} over from ${old}"
+    fi
+}
+
+remove_old_ids() {
+    local old migrated=no
+    for old in "${OLD_APP_IDS[@]}"; do
+        if ! flatpak info --user "$old" >/dev/null 2>&1; then
+            continue
+        fi
+        step "Replacing the build installed under its old name (${old})"
+        flatpak kill "$old" >/dev/null 2>&1 || true
+        if [[ "$migrated" == "no" ]]; then
+            migrate_from "$old"
+            migrated=yes
+        fi
+        flatpak uninstall --user --noninteractive -y --delete-data "$old" >/dev/null
+        flatpak override --user --reset "$old" >/dev/null 2>&1 || true
+        flatpak permission-remove background background "$old" >/dev/null 2>&1 || true
+        rm -f -- "${AUTOSTART_DIR}/${old}.desktop"
+        ok "Old build removed"
+    done
 }
 
 do_install() {
@@ -116,31 +148,31 @@ do_install() {
     # Stop a running copy so the new version is what starts afterwards.
     flatpak kill "$APP_ID" >/dev/null 2>&1 || true
 
-    remove_old_id
+    remove_old_ids
 
     step "Installing ${APP_ID} (per user)"
     # --reinstall makes repeated runs (and updates from a bundle) idempotent.
     flatpak install --user --noninteractive -y --reinstall "$bundle"
-    ok "BazzitePods installed"
+    ok "Kase installed"
 
     if [[ "$launch" == "yes" ]]; then
-        step "Starting BazzitePods once so it can register to start at login"
+        step "Starting Kase once so it can register to start at login"
         if flatpak ps --columns=application 2>/dev/null | grep -qx "$APP_ID"; then
-            ok "BazzitePods is already running"
+            ok "Kase is already running"
         else
             nohup flatpak run "$APP_ID" --start-minimized >/dev/null 2>&1 &
             disown || true
-            ok "BazzitePods is running in the system tray"
+            ok "Kase is running in the system tray"
         fi
     fi
 
-    printf '\n%sDone.%s BazzitePods starts automatically at login and lives in the system tray.\n' "$BOLD" "$RESET"
+    printf '\n%sDone.%s Kase starts automatically at login and lives in the system tray.\n' "$BOLD" "$RESET"
     printf 'To remove it later run:\n  %s --uninstall\n' "$ONE_LINER"
 }
 
 do_uninstall() {
     require flatpak
-    step "Stopping BazzitePods"
+    step "Stopping Kase"
     flatpak kill "$APP_ID" >/dev/null 2>&1 || true
 
     step "Removing ${APP_ID}"
@@ -161,7 +193,7 @@ do_uninstall() {
     # Forget the Background-portal autostart grant.
     flatpak permission-remove background background "$APP_ID" >/dev/null 2>&1 || true
 
-    printf '\n%sBazzitePods has been uninstalled.%s\n' "$BOLD" "$RESET"
+    printf '\n%sKase has been uninstalled.%s\n' "$BOLD" "$RESET"
 }
 
 main() {

@@ -4,6 +4,23 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-10-28
+
+### Changed
+- **BazzitePods is now Kase**, "AirPods for KDE Plasma". The new name says who the app is
+  for without tying it to one distro: it works on any KDE Plasma desktop, Bazzite
+  included. The app id is now `io.github.dabarkle.Kase`, the release bundle is
+  `Kase.flatpak`, and the repository is now `DaBarkle/kase` (old links redirect). ([#23])
+- **Updating moves you across by itself.** Run the install command as usual: it copies
+  your settings, saved AirPods and Flatpak overrides from BazzitePods to Kase, then
+  removes BazzitePods and its old autostart entry. Apple device mode is a system setting
+  and stays as it is. ([#23])
+- **A new README,** rewritten from scratch with new screenshots and animations of the
+  current app. ([#23])
+
+### Notes
+- Nothing else about the app changes in this release: same features, same settings.
+
 ## [0.5.0] - 2026-10-28
 
 ### Added
@@ -237,23 +254,24 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
-[0.5.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.4.0
-[0.3.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.3.0
-[0.2.2]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/DaBarkle/bazzitepods/releases/tag/v0.2.0
-[#3]: https://github.com/DaBarkle/bazzitepods/pull/3
-[#4]: https://github.com/DaBarkle/bazzitepods/pull/4
-[#5]: https://github.com/DaBarkle/bazzitepods/pull/5
-[#6]: https://github.com/DaBarkle/bazzitepods/pull/6
-[#21]: https://github.com/DaBarkle/bazzitepods/pull/21
-[#18]: https://github.com/DaBarkle/bazzitepods/pull/18
-[#22]: https://github.com/DaBarkle/bazzitepods/pull/22
-[#17]: https://github.com/DaBarkle/bazzitepods/pull/17
-[#16]: https://github.com/DaBarkle/bazzitepods/pull/16
-[#19]: https://github.com/DaBarkle/bazzitepods/pull/19
-[#20]: https://github.com/DaBarkle/bazzitepods/pull/20
-[#15]: https://github.com/DaBarkle/bazzitepods/pull/15
-[#12]: https://github.com/DaBarkle/bazzitepods/pull/12
-[#11]: https://github.com/DaBarkle/bazzitepods/pull/11
+[0.5.0]: https://github.com/DaBarkle/kase/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/DaBarkle/kase/compare/v0.2.2...v0.4.0
+[0.3.0]: https://github.com/DaBarkle/kase/compare/v0.2.2...v0.3.0
+[0.2.2]: https://github.com/DaBarkle/kase/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/DaBarkle/kase/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/DaBarkle/kase/releases/tag/v0.2.0
+[#3]: https://github.com/DaBarkle/kase/pull/3
+[#4]: https://github.com/DaBarkle/kase/pull/4
+[#5]: https://github.com/DaBarkle/kase/pull/5
+[#6]: https://github.com/DaBarkle/kase/pull/6
+[#21]: https://github.com/DaBarkle/kase/pull/21
+[#18]: https://github.com/DaBarkle/kase/pull/18
+[#22]: https://github.com/DaBarkle/kase/pull/22
+[#17]: https://github.com/DaBarkle/kase/pull/17
+[#16]: https://github.com/DaBarkle/kase/pull/16
+[#19]: https://github.com/DaBarkle/kase/pull/19
+[#20]: https://github.com/DaBarkle/kase/pull/20
+[#15]: https://github.com/DaBarkle/kase/pull/15
+[#12]: https://github.com/DaBarkle/kase/pull/12
+[#11]: https://github.com/DaBarkle/kase/pull/11
+[#23]: https://github.com/DaBarkle/kase/pull/23

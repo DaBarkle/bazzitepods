@@ -1,4 +1,4 @@
-# BazzitePods (Bazzite edition) Flatpak manifest.
+# Kase Flatpak manifest.
 #
 # Builds from the local source tree (linux-rust/), fully offline: every crate is
 # listed in cargo-sources.json, generated from Cargo.lock by flatpak-builder-tools'
@@ -7,10 +7,10 @@
 #
 # Local build (from linux-rust/):
 #   flatpak-builder --user --install --force-clean \
-#     --install-deps-from=flathub build-dir flatpak/io.github.dabarkle.BazzitePods.yml
+#     --install-deps-from=flathub build-dir flatpak/io.github.dabarkle.Kase.yml
 # or simply `just flatpak`.
 
-app-id: io.github.dabarkle.BazzitePods
+app-id: io.github.dabarkle.Kase
 runtime: org.freedesktop.Platform
 # Freedesktop SDK 26.08 is the current stable branch (released 2026-09).
 runtime-version: '26.08'
@@ -90,11 +90,11 @@ modules:
       - cargo build --release --frozen
       - install -Dm755 target/release/librepods -t ${FLATPAK_DEST}/bin/
       - install -Dm755 target/release/librepods-overlay -t ${FLATPAK_DEST}/bin/
-      - install -Dm644 assets/io.github.dabarkle.BazzitePods.desktop -t ${FLATPAK_DEST}/share/applications/
-      - install -Dm644 flatpak/io.github.dabarkle.BazzitePods.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo/
-      - install -Dm644 assets/icons/io.github.dabarkle.BazzitePods.svg -t ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/
-      - install -Dm644 assets/icons/io.github.dabarkle.BazzitePods.png -t ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/
-      - install -Dm644 assets/icons/io.github.dabarkle.BazzitePods-symbolic.svg -t ${FLATPAK_DEST}/share/icons/hicolor/symbolic/apps/
+      - install -Dm644 assets/io.github.dabarkle.Kase.desktop -t ${FLATPAK_DEST}/share/applications/
+      - install -Dm644 flatpak/io.github.dabarkle.Kase.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo/
+      - install -Dm644 assets/icons/io.github.dabarkle.Kase.svg -t ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/
+      - install -Dm644 assets/icons/io.github.dabarkle.Kase.png -t ${FLATPAK_DEST}/share/icons/hicolor/256x256/apps/
+      - install -Dm644 assets/icons/io.github.dabarkle.Kase-symbolic.svg -t ${FLATPAK_DEST}/share/icons/hicolor/symbolic/apps/
       - install -Dm644 LICENSE -t ${FLATPAK_DEST}/share/licenses/${FLATPAK_ID}/
     sources:
       - type: dir

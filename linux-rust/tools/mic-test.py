@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BazzitePods AirPods mic feasibility test (research only, nothing is installed).
+"""Kase AirPods mic feasibility test (research only, nothing is installed).
 
 Checks, on real hardware, what the planned "roam mic" feature depends on:
   1. Whether the AirPods answer Apple's high-quality mic command (AACP 0x58) and
@@ -9,7 +9,7 @@ Checks, on real hardware, what the planned "roam mic" feature depends on:
   4. Whether the hold claim survives a reconnect, and that it can be undone.
   5. The audio setup (default mic, what EasyEffects records from).
 
-It stops BazzitePods while it runs and starts it again at the end, and puts the
+It stops Kase while it runs and starts it again at the end, and puts the
 stem settings back as they were. It never touches games: it refuses to run while
 one is open. Results go to ~/bazzitepods-mictest/. Python standard library only.
 """
@@ -29,7 +29,7 @@ import tarfile
 import threading
 import time
 
-APP_ID = "io.github.dabarkle.BazzitePods"
+APP_ID = "io.github.dabarkle.Kase"
 PSM = 0x1001
 HEADER = bytes([0x04, 0x00, 0x04, 0x00])
 HANDSHAKE = bytes([0x00, 0x00, 0x04, 0x00, 0x01, 0x00, 0x02, 0x00] + [0x00] * 8)
@@ -297,7 +297,7 @@ def snapshot(prefix):
 
 def main():
     os.makedirs(OUT, exist_ok=True)
-    say("BazzitePods AirPods mic test")
+    say("Kase AirPods mic test")
     say(f"Results folder: {OUT}\n")
 
     games = running_games()
@@ -334,7 +334,7 @@ def main():
     restore_claim = 0x06 if stem_on else 0x00
     try:
         if was_running:
-            say("Pausing BazzitePods for the test (it comes back at the end)...")
+            say("Pausing Kase for the test (it comes back at the end)...")
             run(["flatpak", "kill", APP_ID])
             time.sleep(2)
         watcher.start()
@@ -408,7 +408,7 @@ def main():
             json.dump({"airpods": name, "mac": mac, "stem_control": stem_on, **STATS}, f, indent=1)
         if was_running:
             restart_bazzitepods()
-            say("BazzitePods started again.")
+            say("Kase started again.")
         archive = OUT + ".tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
             tar.add(OUT, arcname=os.path.basename(OUT))

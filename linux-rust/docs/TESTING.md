@@ -4,12 +4,12 @@ Everything below runs as your normal user. Nothing needs sudo or rpm-ostree.
 
 ## 1. Install
 
-Download `BazzitePods.flatpak` from the latest successful **Flatpak (BazzitePods)** run on the
+Download `Kase.flatpak` from the latest successful **Flatpak (Kase)** run on the
 `bazzite` branch (Actions tab → run → Artifacts), unzip it, then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh \
-  | bash -s -- ~/Downloads/BazzitePods.flatpak
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh \
+  | bash -s -- ~/Downloads/Kase.flatpak
 ```
 
 Once a tagged release exists, the same command without the file path installs the latest release.
@@ -42,7 +42,7 @@ Uninstall: append `--uninstall` instead of the file path.
 If audio stays silent, run this and send the output:
 
 ```bash
-flatpak run --command=sh io.github.dabarkle.BazzitePods -c 'RUST_LOG=librepods=debug librepods' 2>&1 | tee ~/librepods-debug.log
+flatpak run --command=sh io.github.dabarkle.Kase -c 'RUST_LOG=librepods=debug librepods' 2>&1 | tee ~/librepods-debug.log
 pactl list cards short; wpctl status
 grep bluez ~/.local/state/wireplumber/default-profile
 ```
