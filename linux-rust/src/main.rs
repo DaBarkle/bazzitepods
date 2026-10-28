@@ -131,6 +131,7 @@ fn main() -> iced::Result {
             device_managers,
             hub,
             active_commands,
+            settings,
             args.no_tray,
         ));
         Ok(())
@@ -139,8 +140,16 @@ fn main() -> iced::Result {
         let no_tray = args.no_tray;
         let hub_bg = hub.clone();
         let commands_bg = active_commands.clone();
+        let settings_bg = settings.clone();
         std::thread::spawn(move || {
-            runtime.block_on(async_main(ui_tx, dm, hub_bg, commands_bg, no_tray))
+            runtime.block_on(async_main(
+                ui_tx,
+                dm,
+                hub_bg,
+                commands_bg,
+                settings_bg,
+                no_tray,
+            ))
         });
         ui::window::start_ui(ui::window::UiContext {
             hub,
@@ -159,10 +168,11 @@ async fn async_main(
     device_managers: Arc<RwLock<HashMap<String, DeviceManagers>>>,
     hub: Hub,
     active_commands: Arc<Mutex<Option<devices::airpods::CommandSender>>>,
+    settings: ui::settings::SettingsStore,
     no_tray: bool,
 ) {
     let battery = BatteryService::spawn(hub.clone());
-    overlay_feed::spawn(hub.clone());
+    overlay_feed::spawn(hub.clone(), settings);
     fullscreen_watch::spawn();
 
     // Zero-config: register for login autostart unless the user switched it off.

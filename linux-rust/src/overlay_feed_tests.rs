@@ -3,7 +3,6 @@
 use super::*;
 use crate::core::battery::BatterySnapshot;
 use crate::core::models::ModelKind;
-use crate::overlay_protocol::OverlayPosition;
 use std::time::Duration;
 
 fn live(level: u8) -> ComponentBattery {
@@ -178,56 +177,6 @@ fn battery_line_marks_charging_and_missing_parts() {
     assert_eq!(battery_line(&d), "L 100% ⚡  ·  R 9%  ·  Case —");
     d.battery.right = ComponentBattery::default();
     assert_eq!(battery_line(&d), "L 100% ⚡  ·  R —  ·  Case —");
-}
-
-// ---------------------------------------------------------------------------
-// Overlay settings
-// ---------------------------------------------------------------------------
-
-#[test]
-fn overlay_config_defaults_to_compact() {
-    for json in ["", "garbage", "[]", "{}"] {
-        let cfg = config_from_json(json);
-        assert_eq!(cfg.mode, OverlayMode::Compact, "for {json:?}");
-        assert_eq!(cfg.position, OverlayPosition::TopCenter);
-        assert_eq!(cfg.opacity, 1.0);
-    }
-}
-
-#[test]
-fn overlay_config_reads_and_clamps_values() {
-    let cfg = config_from_json(
-        r#"{"overlay_mode":"always","overlay_position":"bottom-center",
-            "overlay_opacity":0.05,"overlay_glass":3.5}"#,
-    );
-    assert_eq!(cfg.mode, OverlayMode::Always);
-    assert_eq!(cfg.position, OverlayPosition::BottomCenter);
-    assert_eq!(cfg.opacity, 0.2);
-    assert_eq!(cfg.glass, 1.0);
-
-    let cfg = config_from_json(
-        r#"{"overlay_mode":"sideways","overlay_position":7,"overlay_opacity":"x","overlay_glass":-1}"#,
-    );
-    assert_eq!(cfg.mode, OverlayMode::Compact);
-    assert_eq!(cfg.position, OverlayPosition::TopCenter);
-    assert_eq!(cfg.opacity, 1.0);
-    assert_eq!(cfg.glass, 0.0);
-
-    assert_eq!(
-        config_from_json(r#"{"overlay_mode":"off"}"#).mode,
-        OverlayMode::Off
-    );
-}
-
-#[test]
-fn overlay_config_reads_style_and_size() {
-    use crate::overlay_protocol::{OverlaySize, OverlayStyle};
-    let cfg = config_from_json(r#"{"overlay_style":"classic","overlay_size":"extra_large"}"#);
-    assert_eq!(cfg.style, OverlayStyle::Classic);
-    assert_eq!(cfg.size, OverlaySize::ExtraLarge);
-    let cfg = config_from_json(r#"{"overlay_style":3,"overlay_size":"huge"}"#);
-    assert_eq!(cfg.style, OverlayStyle::Purist);
-    assert_eq!(cfg.size, OverlaySize::Medium);
 }
 
 // ---------------------------------------------------------------------------

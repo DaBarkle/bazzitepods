@@ -100,6 +100,20 @@ fn field<T: serde::de::DeserializeOwned>(map: &Map<String, Value>, key: &str, de
 }
 
 impl Settings {
+    /// What the overlay process draws with. The only source of overlay settings, so the
+    /// island and the Settings page can't disagree.
+    pub fn overlay_config(&self) -> crate::overlay_protocol::OverlayConfig {
+        crate::overlay_protocol::OverlayConfig {
+            mode: self.overlay_mode,
+            position: self.overlay_position,
+            opacity: self.overlay_opacity,
+            glass: self.overlay_glass,
+            style: self.overlay_style,
+            size: self.overlay_size,
+            ..Default::default()
+        }
+    }
+
     /// Lenient parse: invalid JSON gives defaults; invalid fields fall back individually.
     pub fn from_json(json: &str) -> Self {
         let Ok(Value::Object(map)) = serde_json::from_str::<Value>(json) else {
@@ -208,7 +222,6 @@ impl SettingsStore {
         self.tx.borrow().clone()
     }
 
-    #[allow(dead_code)] // For the overlay client / integrator.
     pub fn subscribe(&self) -> watch::Receiver<Settings> {
         self.tx.subscribe()
     }
