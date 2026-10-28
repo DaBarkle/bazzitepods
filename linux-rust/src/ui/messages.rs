@@ -1,6 +1,6 @@
 #[derive(Debug, Clone)]
 pub enum BluetoothUIMessage {
     OpenWindow,
-    DeviceConnected(String),    // mac
-    DeviceDisconnected(String), // mac
+    /// AirPods finished connecting: the window reloads `devices.json` for serials and firmware.
+    DeviceConnected,
 }

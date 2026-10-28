@@ -204,9 +204,6 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         d.audio = None;
         d.last_seen = Some(std::time::SystemTime::now());
     });
-    let _ = ctx
-        .ui_tx
-        .send(BluetoothUIMessage::DeviceDisconnected(mac_s.clone()));
     // Wait for the guard to finish a repair in progress: the supervisor starts the next
     // session for these AirPods only once this task ends, so two guards never change the
     // same card at once.
@@ -346,9 +343,7 @@ async fn session(
 
     ctx.battery.send(BatteryInput::AacpLink(mac, true));
     ctx.hub.set_link(&mac_s, LinkState::Connected);
-    let _ = ctx
-        .ui_tx
-        .send(BluetoothUIMessage::DeviceConnected(mac_s.clone()));
+    let _ = ctx.ui_tx.send(BluetoothUIMessage::DeviceConnected);
 
     let mut route_watch = tokio::time::interval(ROUTE_WATCH_INTERVAL);
     let mut health = tokio::time::interval(HEALTH_INTERVAL);

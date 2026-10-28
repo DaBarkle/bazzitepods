@@ -22,7 +22,6 @@ mod utils;
 use crate::battery_service::BatteryService;
 use crate::bluetooth::managers::DeviceManagers;
 use crate::devices::airpods::DeviceContext;
-use crate::devices::enums::{DeviceData, DeviceType};
 use crate::disconnect_watch::{DropReason, ReconnectPlan};
 use crate::hub::{AdapterState, Hub};
 use crate::ui::messages::BluetoothUIMessage;
@@ -297,7 +296,6 @@ struct SupervisorCtx {
 struct RunningDevice {
     cancel: CancellationToken,
     handle: JoinHandle<()>,
-    is_airpods: bool,
 }
 
 /// Per-adapter bookkeeping that outlives individual device tasks.
@@ -517,11 +515,9 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     // Sleep often kills the L2CAP channel without a clean disconnect. Restart
                     // device tasks so they reconnect fresh instead of waiting on a dead socket.
                     for (addr, dev) in st.running.drain() {
-                        if dev.is_airpods {
-                            let now = Instant::now();
-                            st.lost_link.insert(addr, now);
-                            st.eager.insert(addr, (now, CASE_DROP_WINDOW));
-                        }
+                        let now = Instant::now();
+                        st.lost_link.insert(addr, now);
+                        st.eager.insert(addr, (now, CASE_DROP_WINDOW));
                         stop_task(dev).await;
                     }
                 }
@@ -674,7 +670,7 @@ async fn reconcile(
     let mut ended = Vec::new();
     st.running.retain(|addr, d| {
         let done = d.handle.is_finished();
-        if done && d.is_airpods {
+        if done {
             ended.push(*addr);
         }
         !done
@@ -687,7 +683,6 @@ async fn reconcile(
     st.stopping.retain(|_, h| !h.is_finished());
 
     let addrs = adapter.device_addresses().await.unwrap_or_default();
-    let saved = saved_devices();
     for addr in addrs {
         let Ok(device) = adapter.device(addr) else {
             continue;
@@ -707,7 +702,7 @@ async fn reconcile(
         if !connected {
             if let Some(dev) = st.running.remove(&addr) {
                 info!("{} disconnected", addr);
-                if dev.is_airpods && powered {
+                if powered {
                     st.note_lost(addr);
                 }
                 dev.cancel.cancel();
@@ -721,8 +716,9 @@ async fn reconcile(
             continue;
         }
         let uuids = device.uuids().await.ok().flatten().unwrap_or_default();
-        let is_airpods = uuids.contains(&AIRPODS_UUID);
-        let saved_type = saved.get(&addr.to_string()).map(|d| d.type_.clone());
+        if !uuids.contains(&AIRPODS_UUID) {
+            continue;
+        }
         let name = device
             .alias()
             .await
@@ -730,65 +726,19 @@ async fn reconcile(
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "AirPods".to_string());
         let cancel = CancellationToken::new();
-        let handle = if is_airpods {
-            info!("AirPods connected: {} ({})", name, addr);
-            st.lost_link.remove(&addr);
-            st.eager.remove(&addr);
-            st.drop_reason.remove(&addr);
-            let dctx = DeviceContext {
-                hub: ctx.hub.clone(),
-                battery: ctx.battery.clone(),
-                ui_tx: ctx.ui_tx.clone(),
-                device_managers: ctx.device_managers.clone(),
-                active_commands: ctx.active_commands.clone(),
-                local_mac: local_mac.to_string(),
-            };
-            tokio::spawn(devices::airpods::run(addr, name, dctx, cancel.clone()))
-        } else if saved_type == Some(DeviceType::Nothing) {
-            info!("Managed Nothing device connected: {}", addr);
-            tokio::spawn(run_nothing(
-                addr,
-                ctx.ui_tx.clone(),
-                ctx.device_managers.clone(),
-                cancel.clone(),
-            ))
-        } else {
-            continue;
+        info!("AirPods connected: {} ({})", name, addr);
+        st.lost_link.remove(&addr);
+        st.eager.remove(&addr);
+        st.drop_reason.remove(&addr);
+        let dctx = DeviceContext {
+            hub: ctx.hub.clone(),
+            battery: ctx.battery.clone(),
+            ui_tx: ctx.ui_tx.clone(),
+            device_managers: ctx.device_managers.clone(),
+            active_commands: ctx.active_commands.clone(),
+            local_mac: local_mac.to_string(),
         };
-        st.running.insert(
-            addr,
-            RunningDevice {
-                cancel,
-                handle,
-                is_airpods,
-            },
-        );
+        let handle = tokio::spawn(devices::airpods::run(addr, name, dctx, cancel.clone()));
+        st.running.insert(addr, RunningDevice { cancel, handle });
     }
-}
-
-async fn run_nothing(
-    addr: Address,
-    ui_tx: UnboundedSender<BluetoothUIMessage>,
-    device_managers: Arc<RwLock<HashMap<String, DeviceManagers>>>,
-    cancel: CancellationToken,
-) {
-    let addr_s = addr.to_string();
-    let Some(dev) = devices::nothing::NothingDevice::new(addr, ui_tx.clone()).await else {
-        warn!("Could not set up Nothing device {}", addr_s);
-        return;
-    };
-    device_managers
-        .write()
-        .await
-        .entry(addr_s.clone())
-        .or_insert_with(|| DeviceManagers::with_att(dev.att_manager.clone()))
-        .set_att(dev.att_manager);
-    let _ = ui_tx.send(BluetoothUIMessage::DeviceConnected(addr_s.clone()));
-    cancel.cancelled().await;
-    device_managers.write().await.remove(&addr_s);
-    let _ = ui_tx.send(BluetoothUIMessage::DeviceDisconnected(addr_s));
-}
-
-fn saved_devices() -> HashMap<String, DeviceData> {
-    store::load_devices()
 }
