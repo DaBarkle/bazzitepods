@@ -112,7 +112,7 @@ async fn ephemeral_store_never_writes() {
 
 #[tokio::test]
 async fn persist_writes_the_latest_settings() {
-    let dir = std::env::temp_dir().join(format!("librepods-settings-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("kase-settings-{}", std::process::id()));
     let path = dir.join("app_settings.json");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(&path, r#"{"legacy":"keep me","overlay_mode":"auto"}"#).unwrap();
@@ -135,7 +135,7 @@ async fn persist_writes_the_latest_settings() {
 #[tokio::test]
 async fn persist_failure_is_logged_not_fatal() {
     // A path under a regular file cannot be created.
-    let file = std::env::temp_dir().join(format!("librepods-blocker-{}", std::process::id()));
+    let file = std::env::temp_dir().join(format!("kase-blocker-{}", std::process::id()));
     std::fs::write(&file, "x").unwrap();
     let store = SettingsStore::with(Settings::default(), Some(file.join("app_settings.json")));
     store.persist().await;

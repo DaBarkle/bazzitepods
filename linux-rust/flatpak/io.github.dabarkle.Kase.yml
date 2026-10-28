@@ -17,7 +17,7 @@ runtime-version: '26.08'
 sdk: org.freedesktop.Sdk
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.rust-stable
-command: librepods
+command: kase
 
 finish-args:
   # --- Display -------------------------------------------------------------
@@ -79,17 +79,20 @@ build-options:
   append-path: /usr/lib/sdk/rust-stable/bin
   env:
     # Must match the module name below: cargo-sources.json unpacks into cargo/.
-    CARGO_HOME: /run/build/librepods/cargo
+    CARGO_HOME: /run/build/kase/cargo
     CARGO_NET_OFFLINE: 'true'
 
 modules:
-  - name: librepods
+  - name: kase
     buildsystem: simple
     build-commands:
-      # Builds both binaries: librepods and librepods-overlay.
+      # Builds both binaries: kase and kase-overlay.
       - cargo build --release --frozen
-      - install -Dm755 target/release/librepods -t ${FLATPAK_DEST}/bin/
-      - install -Dm755 target/release/librepods-overlay -t ${FLATPAK_DEST}/bin/
+      - install -Dm755 target/release/kase -t ${FLATPAK_DEST}/bin/
+      - install -Dm755 target/release/kase-overlay -t ${FLATPAK_DEST}/bin/
+      # Login autostart entries written by Kase 0.6 and earlier run `librepods`; this keeps
+      # them working until the app re-registers autostart as `kase` on its first start.
+      - ln -s kase ${FLATPAK_DEST}/bin/librepods
       - install -Dm644 assets/io.github.dabarkle.Kase.desktop -t ${FLATPAK_DEST}/share/applications/
       - install -Dm644 flatpak/io.github.dabarkle.Kase.metainfo.xml -t ${FLATPAK_DEST}/share/metainfo/
       - install -Dm644 assets/icons/io.github.dabarkle.Kase.svg -t ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps/

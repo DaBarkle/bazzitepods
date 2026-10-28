@@ -110,7 +110,7 @@ struct HubKey(Hub);
 
 impl Hash for HubKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        "librepods-hub".hash(state);
+        "kase-hub".hash(state);
     }
 }
 
@@ -131,7 +131,7 @@ struct RxKey(Arc<std::sync::Mutex<Option<UnboundedReceiver<BluetoothUIMessage>>>
 
 impl Hash for RxKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        "librepods-legacy-rx".hash(state);
+        "kase-legacy-rx".hash(state);
     }
 }
 
@@ -326,7 +326,7 @@ impl App {
             started: Instant::now(),
             now: SystemTime::now(),
             // Demo/screenshots only: open on another tab.
-            tab: std::env::var("LIBREPODS_UI_TAB")
+            tab: std::env::var("KASE_UI_TAB")
                 .ok()
                 .filter(|_| demo)
                 .and_then(|t| Tab::from_name(&t))
@@ -376,7 +376,7 @@ impl App {
             return window::gain_focus(id);
         }
         // Demo/screenshots only: taller window to capture everything.
-        let height = std::env::var("LIBREPODS_UI_HEIGHT")
+        let height = std::env::var("KASE_UI_HEIGHT")
             .ok()
             .filter(|_| self.demo)
             .and_then(|h| h.parse::<f32>().ok())
@@ -912,9 +912,9 @@ fn load_apple_mode() -> Task<Message> {
     Task::perform(crate::apple_mode::status(), Message::AppleMode)
 }
 
-/// Demo/screenshots only: LIBREPODS_UI_APPLE=confirm|working|done|failed.
+/// Demo/screenshots only: KASE_UI_APPLE=confirm|working|done|failed.
 fn demo_apple_flow() -> AppleFlow {
-    match std::env::var("LIBREPODS_UI_APPLE").as_deref() {
+    match std::env::var("KASE_UI_APPLE").as_deref() {
         Ok("confirm") => AppleFlow::Confirm(true),
         Ok("working") => AppleFlow::Working(true),
         Ok("done") => AppleFlow::Done(true),

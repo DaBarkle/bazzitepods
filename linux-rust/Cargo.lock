@@ -2230,6 +2230,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "kase"
+version = "0.6.0"
+dependencies = [
+ "aes",
+ "bluer",
+ "clap",
+ "dbus",
+ "dbus-tokio",
+ "env_logger",
+ "futures",
+ "hex",
+ "iced",
+ "iced_layershell",
+ "image",
+ "ksni",
+ "libc",
+ "libpulse-binding",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "uuid",
+ "wayland-client",
+]
+
+[[package]]
 name = "keyboard-types"
 version = "0.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2397,33 +2424,6 @@ dependencies = [
  "libc",
  "plain",
  "redox_syscall 0.7.3",
-]
-
-[[package]]
-name = "librepods"
-version = "0.6.0"
-dependencies = [
- "aes",
- "bluer",
- "clap",
- "dbus",
- "dbus-tokio",
- "env_logger",
- "futures",
- "hex",
- "iced",
- "iced_layershell",
- "image",
- "ksni",
- "libc",
- "libpulse-binding",
- "log",
- "serde",
- "serde_json",
- "tokio",
- "tokio-util",
- "uuid",
- "wayland-client",
 ]
 
 [[package]]

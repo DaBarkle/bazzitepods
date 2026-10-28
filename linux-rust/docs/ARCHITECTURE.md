@@ -19,7 +19,7 @@ and keeps audio working across range loss. No user input should ever be required
 ## Modules (src/)
 
 The app is a library (`src/lib.rs`, crate `kase`) plus two binaries: `src/main.rs` (arguments,
-logging, window or headless) and `src/bin/librepods-overlay/` (the island). Large modules are
+logging, window or headless) and `src/bin/kase-overlay/` (the island). Large modules are
 folders whose `mod.rs` holds the state and entry points, with one file per job beside it.
 
 | Module | Owner | Purpose |
@@ -34,7 +34,7 @@ folders whose `mod.rs` holds the state and entry points, with one file per job b
 | `mic/` | audio | The AirPods mic switch: the AACP 0x58 AAC-ELD mic stream, its FFmpeg decoder (loaded at run time), the virtual "AirPods mic" and the desk/AirPods state machine. See "AirPods mic switch" below. |
 | `media_controller.rs` | audio | MPRIS pause/resume, conversational awareness volume. Never sets the card to `off`. |
 | `supervisor.rs`, `devices/airpods/` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. The AirPods session splits into `controls.rs` (handshake, settings, AACP events) and `route.rs` (who owns the audio). |
-| `overlay_client.rs` + `src/bin/librepods-overlay/` | overlay | Spawns and feeds the overlay process over stdin (JSON lines, `overlay_protocol.rs`). |
+| `overlay_client.rs` + `src/bin/kase-overlay/` | overlay | Spawns and feeds the overlay process over stdin (JSON lines, `overlay_protocol.rs`). |
 | `autostart.rs` | packaging | Requests autostart through the XDG Background portal. |
 | `ui/` | ui | Tray and main window (`ui/window/`: one file per tab plus shared `controls.rs`), reading `AppSnapshot`. |
 
@@ -48,7 +48,7 @@ BLE adverts ──> le.rs ──BleBatteryReading──────────�
                                                   ▼                                   ▼
                                         core::hub  watch<AppSnapshot>  <── BatteryTracker
                                           │            │             │
-                                       tray (ksni)   UI (iced)   overlay_client ──stdin──> librepods-overlay (layer-shell)
+                                       tray (ksni)   UI (iced)   overlay_client ──stdin──> kase-overlay (layer-shell)
 ```
 
 ## Battery rules (core/battery.rs)
@@ -85,7 +85,7 @@ it opens on changes), `always` (Full: the card stays), `off`.
 `mic_failures` (optional, left out when 0) counts AirPods mic failures; each new one shows
 an *AirPods Mic Unavailable* alert.
 
-What the island shows (`src/bin/librepods-overlay/logic.rs`, `event`): connecting or a pod
+What the island shows (`src/bin/kase-overlay/logic.rs`, `event`): connecting or a pod
 coming or going opens the card; the audio moving to or from another device, a battery
 dropping to 20% or 10%, charging starting, a mic switch and a noise control change each show a one-line
 alert; disconnecting shows a short goodbye. Shapes move on damped springs

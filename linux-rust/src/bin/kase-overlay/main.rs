@@ -1,4 +1,4 @@
-//! `librepods-overlay`: a click-through battery island, in the manner of the iPhone's
+//! `kase-overlay`: a click-through battery island, in the manner of the iPhone's
 //! Dynamic Island, drawn on its own wlr-layer-shell surface (Layer::Overlay, above
 //! fullscreen windows on KWin).
 //!
@@ -45,7 +45,7 @@ use kase::overlay_protocol::{
 };
 use logic::{Controller, SurfaceAction};
 
-const NAMESPACE: &str = "librepods-overlay";
+const NAMESPACE: &str = "kase-overlay";
 
 #[derive(Debug, Clone, Default)]
 struct Args {
@@ -61,7 +61,7 @@ struct Args {
 }
 
 fn usage() -> &'static str {
-    "librepods-overlay: AirPods battery overlay (driven by librepods over stdin)\n\n\
+    "kase-overlay: AirPods battery overlay (driven by kase over stdin)\n\n\
      Options:\n  \
        --demo              cycle through sample states (always visible)\n  \
        --demo-auto         like --demo, but in auto mode (pops up, then unmaps)\n  \

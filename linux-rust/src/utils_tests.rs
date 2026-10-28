@@ -1,4 +1,5 @@
-//! The address-hash function used to recognise our AirPods' rotating BLE addresses.
+//! The address-hash function used to recognise our AirPods' rotating BLE addresses, and the
+//! one-time move of the old `librepods` folders.
 
 use super::*;
 
@@ -21,4 +22,31 @@ fn ah_depends_on_key_and_random_part() {
     assert_ne!(ah(&k, &[1, 2, 3]), ah(&k, &[1, 2, 4]));
     assert_ne!(ah(&k, &[1, 2, 3]), ah(&[2u8; 16], &[1, 2, 3]));
     assert_eq!(ah(&k, &[1, 2, 3]), ah(&k, &[1, 2, 3]));
+}
+
+#[test]
+fn legacy_folder_moves_once_and_never_over_a_newer_one() {
+    let base = std::env::temp_dir().join(format!("kase-migrate-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&base);
+    let (old, new) = (base.join("librepods"), base.join("kase"));
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("devices.json"), "{}").unwrap();
+
+    assert!(migrate_dir(&old, &new).unwrap());
+    assert!(!old.exists());
+    assert_eq!(
+        std::fs::read_to_string(new.join("devices.json")).unwrap(),
+        "{}"
+    );
+
+    // Nothing left to move, and an old folder that reappears never replaces the new one.
+    assert!(!migrate_dir(&old, &new).unwrap());
+    std::fs::create_dir_all(&old).unwrap();
+    std::fs::write(old.join("devices.json"), "stale").unwrap();
+    assert!(!migrate_dir(&old, &new).unwrap());
+    assert_eq!(
+        std::fs::read_to_string(new.join("devices.json")).unwrap(),
+        "{}"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }

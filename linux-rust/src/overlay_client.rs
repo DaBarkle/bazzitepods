@@ -1,4 +1,4 @@
-//! Spawns and feeds the `librepods-overlay` process (JSON lines on its stdin,
+//! Spawns and feeds the `kase-overlay` process (JSON lines on its stdin,
 //! see `docs/ARCHITECTURE.md`, "Overlay protocol").
 //!
 //! Every public method only pushes onto a channel, so callers (UI thread or
@@ -22,7 +22,7 @@ use log::{debug, info, warn};
 
 use crate::overlay_protocol::{EXIT_UNSUPPORTED, OverlayCommand, OverlayConfig, OverlayState};
 
-pub const OVERLAY_BIN: &str = "librepods-overlay";
+pub const OVERLAY_BIN: &str = "kase-overlay";
 
 /// At most this many (re)starts within `RESTART_WINDOW`.
 const MAX_STARTS: usize = 5;
@@ -376,8 +376,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
 
     fn script(name: &str, body: &str) -> PathBuf {
-        let dir =
-            std::env::temp_dir().join(format!("librepods-overlay-test-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("kase-overlay-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let p = dir.join(name);
         std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
@@ -423,8 +422,7 @@ mod tests {
 
     #[test]
     fn unsupported_gets_every_late_retry() {
-        let log =
-            std::env::temp_dir().join(format!("librepods-overlay-late-{}", std::process::id()));
+        let log = std::env::temp_dir().join(format!("kase-overlay-late-{}", std::process::id()));
         let _ = std::fs::remove_file(&log);
         let bin = script("late", &format!("echo run >> '{}'; exit 3", log.display()));
         let mut sup = Supervisor {
@@ -477,8 +475,7 @@ mod tests {
 
     #[test]
     fn writes_lines_and_replays_after_crash() {
-        let out =
-            std::env::temp_dir().join(format!("librepods-overlay-out-{}", std::process::id()));
+        let out = std::env::temp_dir().join(format!("kase-overlay-out-{}", std::process::id()));
         let _ = std::fs::remove_file(&out);
         // Each instance appends what it reads; the first one dies after 2 lines.
         let bin = script(

@@ -22,7 +22,7 @@ mod sleep_monitor;
 mod store;
 pub mod supervisor;
 pub mod ui;
-mod utils;
+pub mod utils;
 
 pub use supervisor::Kick;
 

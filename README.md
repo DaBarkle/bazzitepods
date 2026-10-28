@@ -509,7 +509,7 @@ Kase is written in Rust with [iced](https://github.com/iced-rs/iced) for the int
 
 ```bash
 cd linux-rust
-cargo build --release   # builds the app (librepods) and the island (librepods-overlay)
+cargo build --release   # builds the app (kase) and the island (kase-overlay)
 cargo test              # no Bluetooth, AirPods, sound server or display needed
 just flatpak            # builds and installs the Flatpak
 ```
@@ -531,7 +531,7 @@ Wayland (on Ubuntu: `libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev`
 | `src/audio/` | the audio guard (A2DP health, codec, default output) |
 | `src/mic/` | the AirPods mic: stream decoding, virtual mic, switching, chimes |
 | `src/ui/` | the window, tray, springs and styles |
-| `src/bin/librepods-overlay/` | the island: shapes, springs, purist shader, alerts |
+| `src/bin/kase-overlay/` | the island: shapes, springs, purist shader, alerts |
 | `flatpak/`, `packaging/` | Flatpak manifest, app metadata and the installer |
 
 </details>
@@ -544,10 +544,10 @@ Wayland (on Ubuntu: `libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev`
 Both binaries have demo modes with fake AirPods, which is how the screenshots here are made:
 
 ```bash
-librepods --ui-demo pro                                 # also: airpods4, max, low, elsewhere, disconnected, incase, putaway, empty, btoff
-LIBREPODS_UI_TAB=island librepods --ui-demo             # open on a given tab: airpods, island or settings
-librepods-overlay --demo-story --style purist           # a scripted tour of every island state
-librepods-overlay --demo --step 3 --size extra_large    # one sample state, at a given size
+kase --ui-demo pro                               # also: airpods4, max, low, elsewhere, disconnected, incase, putaway, empty, btoff
+KASE_UI_TAB=island kase --ui-demo                # open on a given tab: airpods, island or settings
+kase-overlay --demo-story --style purist         # a scripted tour of every island state
+kase-overlay --demo --step 3 --size extra_large  # one sample state, at a given size
 ```
 
 </details>
