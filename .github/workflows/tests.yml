@@ -35,8 +35,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  # Lines covered by tests, in percent. 45.2% when this was set up (2026-10-25).
-  COVERAGE_FLOOR: 44
+  # Lines covered by tests, in percent. 45.2% when this was set up (2026-10-25), 47.6% on
+  # 2026-10-28 after the restructure.
+  COVERAGE_FLOOR: 47
 
 jobs:
   test:
