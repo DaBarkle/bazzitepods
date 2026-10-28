@@ -256,3 +256,119 @@ fn reset_keeps_levels() {
     assert_eq!(m.alpha.value, 0.0);
     assert_eq!(m.levels[LEFT].value, Some(80));
 }
+
+// ---------------------------------------------------------------------------
+// Purist border light and shake
+// ---------------------------------------------------------------------------
+
+#[test]
+fn each_event_has_its_own_light() {
+    let s = buds();
+    let glow = |c: Content, connected| glow_for(&c, &s, connected).map(|g| (g.kind, g.tint));
+    assert_eq!(
+        glow(Content::Compact, false),
+        None,
+        "the resting island is still"
+    );
+    assert_eq!(
+        glow(Content::Expanded, true),
+        Some((GlowKind::Flow, Tint::Spectrum))
+    );
+    assert_eq!(
+        glow(Content::Expanded, false),
+        Some((GlowKind::Sweep, Tint::White))
+    );
+    let both = Parts {
+        left: true,
+        right: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        glow(Content::Alert(Alert::Charging(both)), false),
+        Some((GlowKind::Sweep, Tint::Green))
+    );
+    assert_eq!(
+        glow(Content::Alert(Alert::Mic(MicChoice::AirPods)), false),
+        Some((GlowKind::Ping, Tint::Orange))
+    );
+    assert_eq!(
+        glow(Content::Alert(Alert::MicUnavailable), false),
+        Some((GlowKind::Ping, Tint::Red))
+    );
+    assert_eq!(
+        glow(Content::Alert(Alert::Back), false),
+        Some((GlowKind::Sweep, Tint::Blue))
+    );
+}
+
+#[test]
+fn low_battery_light_is_amber_then_red() {
+    let mut s = buds();
+    let left = Parts {
+        left: true,
+        ..Default::default()
+    };
+    s.left.as_mut().unwrap().level = 18;
+    let g = glow_for(&Content::Alert(Alert::Low(left)), &s, false).unwrap();
+    assert_eq!((g.kind, g.tint), (GlowKind::Breathe, Tint::Amber));
+    s.left.as_mut().unwrap().level = 9;
+    let g = glow_for(&Content::Alert(Alert::Low(left)), &s, false).unwrap();
+    assert_eq!(g.tint, Tint::Red);
+}
+
+#[test]
+fn every_glow_ends_within_two_seconds_and_then_frames_stop() {
+    for kind in [
+        GlowKind::Sweep,
+        GlowKind::Breathe,
+        GlowKind::Flow,
+        GlowKind::Ping,
+    ] {
+        let g = Glow::new(kind, Tint::White);
+        assert!(g.duration() < 2.0, "{kind:?} is too long for Apple's limit");
+        let mut m = Motion::default();
+        m.light(g);
+        let t = settle(&mut m);
+        assert!(m.glow.is_none());
+        assert!((t - g.duration()).abs() < 0.05, "{kind:?} settled at {t}");
+    }
+}
+
+#[test]
+fn glow_progress_runs_from_zero_to_one() {
+    let mut g = Glow::new(GlowKind::Sweep, Tint::Green);
+    assert_eq!(g.progress(), 0.0);
+    g.age = g.duration() / 2.0;
+    assert!((g.progress() - 0.5).abs() < 1e-6);
+    g.age = 10.0;
+    assert_eq!(g.progress(), 1.0);
+    assert!(g.done());
+}
+
+#[test]
+fn shake_swings_both_ways_and_comes_home() {
+    let mut m = Motion::default();
+    m.shake();
+    let (mut lo, mut hi) = (0.0_f32, 0.0_f32);
+    let mut t = 0.0;
+    while m.step(1.0 / 60.0) {
+        lo = lo.min(m.shake.value);
+        hi = hi.max(m.shake.value);
+        t += 1.0 / 60.0;
+    }
+    assert!(lo < -4.0 && hi > 1.0, "swing {lo}..{hi}");
+    assert!(lo > -20.0, "a nudge, not a jump: {lo}");
+    assert!(t < 1.0, "settles quickly ({t}s)");
+    assert_eq!(m.shake.value, 0.0);
+}
+
+#[test]
+fn reset_keeps_a_waiting_glow() {
+    let mut m = Motion::default();
+    m.light(Glow::new(GlowKind::Flow, Tint::Spectrum));
+    m.reset();
+    assert!(
+        m.glow.is_some(),
+        "a glow asked for before mapping still plays"
+    );
+}

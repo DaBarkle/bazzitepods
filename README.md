@@ -176,17 +176,25 @@ apps) and `linux/rust`.
 AirPods behave best with devices that introduce themselves as Apple devices: they switch
 between them automatically and stay paired with both your iPhone and your PC. Apple device
 mode makes your PC's Bluetooth report Apple's vendor ID (`004C`) to the AirPods. It's off by
-default and changes one line in a system file, so BazzitePods never does it on its own.
+default and changes one line in a system file, so BazzitePods only does it when you ask.
 
-To turn it on, open **Settings → More options → Apple device mode** and press the button to
-copy the command, or run it yourself. It makes a backup, adds the line, and restarts
-Bluetooth (your devices drop for a few seconds):
+To turn it on, open the **Settings** tab and flip **Apple device mode**. BazzitePods
+explains what happens, your system asks for your password, and Bluetooth restarts (your
+devices drop for a few seconds and reconnect on their own). Flip it off the same way to put
+your original settings back. No terminal needed.
+
+Under the hood it adds `DeviceID = bluetooth:004C:0000:0000` to `/etc/bluetooth/main.conf`
+(keeping a one-time backup at `main.conf.bak-bazzitepods`) and restarts Bluetooth. The
+script is built into the app and runs through the standard system password prompt
+(`pkexec`); it never runs without your password.
+
+If you'd rather do it by hand:
 
 ```bash
 sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-bazzitepods && sudo sed -i '/^\[General\]/a DeviceID = bluetooth:004C:0000:0000' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth
 ```
 
-To undo it:
+To undo it by hand:
 
 ```bash
 sudo sed -i '/^DeviceID = bluetooth:004C:/d' /etc/bluetooth/main.conf && sudo systemctl restart bluetooth

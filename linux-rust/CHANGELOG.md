@@ -4,9 +4,44 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.1] - 2026-10-28
+## [0.5.0] - 2026-10-28
+
+### Added
+- **Purist island style, now the default.** The iPhone's Dynamic Island as it really is: solid flat black with a hairline edge, tinted to match the alert. When
+  something happens, light runs round the border in that event's colour: green for
+  charging, a slow amber or red breath for low battery, blue when the audio moves to or
+  from another device, orange when you swap to the AirPods mic, and a flowing spectrum when
+  the AirPods connect. Each glow lasts under two seconds, then the island is still again
+  and draws nothing. ([#20])
+- **Island size.** Small, Medium, Large or Extra large scales the whole island, for big or
+  high-resolution screens. ([#20])
+- In the purist style the island gives a quick head shake when the AirPods mic can't be
+  used, and its outline moves like liquid as it stretches. ([#20])
+- **A sound when the mic swaps.** Holding the left stem now plays a soft rising chime when
+  the AirPods mic turns on and a falling one when the desk mic comes back, so you know which
+  mic you're on without looking. ([#21])
+
+### Changed
+- **Redesigned app window:** pure black like the island, three tabs (AirPods, Island,
+  Settings), a glowing status island, battery rings and selections that move on springs,
+  and a preview screen for placing the overlay. ([#19])
+- **Apple device mode is now one switch.** Flip it in the Settings tab, confirm, and enter
+  your password in the system prompt; BazzitePods makes the change and restarts Bluetooth
+  for you, then shows when it's on. Turning it off restores your original Bluetooth
+  settings. No terminal needed. If the app can't ask for your password (no `pkexec`), it
+  still offers the command to copy. ([#18])
 
 ### Fixed
+- **The left stem hold now swaps the mic on AirPods 4.** The AirPods ignored the request to
+  hand stem holds to the PC when it was sent while connecting, so holding the stem changed
+  noise control instead. BazzitePods now sends it again once the AirPods have settled, after
+  taking them back from another device, and whenever the AirPods reset it. ([#21])
+- **The AirPods mic sends sound.** Its audio wasn't decoded with the FFmpeg in the Flatpak,
+  so apps recorded silence. ([#21])
+- **The swap works inside the Flatpak.** The sound server refused to let BazzitePods change
+  the default mic or move apps between mics; it now identifies itself as an audio manager,
+  like EasyEffects and Discord do. This also fixes moving music back to the AirPods after a
+  reconnect. ([#21])
 - **Discord now moves to the AirPods mic.** Swapping to the AirPods mic only moved apps
   that were recording from your default mic, so apps set to a mic by name, or using
   EasyEffects' mic (*Easy Effects Source*), stayed on the desk mic. Every app recording from
@@ -15,8 +50,33 @@ All notable changes to BazzitePods are documented here. The format follows
 - **Apps that open the mic after the swap move too.** Discord only opens the mic when you
   join a voice channel; while the AirPods mic is on, such apps are now moved across within
   two seconds. ([#17])
+- An app that keeps going back to the desk mic is left there instead of being moved back
+  and forth every two seconds. ([#21])
+- **Swapping back to the desk mic no longer drops your sound onto the speakers.** The
+  AirPods cut their music connection when their mic stops; the speakers are now muted
+  before that happens and stay muted until the AirPods play again, and if they don't
+  start playing, BazzitePods repairs the connection straight away instead of after a few
+  seconds of silence. ([#22])
+- **The switch chime is heard even when system notification sounds are muted.** ([#22])
+- **Music no longer gets stuck on a lower-quality codec.** When the AirPods refused to
+  restart AAC after a mic swap, the repair fell back to SBC-XQ and stayed there, even
+  across reconnects. A refused restart now switches codec once to get the sound back
+  within about two seconds (instead of a second, slower reset), and BazzitePods
+  returns to AAC as soon as nothing is playing. ([#22])
+- **Battery and connection status can't silently stop updating any more.** After a
+  reconnect, the AirPods' control connection could stop responding while music kept
+  playing, so the app showed them disconnected with no battery. BazzitePods now notices
+  when that connection stalls and reopens it on its own within about 20 seconds, and
+  sending to the AirPods no longer blocks their battery and ear reports. ([#22])
+- The speakers are never left muted if BazzitePods stops in the middle of a switch,
+  for example when the PC goes to sleep. ([#22])
 
 ### Notes
+- *Purist* is the new default. If you had never changed the overlay's look, it switches to
+  Purist; pick *Classic* in the Island tab to get the glass island back exactly as before.
+  The Glass slider only applies to Classic; *Opacity over games* applies to both.
+- The purist look is drawn by a small GPU shader on the overlay's own surface. It runs only
+  while the island moves, so a still island still costs nothing, and it never touches games.
 - Apps on EasyEffects' mic skip EasyEffects while the AirPods mic is in use (EasyEffects
   keeps processing the desk mic). The AirPods do their own noise reduction.
 
@@ -177,6 +237,8 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.5.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.4.0
 [0.3.0]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.2...v0.3.0
 [0.2.2]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/DaBarkle/bazzitepods/compare/v0.2.0...v0.2.1
@@ -185,8 +247,13 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#4]: https://github.com/DaBarkle/bazzitepods/pull/4
 [#5]: https://github.com/DaBarkle/bazzitepods/pull/5
 [#6]: https://github.com/DaBarkle/bazzitepods/pull/6
+[#21]: https://github.com/DaBarkle/bazzitepods/pull/21
+[#18]: https://github.com/DaBarkle/bazzitepods/pull/18
+[#22]: https://github.com/DaBarkle/bazzitepods/pull/22
 [#17]: https://github.com/DaBarkle/bazzitepods/pull/17
 [#16]: https://github.com/DaBarkle/bazzitepods/pull/16
+[#19]: https://github.com/DaBarkle/bazzitepods/pull/19
+[#20]: https://github.com/DaBarkle/bazzitepods/pull/20
 [#15]: https://github.com/DaBarkle/bazzitepods/pull/15
 [#12]: https://github.com/DaBarkle/bazzitepods/pull/12
 [#11]: https://github.com/DaBarkle/bazzitepods/pull/11

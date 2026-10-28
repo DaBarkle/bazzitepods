@@ -578,3 +578,16 @@ pub fn scroll(theme: &Theme, status: scrollable::Status) -> scrollable::Style {
     s.horizontal_rail = rail;
     s
 }
+
+/// Inset panel inside a card: a confirm step or a status note under a setting.
+pub fn inset(theme: &Theme) -> container::Style {
+    let t = Tokens::of(theme);
+    container::Style {
+        background: Some(Background::Color(t.surface_alt)),
+        border: Border {
+            radius: 12.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}

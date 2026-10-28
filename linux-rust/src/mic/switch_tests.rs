@@ -11,6 +11,8 @@ struct World {
     refuse: Vec<u32>,
     /// Recordings set to a mic by name, besides Discord's.
     pinned: Vec<u32>,
+    /// Recordings that something puts straight back on their mic after a move.
+    bounce: Vec<u32>,
     ca: Option<bool>,
     packets: Option<mpsc::Sender<Vec<u8>>>,
     reports: Vec<MicReport>,
@@ -85,6 +87,9 @@ impl MicHost for Host {
         if w.refuse.contains(&recording) {
             return Err("refused".into());
         }
+        if w.bounce.contains(&recording) {
+            return Ok(());
+        }
         let to = w.snap.source(source).map(|s| s.index);
         if let Some(to) = to {
             for r in w
@@ -97,6 +102,10 @@ impl MicHost for Host {
             }
         }
         Ok(())
+    }
+
+    async fn chime(&self, to: MicRoute) {
+        lock(&self.0).log.push(format!("chime:{to:?}"));
     }
 
     fn start_decoder(
@@ -137,6 +146,10 @@ impl MicLink for Link {
         let mut w = lock(&self.0);
         w.log.push(format!("ca:{on}"));
         w.ca = Some(on);
+    }
+
+    fn hush_output(&self) {
+        lock(&self.0).log.push("hush".into());
     }
 
     fn rebuild_output(&self) {
@@ -249,6 +262,7 @@ async fn left_hold_switches_to_the_airpods_mic_and_back() {
             "start",
             "default:bazzitepods_airpods_mic",
             "ca:false",
+            "chime:AirPods",
             "move:41->bazzitepods_airpods_mic",
         ]
     );
@@ -270,8 +284,10 @@ async fn left_hold_switches_to_the_airpods_mic_and_back() {
     assert_eq!(
         log(&rig),
         [
+            "chime:Desk",
             "default:yeti",
             "move:41->yeti",
+            "hush",
             "stop",
             "unload:500",
             "ca:true",
@@ -341,6 +357,8 @@ async fn desk_request_and_shutdown_go_back_once() {
     let l = log(&rig);
     assert_eq!(l.iter().filter(|x| *x == "stop").count(), 1, "{l:?}");
     assert_eq!(l.iter().filter(|x| *x == "rebuild").count(), 1, "{l:?}");
+    // Only a stem hold chimes; the AirPods going away doesn't.
+    assert!(!l.iter().any(|x| x.starts_with("chime:")), "{l:?}");
 }
 
 #[tokio::test]
@@ -463,7 +481,7 @@ async fn apps_on_the_easyeffects_mic_move_to_the_airpods_mic_and_back() {
     rig.handle.request(toggle());
     settle(150).await;
     let l = log(&rig);
-    assert_eq!(l[0], "default:yeti");
+    assert_eq!(l[..2], ["chime:Desk", "default:yeti"]);
     assert!(
         l.contains(&"move:86->easyeffects_source".to_string()),
         "{l:?}"
@@ -484,4 +502,21 @@ async fn an_app_that_refuses_to_move_is_tried_once() {
         "{l:?}"
     );
     assert_eq!(last_report(&rig).map(|r| r.route), Some(MicRoute::AirPods));
+}
+
+#[tokio::test]
+async fn an_app_put_back_on_its_mic_is_not_moved_again() {
+    // Something (the app itself, or the sound server restoring its choice) puts it straight
+    // back; moving it every sweep would flip it between the two mics.
+    let mut world = desk_world();
+    world.bounce = vec![41];
+    let rig = rig(world);
+    rig.handle.request(toggle());
+    settle(450).await;
+    let l = log(&rig);
+    assert_eq!(
+        l.iter().filter(|x| x.starts_with("move:41")).count(),
+        1,
+        "{l:?}"
+    );
 }

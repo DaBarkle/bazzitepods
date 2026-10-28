@@ -454,8 +454,11 @@ impl AACPManager {
     }
 
     async fn send_packet(&self, data: &[u8]) -> Result<()> {
-        let state = self.state.lock().await;
-        if let Some(sender) = &state.sender {
+        // Never hold the state lock while waiting on the send queue: when the link is
+        // congested the wait can be long, and every packet the AirPods send (battery, ear
+        // detection) needs the same lock.
+        let sender = self.state.lock().await.sender.clone();
+        if let Some(sender) = sender {
             sender.send(data.to_vec()).await.map_err(|e| {
                 error!("Failed to send packet to channel: {}", e);
                 Error::from(std::io::Error::new(

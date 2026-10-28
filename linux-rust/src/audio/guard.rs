@@ -95,6 +95,11 @@ pub(crate) enum Cmd {
     /// stopped, after which AirPods 4 ANC keep playing on one pod only although the
     /// transport looks healthy. Not rate limited and not counted as a recovery.
     Rebuild,
+    /// The AirPods mic stream is about to stop, and AirPods 4 ANC drop the music
+    /// transport with it: mute the speakers now, so the moment the AirPods output
+    /// vanishes nothing plays there. The rebuild that follows unmutes them, or
+    /// [`HUSH_LIMIT`] does if none comes.
+    Hush,
     Shutdown,
 }
 
@@ -111,6 +116,15 @@ const FAST_STALL: Duration = Duration::from_millis(800);
 /// streams back onto the AirPods.
 const UNHUSH_WAIT: Duration = Duration::from_secs(2);
 const UNHUSH_MARGIN: Duration = Duration::from_millis(250);
+/// The longest the speakers stay muted after [`Cmd::Hush`] without a rebuild.
+const HUSH_LIMIT: Duration = Duration::from_secs(8);
+/// After a rebuild, how long the AirPods get to start playing before the codec is
+/// switched instead. Right after the mic stream stops they sometimes refuse to start
+/// the rebuilt AAC stream ("Start error"), and only a fresh transport plays again.
+const REBUILD_FLOW_WAIT: Duration = Duration::from_millis(1200);
+/// After falling back to a lesser codec, switch back to the best one once nothing is
+/// playing, or after this long if music keeps playing.
+const BEST_CODEC_RETURN: Duration = Duration::from_secs(20);
 /// Two take-backs this close together share one rebuild. Bouncing between devices is
 /// prevented where it starts (devices/airpods.rs), so this only merges duplicates: a
 /// longer limit left the AirPods silent after a quick switch back.
@@ -311,6 +325,12 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     away: bool,
     /// Other outputs muted while ours is rebuilt, so nothing plays on the speakers.
     hushed: Vec<u32>,
+    /// A [`Cmd::Hush`] waiting to be applied.
+    hush_pending: bool,
+    /// When outputs muted by [`Cmd::Hush`] get unmuted if no rebuild did it first.
+    hush_until: Option<Instant>,
+    /// A recovery left the output on a lesser codec: since when, to switch back.
+    lesser_codec_since: Option<Instant>,
 }
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
@@ -344,6 +364,9 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             we_were_default: was_default(&mac.to_string().to_uppercase()),
             wearing: false,
             fast_until: None,
+            hush_pending: false,
+            hush_until: None,
+            lesser_codec_since: None,
             repair_pending: false,
             rebuild_pending: false,
             last_repair: None,
@@ -357,7 +380,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         info!("[audio {}] guard started", self.mac_str);
         self.startup_cleanup().await;
         while !self.shutdown {
-            let wake = [self.ensure_at, self.next_monitor]
+            let wake = [self.ensure_at, self.next_monitor, self.hush_until]
                 .into_iter()
                 .flatten()
                 .min();
@@ -373,7 +396,13 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 Some(None) => self.shutdown = true,
                 None => self.on_timer().await,
             }
+            if std::mem::take(&mut self.hush_pending) {
+                self.hush().await;
+                self.hush_until = Some(Instant::now() + HUSH_LIMIT);
+            }
         }
+        // Stopped mid-rebuild (sleep, shutdown): never leave the speakers muted.
+        self.unmute_hushed().await;
         info!("[audio {}] guard stopped", self.mac_str);
     }
 
@@ -480,10 +509,21 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             }
             Cmd::Rebuild => {
                 if self.linked && !self.away {
+                    // Like a take-back: if the AirPods still don't play after the
+                    // rebuild, act on it within about a second, not after four.
+                    self.fast_until = Some(now + FAST_WINDOW);
+                    self.last_ladder = None;
+                    self.ladders_this_link = 0;
+                    self.stall_since = None;
                     self.rebuild_pending = true;
                     if self.ready {
                         self.next_monitor = Some(now);
                     }
+                }
+            }
+            Cmd::Hush => {
+                if self.linked && !self.away {
+                    self.hush_pending = true;
                 }
             }
             Cmd::Shutdown => self.shutdown = true,
@@ -517,6 +557,12 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         } else if self.next_monitor.is_some_and(|t| t <= now) {
             self.next_monitor = None;
             self.monitor().await;
+        } else if self.hush_until.is_some_and(|t| t <= now) {
+            debug!(
+                "[audio {}] no rebuild came; unmuting the speakers",
+                self.mac_str
+            );
+            self.unmute_hushed().await;
         }
         self.busy = false;
         self.restart = false;
@@ -554,6 +600,9 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         match self.ensure_audio().await {
             Ok(health) => {
                 info!("[audio {}] ready: {:?}", self.mac_str, health);
+                // WirePlumber remembers a fallback codec as the device's profile: go
+                // back to the best one (once nothing plays) rather than keep it forever.
+                self.note_codec().await;
                 self.ready = true;
                 self.stall_since = None;
                 self.set_health(health);
@@ -838,6 +887,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
     /// unmuting before that lets the tail end play on the speakers.
     async fn unhush(&mut self) {
         if self.hushed.is_empty() {
+            self.hush_until = None;
             return;
         }
         let deadline = Instant::now() + UNHUSH_WAIT;
@@ -859,6 +909,11 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             }
             sleep(self.cfg.poll).await;
         }
+        self.unmute_hushed().await;
+    }
+
+    async fn unmute_hushed(&mut self) {
+        self.hush_until = None;
         for sink in std::mem::take(&mut self.hushed) {
             if let Err(e) = self.pulse.set_sink_mute(sink, false).await {
                 debug!(
@@ -982,6 +1037,11 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             profile: active.clone(),
         };
 
+        let playing = sink.state == SinkState::Running && snap.uncorked_inputs_on(sink.index) > 0;
+        if !self.away && is_a2dp(&active) && self.return_to_best_codec(card, playing).await {
+            self.next_monitor = Some(Instant::now() + self.cfg.poll);
+            return;
+        }
         if self.away
             || !is_a2dp(&active)
             || sink.state != SinkState::Running
@@ -1119,6 +1179,33 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         let result = self.apply_profile(&order).await;
         self.restore_streams(&streams).await;
         self.ensure_not_off().await;
+        // The profile is back, but the AirPods can take a few seconds more to accept
+        // audio. Keep the speakers muted until they do; if they don't, recover now.
+        if result.is_ok() && !self.flowing_within(self.rebuild_flow_wait()).await {
+            // PipeWire locks a transport out (EIO, no acquire) for a few seconds after
+            // errors, and the off toggle keeps the same AAC transport object with its
+            // error count. Another codec gets a fresh transport that starts at once;
+            // AAC comes back later, once that lockout is long gone.
+            info!(
+                "[audio {}] the AirPods didn't start the rebuilt output, switching codec",
+                self.mac_str
+            );
+            if let Some(profile) = self.switch_codec(&streams).await {
+                self.unhush().await;
+                self.last_repair = Some(Instant::now());
+                self.stall_since = None;
+                self.set_health(AudioHealth::Ready {
+                    codec: codec_for(&profile, None),
+                    profile,
+                });
+                return;
+            }
+            self.maybe_run_ladder().await;
+            // A rate-limited ladder leaves the speakers muted; never keep them that way.
+            self.unhush().await;
+            self.last_repair = Some(Instant::now());
+            return;
+        }
         self.unhush().await;
         self.last_repair = Some(Instant::now());
         self.stall_since = None;
@@ -1196,6 +1283,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             self.restore_streams(&streams).await;
             self.check_interrupt()?;
             if step2.is_ok() && self.stall_resolved().await {
+                self.note_codec().await;
                 return Ok(Some(2));
             }
             self.check_interrupt()?;
@@ -1222,14 +1310,96 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 self.stall_resolved().await
             }
         {
+            self.note_codec().await;
             return Ok(Some(3));
         }
         Ok(None)
     }
 
+    /// Switches to another A2DP codec, which makes a fresh transport, and waits for
+    /// audio. Returns the profile when it plays.
+    async fn switch_codec(&mut self, streams: &[u32]) -> Option<String> {
+        let card = self.current_card().await?;
+        let active = card.active_profile.clone().unwrap_or_default();
+        let alternates: Vec<String> = a2dp_candidates(&card)
+            .into_iter()
+            .filter(|p| *p != active)
+            .collect();
+        let profile = self.apply_profile(&alternates).await.ok()?;
+        self.restore_streams(streams).await;
+        if !self.stall_resolved().await {
+            return None;
+        }
+        self.note_codec().await;
+        Some(profile)
+    }
+
+    fn rebuild_flow_wait(&self) -> Duration {
+        REBUILD_FLOW_WAIT.min(self.cfg.verify_timeout)
+    }
+
+    /// Remembers whether the output now runs on a lesser codec than the best offered.
+    async fn note_codec(&mut self) {
+        let Some(card) = self.current_card().await else {
+            return;
+        };
+        let best = a2dp_candidates(&card).into_iter().next();
+        let lesser = best.is_some() && card.active_profile != best;
+        self.lesser_codec_since = lesser.then(Instant::now);
+    }
+
+    /// After a fallback to a lesser codec, goes back to the best one: when nothing is
+    /// playing (no gap to hear), or after [`BEST_CODEC_RETURN`] of music. If the best
+    /// codec doesn't play, stays on the one that did.
+    async fn return_to_best_codec(&mut self, card: &CardInfo, playing: bool) -> bool {
+        let Some(since) = self.lesser_codec_since else {
+            return false;
+        };
+        if playing && since.elapsed() < BEST_CODEC_RETURN {
+            return false;
+        }
+        self.lesser_codec_since = None;
+        let current = card.active_profile.clone().unwrap_or_default();
+        let Some(best) = a2dp_candidates(card).into_iter().next() else {
+            return false;
+        };
+        if best == current {
+            return false;
+        }
+        info!("[audio {}] back from {} to {}", self.mac_str, current, best);
+        let streams = self.our_streams().await;
+        if playing {
+            self.hush().await;
+        }
+        let ok = self
+            .apply_profile(std::slice::from_ref(&best))
+            .await
+            .is_ok()
+            && {
+                self.restore_streams(&streams).await;
+                self.flowing_within(self.rebuild_flow_wait()).await
+            };
+        if !ok {
+            warn!(
+                "[audio {}] {} didn't play, staying on {}",
+                self.mac_str, best, current
+            );
+            let _ = self.apply_profile(std::slice::from_ref(&current)).await;
+            self.restore_streams(&streams).await;
+        }
+        self.unhush().await;
+        self.stall_since = None;
+        true
+    }
+
     /// True once audio flows again (transport active) or nothing is playing.
     async fn stall_resolved(&self) -> bool {
-        let deadline = Instant::now() + self.cfg.verify_timeout;
+        self.flowing_within(self.cfg.verify_timeout).await
+    }
+
+    /// Like [`Self::stall_resolved`], waiting at most `wait`.
+    async fn flowing_within(&self, wait: Duration) -> bool {
+        let deadline = Instant::now() + wait;
         loop {
             if let Ok(snap) = self.pulse.snapshot().await
                 && let Some(card) = snap.card_for(&self.mac_str)

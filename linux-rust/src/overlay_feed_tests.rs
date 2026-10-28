@@ -219,6 +219,17 @@ fn overlay_config_reads_and_clamps_values() {
     );
 }
 
+#[test]
+fn overlay_config_reads_style_and_size() {
+    use crate::overlay_protocol::{OverlaySize, OverlayStyle};
+    let cfg = config_from_json(r#"{"overlay_style":"classic","overlay_size":"extra_large"}"#);
+    assert_eq!(cfg.style, OverlayStyle::Classic);
+    assert_eq!(cfg.size, OverlaySize::ExtraLarge);
+    let cfg = config_from_json(r#"{"overlay_style":3,"overlay_size":"huge"}"#);
+    assert_eq!(cfg.style, OverlayStyle::Purist);
+    assert_eq!(cfg.size, OverlaySize::Medium);
+}
+
 // ---------------------------------------------------------------------------
 // Notification fallback (desktops without an overlay)
 // ---------------------------------------------------------------------------

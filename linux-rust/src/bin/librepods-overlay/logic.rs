@@ -5,10 +5,10 @@ use std::time::{Duration, Instant};
 
 use crate::island::{
     ALERT_MAX_W, Alert, Content, EXPANDED_H, EXPANDED_W_BUDS, Motion, Parts, display_name,
-    elsewhere_label, shape,
+    elsewhere_label, glow_for, shape,
 };
 use crate::overlay_protocol::{
-    ComponentState, OverlayCommand, OverlayConfig, OverlayMode, OverlayState,
+    ComponentState, OverlayCommand, OverlayConfig, OverlayMode, OverlayState, OverlayStyle,
 };
 
 /// Battery band used to detect "dropped to 20% / 10%".
@@ -184,6 +184,22 @@ impl Controller {
         self.pop = Some((content, now + Duration::from_secs_f32(secs)));
     }
 
+    /// Lights the border for `content` (purist style only; the classic island has no
+    /// key line, so it would only spend frames on nothing).
+    fn announce(&mut self, content: &Content, connected: bool, now: Instant) {
+        if self.config.style != OverlayStyle::Purist || self.config.mode == OverlayMode::Off {
+            return;
+        }
+        let state = self.display_state(now).unwrap_or_else(placeholder);
+        if let Some(glow) = glow_for(content, &state, connected) {
+            self.motion.light(glow);
+            self.moving = true;
+        }
+        if content == &Content::Alert(Alert::MicUnavailable) {
+            self.motion.shake();
+        }
+    }
+
     /// Applies one protocol command. `Quit` is handled by the caller.
     pub fn apply(&mut self, cmd: OverlayCommand, now: Instant) {
         match cmd {
@@ -201,6 +217,8 @@ impl Controller {
             }
             OverlayCommand::State { state } => {
                 let ev = event(self.state.as_ref(), &state);
+                let just_connected =
+                    state.connected && !self.state.as_ref().is_some_and(|p| p.connected);
                 if self.motion.update_levels(&state, self.mapped) {
                     self.moving = true;
                 }
@@ -211,10 +229,16 @@ impl Controller {
                     Some(Content::Alert(Alert::Disconnected)) => {
                         let secs = Alert::Disconnected.duration();
                         self.farewell_until = Some(now + Duration::from_secs_f32(secs));
+                        self.state = Some(state);
+                        self.announce(&Content::Alert(Alert::Disconnected), false, now);
+                        return;
                     }
                     Some(c) => {
                         self.farewell_until = None;
+                        self.state = Some(state);
+                        self.announce(&c, just_connected, now);
                         self.pop_up(c, now);
+                        return;
                     }
                     None if state.connected => self.farewell_until = None,
                     None => {}
@@ -226,9 +250,17 @@ impl Controller {
                 self.opacity_preview = reason == "opacity";
                 self.forced_hidden = false;
                 let secs = self.config.auto_hide_secs.clamp(2.0, 600.0);
+                let fresh = !self.previewing(now);
                 self.preview_until = Some(now + Duration::from_secs_f32(secs));
+                // Show off the border light when a preview opens (not on every slider step).
+                if fresh && !self.opacity_preview {
+                    self.announce(&Content::Expanded, true, now);
+                }
             }
-            OverlayCommand::Show { .. } => self.pop_up(Content::Expanded, now),
+            OverlayCommand::Show { .. } => {
+                self.announce(&Content::Expanded, false, now);
+                self.pop_up(Content::Expanded, now)
+            }
             OverlayCommand::Hide => {
                 self.pop = None;
                 self.farewell_until = None;
@@ -405,9 +437,10 @@ impl Controller {
     /// overshoot and the bump. It is fixed, so the surface is never resized while
     /// shown: a resize lands a frame apart from the drawing and makes the island jump.
     pub fn extent(&self) -> (f32, f32) {
+        let k = self.config.size.scale();
         (
-            ALERT_MAX_W.max(EXPANDED_W_BUDS) * 1.1 + 8.0,
-            EXPANDED_H * 1.1 + 6.0,
+            (ALERT_MAX_W.max(EXPANDED_W_BUDS) * 1.1 + 8.0) * k,
+            (EXPANDED_H * 1.1 + 6.0) * k,
         )
     }
 }
