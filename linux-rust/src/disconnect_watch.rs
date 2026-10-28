@@ -69,12 +69,38 @@ pub fn address_from_path(path: &str) -> Option<Address> {
 }
 
 pub fn spawn(kick_tx: UnboundedSender<Kick>) {
-    tokio::spawn(async move {
-        if let Err(e) = run(kick_tx).await {
-            // Not fatal: every drop is then treated as a walk-out.
-            info!("Disconnect reasons unavailable: {e}");
+    // Without this watcher every drop counts as a walk-out, so a deliberate Disconnect
+    // would be undone. Not fatal while it's down.
+    tokio::spawn(keep_watching("Disconnect reasons", kick_tx, run));
+}
+
+const RETRY_MIN: std::time::Duration = if cfg!(test) {
+    std::time::Duration::from_millis(5)
+} else {
+    std::time::Duration::from_secs(1)
+};
+const RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Runs a system-bus signal watcher for the life of the app: `run` returns when the bus
+/// connection is lost (bluetoothd or D-Bus restarted), and is started again with a backoff.
+pub(crate) async fn keep_watching<F, Fut>(what: &str, kick_tx: UnboundedSender<Kick>, run: F)
+where
+    F: Fn(UnboundedSender<Kick>) -> Fut,
+    Fut: std::future::Future<Output = Result<(), dbus::Error>>,
+{
+    let mut delay = RETRY_MIN;
+    while !kick_tx.is_closed() {
+        let started = std::time::Instant::now();
+        match run(kick_tx.clone()).await {
+            Ok(()) => info!("{what}: system bus connection lost; reconnecting"),
+            Err(e) => info!("{what} unavailable: {e}"),
         }
-    });
+        if started.elapsed() > RETRY_MAX {
+            delay = RETRY_MIN;
+        }
+        tokio::time::sleep(delay).await;
+        delay = (delay * 2).min(RETRY_MAX);
+    }
 }
 
 async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {
@@ -102,6 +128,28 @@ async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn watcher_is_started_again_after_the_bus_drops() {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let rx = std::sync::Mutex::new(Some(rx));
+        let runs = std::sync::atomic::AtomicU32::new(0);
+        let run = |_tx: UnboundedSender<Kick>| {
+            let n = runs.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            if n == 3 {
+                // The app is shutting down: the watcher stops for good.
+                rx.lock().unwrap().take();
+            }
+            async { Ok(()) }
+        };
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            keep_watching("test", tx, run),
+        )
+        .await
+        .expect("watcher loop did not stop");
+        assert_eq!(runs.load(std::sync::atomic::Ordering::SeqCst), 3);
+    }
 
     #[test]
     fn parses_bluez_reasons() {
