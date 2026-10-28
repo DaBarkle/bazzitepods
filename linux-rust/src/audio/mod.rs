@@ -144,6 +144,12 @@ impl AudioGuardHandle {
     pub fn shutdown(&self) {
         self.send(Cmd::Shutdown);
     }
+
+    /// Resolves once the guard task has ended (it drops its health sender when it stops).
+    pub async fn stopped(&self) {
+        let mut rx = self.health_rx.clone();
+        while rx.changed().await.is_ok() {}
+    }
 }
 
 #[cfg(test)]

@@ -1032,3 +1032,23 @@ async fn shutting_down_never_leaves_the_speakers_muted() {
     settle(100).await;
     assert!(!lock(&world).snap.sinks.iter().any(|s| s.muted));
 }
+
+#[tokio::test]
+async fn card_that_keeps_coming_back_is_always_set_up_again() {
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    // More losses in one link than max_ensure_attempts: each one recovered.
+    for _ in 0..4 {
+        lock(&world).remove_card();
+        wait_health(&handle, "lost", |h| !matches!(h, AudioHealth::Ready { .. })).await;
+        lock(&world).add_card("a2dp-sink-aac");
+        wait_health(&handle, "ready again", |h| ready_with(h, "a2dp-sink-aac")).await;
+    }
+    handle.shutdown();
+    tokio::time::timeout(Duration::from_secs(2), handle.stopped())
+        .await
+        .expect("guard task did not stop");
+}

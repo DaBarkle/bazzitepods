@@ -52,6 +52,8 @@ const CLAIM_RESEND_AFTER: Duration = Duration::from_secs(6);
 /// A session step that takes longer than this is stuck: the control channel is dropped
 /// and opened again, so battery and controls come back without restarting the app.
 const SESSION_STUCK: Duration = Duration::from_secs(20);
+/// How long a finished session waits for its audio guard to end a repair in progress.
+const GUARD_STOP_WAIT: Duration = Duration::from_secs(30);
 
 /// What the session is doing right now, for the stuck-session watchdog.
 #[derive(Clone, Default)]
@@ -204,6 +206,16 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
     let _ = ctx
         .ui_tx
         .send(BluetoothUIMessage::DeviceDisconnected(mac_s.clone()));
+    // Wait for the guard to finish a repair in progress: the supervisor starts the next
+    // session for these AirPods only once this task ends, so two guards never change the
+    // same card at once.
+    if let Some(audio) = &audio
+        && tokio::time::timeout(GUARD_STOP_WAIT, audio.stopped())
+            .await
+            .is_err()
+    {
+        warn!("Audio guard for {} is still busy; not waiting longer", mac_s);
+    }
     info!("Device task finished for {}", mac_s);
 }
 

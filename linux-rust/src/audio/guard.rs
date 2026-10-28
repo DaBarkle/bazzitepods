@@ -600,6 +600,9 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         match self.ensure_audio().await {
             Ok(health) => {
                 info!("[audio {}] ready: {:?}", self.mac_str, health);
+                // The limit is for setups that keep failing, not for a card that comes
+                // back every time it goes.
+                self.ensure_attempts = 0;
                 // WirePlumber remembers a fallback codec as the device's profile: go
                 // back to the best one (once nothing plays) rather than keep it forever.
                 self.note_codec().await;
