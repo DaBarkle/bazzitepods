@@ -510,7 +510,7 @@ Kase is written in Rust with [iced](https://github.com/iced-rs/iced) for the int
 ```bash
 cd linux-rust
 cargo build --release   # builds the app (kase) and the island (kase-overlay)
-cargo test              # no Bluetooth, AirPods, sound server or display needed
+cargo test              # no Bluetooth, AirPods, sound server or display needed (or: just test)
 just flatpak            # builds and installs the Flatpak
 ```
 
@@ -524,6 +524,8 @@ Wayland (on Ubuntu: `libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev`
 
 | Path | What's there |
 | --- | --- |
+| `src/main.rs`, `src/lib.rs` | the `kase` program's arguments, and the library everything else lives in |
+| `src/supervisor.rs` | starts the services and runs one AirPods session at a time |
 | `src/bluetooth/` | AACP (the AirPods control protocol) and LE advert decryption |
 | `src/devices/` | the AirPods session: handshake, reconnect, device switching |
 | `src/core/` | battery rules and the AirPods model table |
