@@ -86,7 +86,7 @@ pub struct MicReport {
 
 #[derive(Debug, Clone)]
 pub struct SwitchConfig {
-    /// Crash recovery: what to put back if BazzitePods dies on the AirPods mic.
+    /// Crash recovery: what to put back if Kase dies on the AirPods mic.
     pub state_path: PathBuf,
     pub fifo: PathBuf,
     /// Apps that follow the default mic move on their own; after this, the rest are moved.

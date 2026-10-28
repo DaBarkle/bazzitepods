@@ -134,11 +134,7 @@ impl Tokens {
 pub fn theme(dark: bool) -> Theme {
     let t = if dark { DARK } else { LIGHT };
     Theme::custom(
-        if dark {
-            "BazzitePods Dark"
-        } else {
-            "BazzitePods Light"
-        },
+        if dark { "Kase Dark" } else { "Kase Light" },
         Palette {
             background: t.bg,
             text: t.text,

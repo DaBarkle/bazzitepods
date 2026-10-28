@@ -4,6 +4,19 @@ All notable changes to BazzitePods are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **BazzitePods is now Kase**, "AirPods for KDE Plasma". The name says who it's for
+  without tying it to one distro: it works on any KDE Plasma desktop, Bazzite included.
+  The app id is now `io.github.dabarkle.Kase` and the release bundle is `Kase.flatpak`.
+- **Updating moves you across by itself.** Run the install command as usual: it copies
+  your settings, saved AirPods and Flatpak overrides from BazzitePods to Kase, then
+  removes BazzitePods and its old autostart entry. Apple device mode is a system setting
+  and stays as it is.
+- The README is rewritten from scratch, with new screenshots and animations of the
+  current app.
+
 ## [0.5.0] - 2026-10-28
 
 ### Added

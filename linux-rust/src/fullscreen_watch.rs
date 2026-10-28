@@ -12,7 +12,9 @@ use dbus::blocking::Connection;
 use log::{debug, info};
 use std::time::Duration;
 
-const PLUGIN: &str = "bazzitepods-fullscreen";
+const PLUGIN: &str = "kase-fullscreen";
+/// The script's name before the app was renamed to Kase (0.5.0 and earlier).
+const OLD_PLUGIN: &str = "bazzitepods-fullscreen";
 
 /// KWin 6 script. A window counts as fullscreen when it is in fullscreen mode, or when
 /// it is borderless and covers its whole screen (many games do that).
@@ -30,8 +32,8 @@ function report() {
     var full = isFull(workspace.activeWindow);
     if (full === last) return;
     last = full;
-    callDBus("io.github.dabarkle.BazzitePods", "/io/github/dabarkle/BazzitePods",
-             "io.github.dabarkle.BazzitePods", "SetFullscreen", full);
+    callDBus("io.github.dabarkle.Kase", "/io/github/dabarkle/Kase",
+             "io.github.dabarkle.Kase", "SetFullscreen", full);
 }
 function hook(w) {
     w.fullScreenChanged.connect(report);
@@ -68,9 +70,11 @@ fn install() -> Result<(), Box<dyn std::error::Error>> {
     let conn = Connection::new_session()?;
     let scripting = conn.with_proxy("org.kde.KWin", "/Scripting", Duration::from_secs(3));
     // A copy left behind by a previous run (crash, update) would report twice.
-    let unloaded: Result<(bool,), dbus::Error> =
-        scripting.method_call("org.kde.kwin.Scripting", "unloadScript", (PLUGIN,));
-    debug!("previous fullscreen script unloaded: {unloaded:?}");
+    for name in [PLUGIN, OLD_PLUGIN] {
+        let unloaded: Result<(bool,), dbus::Error> =
+            scripting.method_call("org.kde.kwin.Scripting", "unloadScript", (name,));
+        debug!("previous fullscreen script {name} unloaded: {unloaded:?}");
+    }
     let (id,): (i32,) = scripting.method_call(
         "org.kde.kwin.Scripting",
         "loadScript",

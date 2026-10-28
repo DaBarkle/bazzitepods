@@ -85,7 +85,7 @@ pub fn start_ui(ctx: UiContext) -> iced::Result {
     )
     .subscription(App::subscription)
     .theme(App::theme)
-    .title(|_: &App, _| "BazzitePods".to_string())
+    .title(|_: &App, _| "Kase".to_string())
     .settings(iced::Settings {
         id: Some(crate::autostart::APP_ID.to_string()),
         fonts: vec![
@@ -343,7 +343,7 @@ pub struct App {
 }
 
 fn load_window_icon() -> Option<window::Icon> {
-    let bytes = include_bytes!("../../assets/icons/io.github.dabarkle.BazzitePods.png");
+    let bytes = include_bytes!("../../assets/icons/io.github.dabarkle.Kase.png");
     let img = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (w, h) = img.dimensions();
     window::icon::from_rgba(img.into_raw(), w, h).ok()
@@ -660,7 +660,7 @@ impl App {
             }
             Message::Frame(_) => Task::none(),
             Message::WindowClosed(id) => {
-                // Closing the window keeps BazzitePods running in the tray.
+                // Closing the window keeps Kase running in the tray.
                 if self.window == Some(id) {
                     self.window = None;
                 }
@@ -1024,7 +1024,7 @@ impl App {
                 Glyph::Bluetooth,
                 "Bluetooth is off",
                 "Turn on Bluetooth from the system tray or System Settings › Bluetooth. \
-                 BazzitePods reconnects on its own.",
+                 Kase reconnects on its own.",
             ),
             (AdapterState::Missing, None) if self.started.elapsed() < ADAPTER_GRACE => {
                 empty_state(Glyph::Bluetooth, "Looking for Bluetooth…", "One moment.")
@@ -1039,7 +1039,7 @@ impl App {
                 Glyph::Earbuds,
                 "No AirPods yet",
                 "Pair your AirPods in System Settings › Bluetooth. \
-                 BazzitePods finds them automatically — nothing to set up here.",
+                 Kase finds them automatically — nothing to set up here.",
             ),
             (_, Some(d)) => {
                 let mut page = column![self.hero(d)].spacing(0);
@@ -2198,7 +2198,7 @@ fn away_hint<'a>(d: &DeviceSnapshot) -> Element<'a, Message> {
     } else {
         (
             "Out of range",
-            "These are the last levels seen. BazzitePods reconnects on its own when your \
+            "These are the last levels seen. Kase reconnects on its own when your \
              AirPods are back.",
         )
     };

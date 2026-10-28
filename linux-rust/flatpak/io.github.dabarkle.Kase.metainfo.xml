@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- Copyright 2026 LibrePods contributors -->
 <component type="desktop-application">
-  <id>io.github.dabarkle.BazzitePods</id>
+  <id>io.github.dabarkle.Kase</id>
 
-  <name>BazzitePods</name>
-  <summary>AirPods battery, controls and overlay for Linux</summary>
+  <name>Kase</name>
+  <summary>AirPods battery, controls and island overlay for KDE Plasma</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-only</project_license>
@@ -15,7 +15,7 @@
 
   <description>
     <p>
-      BazzitePods is a zero-configuration companion for AirPods and Beats earbuds on Linux.
+      Kase is a zero-configuration AirPods companion for KDE Plasma and other Linux desktops.
       It finds your earbuds on its own, starts with your session and stays out of the way in the
       system tray.
     </p>
@@ -32,19 +32,21 @@
       use with anti-cheat protected games.
     </p>
     <p>
-      BazzitePods is built on LibrePods (https://github.com/librepods-org/librepods) and shares
+      Kase is built on LibrePods, the open AirPods protocol project, and shares
       its AGPL-3.0 licence.
     </p>
     <p>
-      BazzitePods is not affiliated with or endorsed by Apple Inc. AirPods is a trademark of
+      Kase is not affiliated with or endorsed by Apple Inc. AirPods is a trademark of
       Apple Inc.
     </p>
   </description>
 
-  <launchable type="desktop-id">io.github.dabarkle.BazzitePods.desktop</launchable>
+  <launchable type="desktop-id">io.github.dabarkle.Kase.desktop</launchable>
   <provides>
     <binary>librepods</binary>
     <binary>librepods-overlay</binary>
+    <!-- The app was called BazzitePods until 0.5.0. -->
+    <id>io.github.dabarkle.BazzitePods</id>
   </provides>
 
   <url type="homepage">https://github.com/DaBarkle/bazzitepods</url>
@@ -66,15 +68,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>Battery levels for both earbuds and the case</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/window-dark.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/window-airpods.png</image>
     </screenshot>
     <screenshot>
       <caption>The island overlay shown when the earbuds connect</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/overlay-full.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/island-card.png</image>
     </screenshot>
     <screenshot>
-      <caption>Quick controls from the system tray</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/tray.png</image>
+      <caption>Placing and styling the island overlay</caption>
+      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/window-island.png</image>
     </screenshot>
   </screenshots>
 

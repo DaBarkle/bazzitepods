@@ -1,8 +1,8 @@
 APP_NAME := "librepods"
-APP_ID := "io.github.dabarkle.BazzitePods"
-DESKTOP_FILE := "assets/io.github.dabarkle.BazzitePods.desktop"
-ICON_FILE := "assets/icons/io.github.dabarkle.BazzitePods.png"
-FLATPAK_MANIFEST := "flatpak/io.github.dabarkle.BazzitePods.yml"
+APP_ID := "io.github.dabarkle.Kase"
+DESKTOP_FILE := "assets/io.github.dabarkle.Kase.desktop"
+ICON_FILE := "assets/icons/io.github.dabarkle.Kase.png"
+FLATPAK_MANIFEST := "flatpak/io.github.dabarkle.Kase.yml"
 CARGO_GENERATOR_URL := "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py"
 
 default: build-appimage
@@ -89,12 +89,12 @@ flatpak:
     flatpak-builder --user --install --force-clean --install-deps-from=flathub \
         build-dir {{FLATPAK_MANIFEST}}
 
-# Build a distributable single-file bundle: dist/BazzitePods.flatpak
+# Build a distributable single-file bundle: dist/Kase.flatpak
 flatpak-bundle:
     flatpak-builder --force-clean --install-deps-from=flathub --user \
         --repo=repo build-dir {{FLATPAK_MANIFEST}}
     mkdir -p dist
-    flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo dist/BazzitePods.flatpak {{APP_ID}}
+    flatpak build-bundle --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo repo dist/Kase.flatpak {{APP_ID}}
 
 # Static checks for the packaging files.
 lint-packaging:

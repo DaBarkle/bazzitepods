@@ -1,4 +1,4 @@
-//! One BazzitePods per session. A second launch (app menu click while the app sits in the tray)
+//! One Kase per session. A second launch (app menu click while the app sits in the tray)
 //! asks the running copy to show its window and exits, instead of starting a duplicate that
 //! would fight over the Bluetooth control channel.
 
@@ -10,9 +10,9 @@ use log::{debug, info};
 use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
-const BUS_NAME: &str = "io.github.dabarkle.BazzitePods";
-const PATH: &str = "/io/github/dabarkle/BazzitePods";
-const IFACE: &str = "io.github.dabarkle.BazzitePods";
+const BUS_NAME: &str = "io.github.dabarkle.Kase";
+const PATH: &str = "/io/github/dabarkle/Kase";
+const IFACE: &str = "io.github.dabarkle.Kase";
 
 pub enum Instance {
     /// We are the only instance; keep running.
@@ -42,7 +42,7 @@ pub fn claim(ui_tx: UnboundedSender<BluetoothUIMessage>, show_window: bool) -> I
                     debug!("Could not activate running instance: {e}");
                 }
             }
-            info!("BazzitePods is already running");
+            info!("Kase is already running");
             return Instance::Secondary;
         }
         Err(e) => {

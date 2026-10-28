@@ -1,4 +1,4 @@
-# Runs the BazzitePods test suite (linux-rust/) on every pull request and on pushes to
+# Runs the Kase test suite (linux-rust/) on every pull request and on pushes to
 # main/bazzite, and reports how much of the code the tests exercise.
 #
 # The tests need no Bluetooth, AirPods, sound server or display: packets, adverts and the

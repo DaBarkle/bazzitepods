@@ -363,14 +363,14 @@ pub fn battery_line(d: &DeviceSnapshot, now: SystemTime) -> String {
 /// Tray tooltip, e.g. `("David's AirPods", "AirPods 4 — L 80% · R 75% · Case 40% ⚡")`.
 pub fn tooltip(snap: &AppSnapshot, now: SystemTime) -> (String, String) {
     match snap.adapter {
-        AdapterState::Off => return ("BazzitePods".into(), "Bluetooth is off".into()),
+        AdapterState::Off => return ("Kase".into(), "Bluetooth is off".into()),
         AdapterState::Missing if snap.devices.is_empty() => {
-            return ("BazzitePods".into(), "Bluetooth unavailable".into());
+            return ("Kase".into(), "Bluetooth unavailable".into());
         }
         _ => {}
     }
     let Some(d) = snap.primary() else {
-        return ("BazzitePods".into(), "No AirPods paired".into());
+        return ("Kase".into(), "No AirPods paired".into());
     };
     let model = model_name(d.model);
     let body = if d.is_connected() || is_nearby(d) {

@@ -339,9 +339,9 @@ impl Conn {
         // else gets "Access denied" (measured on Bazzite, WirePlumber 0.5.17).
         let mut props = Proplist::new()
             .ok_or_else(|| PulseError::Connect("proplist creation failed".into()))?;
-        let _ = props.set_str("application.name", "BazzitePods");
+        let _ = props.set_str("application.name", "Kase");
         let _ = props.set_str("media.category", "Manager");
-        let mut context = Context::new_with_proplist(&mainloop, "BazzitePods", &props)
+        let mut context = Context::new_with_proplist(&mainloop, "Kase", &props)
             .ok_or_else(|| PulseError::Connect("context creation failed".into()))?;
         context
             .connect(None, ContextFlagSet::NOAUTOSPAWN, None)

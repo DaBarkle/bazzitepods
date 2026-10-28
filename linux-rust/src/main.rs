@@ -70,10 +70,7 @@ fn main() -> iced::Result {
     let args = Args::parse();
 
     if args.version {
-        println!(
-            "You are running BazzitePods version {}",
-            env!("CARGO_PKG_VERSION")
-        );
+        println!("You are running Kase version {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
 

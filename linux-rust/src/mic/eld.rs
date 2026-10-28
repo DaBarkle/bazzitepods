@@ -1,6 +1,6 @@
 //! AAC-ELD decoding with the FFmpeg that ships in the Flatpak runtime (LGPL, not bundled).
 //!
-//! libavcodec is opened with `dlopen` at runtime instead of being linked, so BazzitePods
+//! libavcodec is opened with `dlopen` at runtime instead of being linked, so Kase
 //! still starts (just without the AirPods mic) wherever FFmpeg or its AAC decoder is
 //! missing, and the build needs no FFmpeg headers or bindgen.
 //!
@@ -265,9 +265,7 @@ impl Decoder {
                     && !data.is_null()
                     && std::slice::from_raw_parts(data, asc.len()) == asc;
                 if !same {
-                    return Err(
-                        "this FFmpeg's structures differ from what BazzitePods expects".into(),
-                    );
+                    return Err("this FFmpeg's structures differ from what Kase expects".into());
                 }
                 Ok(())
             })();

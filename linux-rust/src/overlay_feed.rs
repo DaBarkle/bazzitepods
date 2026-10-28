@@ -275,9 +275,9 @@ fn notify(summary: String, body: String) {
                 "org.freedesktop.Notifications",
                 "Notify",
                 (
-                    "BazzitePods",
+                    "Kase",
                     0u32,
-                    "io.github.dabarkle.BazzitePods",
+                    "io.github.dabarkle.Kase",
                     summary.as_str(),
                     body.as_str(),
                     Vec::<String>::new(),

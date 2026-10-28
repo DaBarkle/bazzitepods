@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""BazzitePods music-quality A/B test for the AirPods mic stream (research only).
+"""Kase music-quality A/B test for the AirPods mic stream (research only).
 
 Plays your music through the AirPods while the high-quality mic stream (AACP 0x58)
 is switched off, on, off, on, and logs what PipeWire's AAC encoder does in each
@@ -8,7 +8,7 @@ phase. PipeWire lowers the AAC bitrate (by a third, every half second, down to
 level, so WirePlumber's log level is raised to debug for the test and restored
 afterwards.
 
-Needs mic-test.py in the same folder. Stops BazzitePods while it runs and starts it
+Needs mic-test.py in the same folder. Stops Kase while it runs and starts it
 again at the end. Refuses to run while a game is open. Results go to
 ~/bazzitepods-mictest/abtest-*/.
 """
@@ -34,7 +34,7 @@ def journal_since(since):
 
 def main():
     os.makedirs(mt.OUT, exist_ok=True)
-    mt.say("BazzitePods music-quality A/B test")
+    mt.say("Kase music-quality A/B test")
     mt.say(f"Results folder: {mt.OUT}\n")
 
     games = mt.running_games()
@@ -60,7 +60,7 @@ def main():
     watcher = mt.AudioWatcher(mac)
     try:
         if was_running:
-            mt.say("Pausing BazzitePods for the test (it comes back at the end)...")
+            mt.say("Pausing Kase for the test (it comes back at the end)...")
             mt.run(["flatpak", "kill", mt.APP_ID])
             time.sleep(2)
         mt.note("wpctl set-log-level D: " + mt.run(["wpctl", "set-log-level", "D"]))
@@ -114,7 +114,7 @@ def main():
             if any(k in l for k in ("bitpool", "AAC:", "bitrate", "fail flush", "transport"))))
         if was_running:
             mt.restart_bazzitepods()
-            mt.say("BazzitePods started again.")
+            mt.say("Kase started again.")
         archive = mt.OUT + ".tar.gz"
         import tarfile
         with tarfile.open(archive, "w:gz") as tar:
