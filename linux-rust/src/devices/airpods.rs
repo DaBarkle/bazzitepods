@@ -97,6 +97,10 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         mac_s.clone(),
         ctx.local_mac.clone(),
     )));
+    {
+        let media = media.lock().await.clone();
+        tokio::spawn(async move { media.restore_pending_volume().await });
+    }
 
     // The audio guard runs for the whole Bluetooth link, independent of the control channel:
     // audio must keep working even when AACP is down.
@@ -150,6 +154,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         }
 
         aacp.shutdown().await;
+        media.lock().await.end_conversation().await;
         media.lock().await.stop_playback_listener().await;
         ctx.battery.send(BatteryInput::AacpLink(mac, false));
         release_shared_state(&ctx, &mac_s, &aacp).await;
@@ -185,6 +190,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
     if was_worn {
         controller.pause_all_media().await;
     }
+    controller.end_conversation().await;
     controller.stop_playback_listener().await;
     drop(controller);
 

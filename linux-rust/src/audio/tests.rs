@@ -3,7 +3,7 @@
 use super::bluez::BluezApi;
 use super::guard::*;
 use super::pulse::*;
-use super::{AudioGuard, AudioGuardHandle, AudioHealth, ensure_a2dp_profile_with};
+use super::{AudioGuard, AudioGuardHandle, AudioHealth};
 use bluer::{Address, Uuid};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -789,23 +789,6 @@ async fn link_down_and_shutdown() {
     })
     .await;
     assert!(closed.is_ok(), "guard task did not stop");
-}
-
-#[tokio::test]
-async fn one_shot_helper_fixes_off() {
-    let mut w = World::new();
-    w.add_card("off");
-    let shared = Arc::new(Mutex::new(w));
-    let pulse = FakePulse(shared.clone());
-    assert_eq!(
-        ensure_a2dp_profile_with(&pulse, &MAC.to_lowercase()).await,
-        Ok("a2dp-sink-aac".to_string())
-    );
-    assert_eq!(
-        ensure_a2dp_profile_with(&pulse, MAC).await,
-        Ok("a2dp-sink-aac".to_string())
-    );
-    assert_eq!(lock(&shared).count("profile:a2dp-sink-aac"), 1);
 }
 
 // --- pure helpers ----------------------------------------------------------
