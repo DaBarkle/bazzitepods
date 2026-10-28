@@ -6,11 +6,12 @@
 //! Unknown keys (including legacy ones such as `theme` and `tray_text_mode`) are preserved, and a
 //! malformed value for one key only resets that key to its default.
 
+use crate::store::write_atomic;
 use crate::utils::get_app_settings_path;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::watch;
 
@@ -173,18 +174,6 @@ impl Settings {
     }
 }
 
-/// Write `contents` to `path` atomically (temp file in the same directory, then rename).
-pub fn write_atomic(path: &Path, contents: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(".tmp");
-    let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(&tmp, path)
-}
-
 /// In-memory settings shared by the UI (and anything else that wants to follow changes, e.g.
 /// the overlay client via [`SettingsStore::subscribe`]).
 #[derive(Clone)]
@@ -288,16 +277,6 @@ mod tests {
         let v: Value = serde_json::from_str(&s.to_json()).unwrap();
         assert_eq!(v["overlay_position"], "bottom-left");
         assert_eq!(v["tray_text_mode"], true);
-    }
-
-    #[test]
-    fn atomic_write_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("librepods-test-{}", std::process::id()));
-        let path = dir.join("nested").join("app_settings.json");
-        write_atomic(&path, "{\"a\":1}").unwrap();
-        write_atomic(&path, "{\"a\":2}").unwrap();
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"a\":2}");
-        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

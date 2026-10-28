@@ -15,6 +15,7 @@ mod overlay_feed;
 mod overlay_protocol;
 mod single_instance;
 mod sleep_monitor;
+mod store;
 mod ui;
 mod utils;
 
@@ -25,7 +26,6 @@ use crate::devices::enums::{DeviceData, DeviceType};
 use crate::disconnect_watch::{DropReason, ReconnectPlan};
 use crate::hub::{AdapterState, Hub};
 use crate::ui::messages::BluetoothUIMessage;
-use crate::utils::get_devices_path;
 use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, DeviceProperty};
 use clap::Parser;
 use futures::StreamExt;
@@ -750,8 +750,5 @@ async fn run_nothing(
 }
 
 fn saved_devices() -> HashMap<String, DeviceData> {
-    std::fs::read_to_string(get_devices_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    store::load_devices()
 }

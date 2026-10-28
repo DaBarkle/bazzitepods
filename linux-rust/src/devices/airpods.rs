@@ -12,13 +12,13 @@ use crate::bluetooth::aacp::{
 };
 use crate::bluetooth::managers::DeviceManagers;
 use crate::core::models::ModelInfo;
-use crate::devices::enums::{DeviceData, DeviceInformation};
+use crate::devices::enums::DeviceInformation;
 use crate::hub::{Hub, LinkState};
 use crate::media_controller::MediaController;
 use crate::mic::switch::{MicReport, MicRequest, MicSwitchHandle, SwitchConfig};
 use crate::mic::{AacpMicLink, MicRoute, PulseMicHost};
 use crate::ui::messages::BluetoothUIMessage;
-use crate::utils::{get_app_settings_path, get_devices_path};
+use crate::utils::get_app_settings_path;
 use bluer::Address;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -1341,9 +1341,7 @@ fn setting_bool(key: &str) -> bool {
 
 /// Name stored in devices.json for a MAC, if any.
 pub fn saved_device_name(mac: &str) -> Option<String> {
-    let json = std::fs::read_to_string(get_devices_path()).ok()?;
-    let devices: HashMap<String, DeviceData> = serde_json::from_str(&json).ok()?;
-    devices
+    crate::store::load_devices()
         .get(mac)
         .map(|d| d.name.clone())
         .filter(|n| !n.is_empty())

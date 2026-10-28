@@ -1745,14 +1745,9 @@ impl App {
 fn load_saved_devices() -> Task<Message> {
     Task::perform(
         async {
-            tokio::task::spawn_blocking(|| {
-                std::fs::read_to_string(crate::utils::get_devices_path())
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<HashMap<String, DeviceData>>(&s).ok())
-                    .unwrap_or_default()
-            })
-            .await
-            .unwrap_or_default()
+            tokio::task::spawn_blocking(crate::store::load_devices)
+                .await
+                .unwrap_or_default()
         },
         Message::SavedDevices,
     )

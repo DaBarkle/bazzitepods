@@ -101,7 +101,7 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
                         let product = reading.product_id;
                         let in_case = reading.left_in_case && reading.right_in_case;
                         let mac_s = mac.to_string();
-                        hub.update_device(&mac_s, &known_name(&mac_s), |d| {
+                        hub.update_device(&mac_s, &known_name(&hub, &mac_s), |d| {
                             if d.link == LinkState::Disconnected {
                                 d.in_case = in_case;
                             }
@@ -141,7 +141,7 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
                 if changed {
                     case_cache.insert(mac_s.clone(), CachedCase { level, at });
                     if let Ok(json) = serde_json::to_string(&case_cache)
-                        && let Err(e) = crate::ui::settings::write_atomic(&case_cache_path(), &json)
+                        && let Err(e) = crate::store::write_atomic(&case_cache_path(), &json)
                     {
                         debug!("could not save case battery: {e}");
                     }
@@ -149,7 +149,7 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
             }
             // BLE adverts from AirPods we have never connected to are ignored: le.rs only resolves
             // addresses for devices whose keys we stored, so every MAC here is a known device.
-            hub.update_device(&mac_s, &known_name(&mac_s), |d| {
+            hub.update_device(&mac_s, &known_name(&hub, &mac_s), |d| {
                 if d.battery != snapshot {
                     debug!("battery {} -> {:?}", mac_s, snapshot);
                     d.battery = snapshot;
@@ -171,14 +171,18 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>) {
 
 fn set_model_if_unknown(hub: &Hub, mac: Address, kind: ModelKind) {
     let mac_s = mac.to_string();
-    hub.update_device(&mac_s, &known_name(&mac_s), |d| {
+    hub.update_device(&mac_s, &known_name(hub, &mac_s), |d| {
         if d.model == ModelKind::Unknown {
             d.model = kind;
         }
     });
 }
 
-/// Name saved in devices.json, used only when the hub hasn't seen this device yet.
-fn known_name(mac: &str) -> String {
+/// Name saved in devices.json, used only when the hub hasn't seen this device yet (adverts
+/// come every second; the file is not read again for a device the hub already has).
+fn known_name(hub: &Hub, mac: &str) -> String {
+    if hub.knows(mac) {
+        return String::new();
+    }
     crate::devices::airpods::saved_device_name(mac).unwrap_or_else(|| "AirPods".to_string())
 }

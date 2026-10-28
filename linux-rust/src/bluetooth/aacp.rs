@@ -1,6 +1,5 @@
 use crate::devices::airpods::AirPodsInformation;
 use crate::devices::enums::{DeviceData, DeviceInformation, DeviceType};
-use crate::utils::get_devices_path;
 use bluer::{
     Address, AddressType, Error, Result,
     l2cap::{SeqPacket, Socket, SocketAddr},
@@ -345,10 +344,7 @@ pub struct AACPManagerState {
 
 impl AACPManagerState {
     fn new() -> Self {
-        let devices: HashMap<String, DeviceData> = std::fs::read_to_string(get_devices_path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let devices = crate::store::load_devices();
         AACPManagerState {
             sender: None,
             control_command_status_list: Vec::new(),
@@ -650,7 +646,7 @@ impl AACPManager {
                     return;
                 };
                 let mac_str = mac.to_string();
-                let result = update_devices_file(|devices| {
+                let result = crate::store::update_devices(|devices| {
                     merge_information(devices, &mac_str, info);
                 })
                 .await;
@@ -693,7 +689,7 @@ impl AACPManager {
                     return;
                 }
                 let mac_str = mac.to_string();
-                let result = update_devices_file(|devices| {
+                let result = crate::store::update_devices(|devices| {
                     merge_le_keys(devices, &mac_str, irk.as_deref(), enc_key.as_deref());
                 })
                 .await;
@@ -1433,69 +1429,6 @@ pub fn merge_le_keys(
     }
 }
 
-/// Serialises read-modify-write cycles of devices.json within this process.
-static DEVICES_FILE_LOCK: Mutex<()> = Mutex::const_new(());
-
-/// Write `devices` to `path` atomically: write a temp file next to it, then rename.
-/// Creates the parent directory if needed.
-pub async fn save_devices_atomic(
-    path: &std::path::Path,
-    devices: &HashMap<String, DeviceData>,
-) -> std::io::Result<()> {
-    let json = serde_json::to_string_pretty(devices)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp.{}", std::process::id()));
-    let tmp = std::path::PathBuf::from(tmp);
-    tokio::fs::write(&tmp, json).await?;
-    if let Err(e) = tokio::fs::rename(&tmp, path).await {
-        let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(e);
-    }
-    Ok(())
-}
-
-/// Re-read devices.json at `path`, apply `f`, and write it back atomically.
-/// Re-reading avoids clobbering entries written by other device tasks. A file
-/// that exists but cannot be parsed is moved aside to `<path>.bak` rather than lost.
-pub async fn update_devices_file_at<F>(
-    path: &std::path::Path,
-    f: F,
-) -> std::io::Result<HashMap<String, DeviceData>>
-where
-    F: FnOnce(&mut HashMap<String, DeviceData>),
-{
-    let _guard = DEVICES_FILE_LOCK.lock().await;
-    let mut devices: HashMap<String, DeviceData> = match tokio::fs::read_to_string(path).await {
-        Ok(s) if s.trim().is_empty() => HashMap::new(),
-        Ok(s) => match serde_json::from_str(&s) {
-            Ok(d) => d,
-            Err(e) => {
-                error!("devices.json is corrupt ({}); moving it aside", e);
-                let mut bak = path.as_os_str().to_owned();
-                bak.push(".bak");
-                let _ = tokio::fs::rename(path, std::path::PathBuf::from(bak)).await;
-                HashMap::new()
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
-        Err(e) => return Err(e),
-    };
-    f(&mut devices);
-    save_devices_atomic(path, &devices).await?;
-    Ok(devices)
-}
-
-async fn update_devices_file<F>(f: F) -> std::io::Result<HashMap<String, DeviceData>>
-where
-    F: FnOnce(&mut HashMap<String, DeviceData>),
-{
-    update_devices_file_at(&get_devices_path(), f).await
-}
-
 /// Room for one AACP packet. Mic audio packets come close to 1 KB and a longer one
 /// would be cut off silently, so this has headroom.
 const RECV_BUFFER: usize = 4096;
@@ -1855,11 +1788,11 @@ mod tests {
         let path = dir.join("nested").join("devices.json");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         let mac = "AA:BB:CC:DD:EE:FF";
-        update_devices_file_at(&path, |d| merge_le_keys(d, mac, Some("aa"), Some("bb")))
+        crate::store::update_devices_at(&path, |d| merge_le_keys(d, mac, Some("aa"), Some("bb")))
             .await
             .unwrap();
         let info = parse_information(&info_payload(&["Pods", "A2698"])).unwrap();
-        let devices = update_devices_file_at(&path, |d| merge_information(d, mac, info))
+        let devices = crate::store::update_devices_at(&path, |d| merge_information(d, mac, info))
             .await
             .unwrap();
         assert_eq!(le_keys_of(&devices, mac), ("aa".into(), "bb".into()));
