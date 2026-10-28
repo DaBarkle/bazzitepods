@@ -39,6 +39,21 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
 
+/// Cancelled when the user quits (tray Quit) or the session ends (SIGTERM, SIGINT).
+static QUIT: std::sync::LazyLock<CancellationToken> = std::sync::LazyLock::new(Default::default);
+
+/// Stops the device sessions cleanly (desk mic back, volume and speakers restored), then
+/// exits the app.
+pub fn request_quit() {
+    info!("Quitting");
+    QUIT.cancel();
+}
+
+/// True once [`request_quit`] was called.
+pub fn quitting() -> bool {
+    QUIT.is_cancelled()
+}
+
 /// BlueZ service UUID advertised by AirPods (and Beats) for the AACP control channel.
 const AIRPODS_UUID: uuid::Uuid = uuid::uuid!("74ec2172-0bad-4d01-8f77-997b2be0722a");
 
@@ -151,7 +166,9 @@ fn main() -> iced::Result {
                 commands_bg,
                 settings_bg,
                 no_tray,
-            ))
+            ));
+            // Returns only after a quit request; the window runs on the main thread.
+            std::process::exit(0);
         });
         ui::window::start_ui(ui::window::UiContext {
             hub,
@@ -173,6 +190,25 @@ async fn async_main(
     settings: ui::settings::SettingsStore,
     no_tray: bool,
 ) {
+    tokio::spawn(async {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut int)) =
+            (signal(SignalKind::terminate()), signal(SignalKind::interrupt()))
+        else {
+            warn!("Could not listen for SIGTERM/SIGINT");
+            return;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+        request_quit();
+    });
+    // Speakers a crash or kill left muted in the middle of an audio rebuild.
+    tokio::spawn(async {
+        audio::guard::unmute_left_hushed(&audio::pulse::LibPulse, &audio::guard::hush_file())
+            .await;
+    });
     let battery = BatteryService::spawn(hub.clone());
     overlay_feed::spawn(hub.clone(), settings);
     fullscreen_watch::spawn();
@@ -356,7 +392,7 @@ const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 /// unplug/replug and rfkill all end up back here instead of crashing the app.
 async fn supervise(mut ctx: SupervisorCtx) {
     let mut backoff = 1u64;
-    loop {
+    while !QUIT.is_cancelled() {
         let adapter = match acquire_adapter().await {
             Ok(a) => a,
             Err(e) => {
@@ -366,6 +402,7 @@ async fn supervise(mut ctx: SupervisorCtx) {
                 tokio::select! {
                     _ = ctx.kick_rx.recv() => {}
                     _ = sleep(Duration::from_secs(backoff)) => {}
+                    _ = QUIT.cancelled() => {}
                 }
                 backoff = (backoff * 2).min(30);
                 continue;
@@ -374,6 +411,9 @@ async fn supervise(mut ctx: SupervisorCtx) {
         backoff = 1;
         info!("Using Bluetooth adapter {}", adapter.name());
         run_adapter(&adapter, &mut ctx).await;
+        if QUIT.is_cancelled() {
+            break;
+        }
         ctx.hub.set_adapter(AdapterState::Missing);
         sleep(Duration::from_secs(2)).await;
     }
@@ -452,6 +492,7 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         }
 
         tokio::select! {
+            _ = QUIT.cancelled() => break,
             ev = adapter_events.next() => match ev {
                 // New objects appear for every nearby BLE advertiser; only paired devices
                 // matter, and watch_device filters those.
@@ -521,9 +562,8 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         }
     }
 
-    for (_, dev) in st.running.drain() {
-        stop_task(dev).await;
-    }
+    // In parallel: on quit every session restores its own state before the app exits.
+    futures::future::join_all(st.running.drain().map(|(_, dev)| stop_task(dev))).await;
     for (_, h) in watched.drain() {
         h.abort();
     }

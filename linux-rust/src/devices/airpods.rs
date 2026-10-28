@@ -189,7 +189,8 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         .get(&mac_s)
         .is_some_and(|d| d.in_ear.0 == Some(true) || d.in_ear.1 == Some(true));
     let controller = media.lock().await;
-    if was_worn {
+    // Quitting the app is not walking away: leave the music playing.
+    if was_worn && !crate::quitting() {
         controller.pause_all_media().await;
     }
     controller.end_conversation().await;

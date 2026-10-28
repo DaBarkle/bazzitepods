@@ -252,6 +252,7 @@ fn fast() -> GuardConfig {
         retry_after_failure: Duration::from_secs(30),
         max_ensure_attempts: 3,
         fresh_link: Duration::ZERO,
+        hush_file: None,
     }
 }
 
@@ -1051,4 +1052,42 @@ async fn card_that_keeps_coming_back_is_always_set_up_again() {
     tokio::time::timeout(Duration::from_secs(2), handle.stopped())
         .await
         .expect("guard task did not stop");
+}
+
+#[tokio::test]
+async fn hushed_outputs_are_remembered_until_unmuted() {
+    let file = std::env::temp_dir().join(format!("kase-hush-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&file);
+    let mut w = stalled_world();
+    w.transport_after_toggle = Some("active".into());
+    let cfg = GuardConfig {
+        hush_file: Some(file.clone()),
+        ..fast()
+    };
+    let (world, handle) = start(w, cfg);
+    handle.link_up();
+    wait_health(&handle, "recovering", |h| {
+        matches!(h, AudioHealth::Recovering { .. })
+    })
+    .await;
+    wait_health(&handle, "ready again", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(100).await;
+    assert!(lock(&world).log.contains(&format!("mute:{SPEAKERS}:true")));
+    // Unmuted again, so nothing is left for the next start to undo.
+    assert!(!file.exists());
+}
+
+#[tokio::test]
+async fn startup_unmutes_outputs_a_crash_left_muted() {
+    let file = std::env::temp_dir().join(format!("kase-hush-left-{}.json", std::process::id()));
+    std::fs::write(&file, format!("[\"{SPEAKERS_NAME}\"]")).unwrap();
+    let mut w = World::new();
+    w.snap.sinks[0].muted = true;
+    let shared = Arc::new(Mutex::new(w));
+    unmute_left_hushed(&FakePulse(shared.clone()), &file).await;
+    assert!(!lock(&shared).snap.sinks[0].muted);
+    assert!(!file.exists());
+    // Nothing to do (no file): no pulse calls at all.
+    unmute_left_hushed(&FakePulse(shared.clone()), &file).await;
+    assert_eq!(lock(&shared).count(&format!("mute:{SPEAKERS}:false")), 1);
 }
