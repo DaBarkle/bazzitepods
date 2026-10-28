@@ -4,8 +4,8 @@ Everything below runs as your normal user. Nothing needs sudo or rpm-ostree.
 
 ## 1. Install
 
-Download `Kase.flatpak` from the latest successful **Flatpak (Kase)** run on the
-`bazzite` branch (Actions tab → run → Artifacts), unzip it, then:
+Download `Kase.flatpak` from the latest successful **Flatpak (Kase)** run on `main`
+(Actions tab → run → Artifacts), unzip it, then:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh \
@@ -15,6 +15,14 @@ curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packa
 Once a tagged release exists, the same command without the file path installs the latest release.
 
 Uninstall: append `--uninstall` instead of the file path.
+
+**Upgrading from 0.6.** Before installing, note which AirPods are saved and your Island
+settings. After installing, log out and back in, then check that:
+
+1. Kase starts on its own at login (the old autostart entry still works).
+2. The AirPods, the Island settings and the mic switch setting are all as they were.
+3. `ls ~/.var/app/io.github.dabarkle.Kase/data ~/.var/app/io.github.dabarkle.Kase/config`
+   shows `kase` folders and no `librepods` ones.
 
 ## 2. Smoke test (2 minutes)
 

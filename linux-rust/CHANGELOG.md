@@ -1,8 +1,37 @@
 # Changelog
 
-All notable changes to BazzitePods are documented here. The format follows
+All notable changes to Kase (formerly BazzitePods) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Fixed
+- **Quitting puts your audio back.** Tray Quit and logging out now restore the desk mic,
+  a volume lowered by a conversation, and speakers muted mid-repair before Kase exits.
+  After a crash, the next start unmutes anything left muted. ([#24])
+- **Settings survive a power cut.** Saved files are flushed to disk before they replace
+  the old ones, so a sudden power-off can no longer wipe your settings or saved AirPods. ([#24])
+- **The island matches the Settings page.** On a fresh install it drew at full opacity
+  over games while the slider showed 60%; it now follows your settings live. ([#24])
+- **Disconnecting from KDE stays disconnected** even after Bluetooth or D-Bus restarts. ([#24])
+- **Audio keeps recovering** when the AirPods' sound card drops out several times in a
+  row, and two audio repairs no longer run at once after a quick reconnect. ([#24])
+- **The case no longer shows 0%** after an out-of-range battery reading, an unknown
+  ear reading no longer pauses your music, and a dead connection now reconnects. ([#24])
+- **Conversation volume** no longer silences the AirPods when it can't read the volume,
+  and is restored if the link drops mid-conversation. ([#24])
+- If the island crashes straight away (for example, no Vulkan), Kase now falls back to
+  notifications instead of restarting it forever. ([#24])
+
+### Changed
+- **A leaner, tidier codebase.** Everything Kase doesn't use from LibrePods is gone:
+  the Android app, the old C++ Linux app, the Magisk module, Nix files and Nothing Ear
+  support. The Rust code is now a library with smaller, focused modules, and CI also
+  checks formatting and lints. ([#25], [#26])
+- **The programs are now `kase` and `kase-overlay`,** and their data and config folders
+  are `kase`. Your existing settings and saved AirPods move across by themselves on first
+  start, and autostart entries from 0.6 keep working. ([#27])
 
 ## [0.6.0] - 2026-10-28
 
@@ -275,3 +304,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#12]: https://github.com/DaBarkle/kase/pull/12
 [#11]: https://github.com/DaBarkle/kase/pull/11
 [#23]: https://github.com/DaBarkle/kase/pull/23
+[#24]: https://github.com/DaBarkle/kase/pull/24
+[#25]: https://github.com/DaBarkle/kase/pull/25
+[#26]: https://github.com/DaBarkle/kase/pull/26
+[#27]: https://github.com/DaBarkle/kase/pull/27
