@@ -8,9 +8,9 @@
 Accurate battery for each pod and the case, a Dynamic Island over your games,<br>
 and AirPods that switch between your iPhone and your PC the way they do with a Mac.
 
-[![Latest release](https://img.shields.io/github/v/release/DaBarkle/bazzitepods?label=release&color=0A84FF)](https://github.com/DaBarkle/bazzitepods/releases/latest)
-[![Tests](https://github.com/DaBarkle/bazzitepods/actions/workflows/tests.yml/badge.svg)](https://github.com/DaBarkle/bazzitepods/actions/workflows/tests.yml)
-[![Flatpak build](https://github.com/DaBarkle/bazzitepods/actions/workflows/flatpak.yml/badge.svg)](https://github.com/DaBarkle/bazzitepods/actions/workflows/flatpak.yml)
+[![Latest release](https://img.shields.io/github/v/release/DaBarkle/kase?label=release&color=0A84FF)](https://github.com/DaBarkle/kase/releases/latest)
+[![Tests](https://github.com/DaBarkle/kase/actions/workflows/tests.yml/badge.svg)](https://github.com/DaBarkle/kase/actions/workflows/tests.yml)
+[![Flatpak build](https://github.com/DaBarkle/kase/actions/workflows/flatpak.yml/badge.svg)](https://github.com/DaBarkle/kase/actions/workflows/flatpak.yml)
 [![Licence: AGPL-3.0](https://img.shields.io/badge/licence-AGPL--3.0-34C759)](LICENSE)
 [![KDE Plasma 6 · Wayland](https://img.shields.io/badge/KDE%20Plasma%206-Wayland-1D99F3)](#compatibility)
 
@@ -59,7 +59,7 @@ feels like part of the desktop:
 Open a terminal (Konsole on Bazzite) and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh | bash
 ```
 
 That's it. The command downloads the latest release, installs it as a Flatpak for your
@@ -365,7 +365,7 @@ Only the controls your model supports are shown.
 Ear detection works on every model with pods. Kase is developed and tested day to day on
 AirPods 4 with Active Noise Cancellation; the other models use the capability tables from
 LibrePods. If something doesn't look right on yours, please
-[open an issue](https://github.com/DaBarkle/bazzitepods/issues).
+[open an issue](https://github.com/DaBarkle/kase/issues).
 
 ## How it works
 
@@ -472,7 +472,7 @@ has no overlay layer for apps.
 <br>
 
 Kase repairs this by itself within a few seconds. If it doesn't, collect a debug log and
-[open an issue](https://github.com/DaBarkle/bazzitepods/issues) with it:
+[open an issue](https://github.com/DaBarkle/kase/issues) with it:
 
 ```bash
 flatpak kill io.github.dabarkle.Kase
@@ -557,7 +557,7 @@ the Flatpak. Hardware test steps for a release are in [`TESTING.md`](linux-rust/
 and every change is listed in the [changelog](linux-rust/CHANGELOG.md).
 
 **Contributing.** Bug reports, ideas and pull requests are welcome in
-[issues](https://github.com/DaBarkle/bazzitepods/issues). For code changes, please keep to
+[issues](https://github.com/DaBarkle/kase/issues). For code changes, please keep to
 the hard rules at the top of [`ARCHITECTURE.md`](linux-rust/docs/ARCHITECTURE.md) and add
 tests next to the module you change.
 

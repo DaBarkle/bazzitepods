@@ -49,9 +49,9 @@
     <id>io.github.dabarkle.BazzitePods</id>
   </provides>
 
-  <url type="homepage">https://github.com/DaBarkle/bazzitepods</url>
-  <url type="bugtracker">https://github.com/DaBarkle/bazzitepods/issues</url>
-  <url type="vcs-browser">https://github.com/DaBarkle/bazzitepods</url>
+  <url type="homepage">https://github.com/DaBarkle/kase</url>
+  <url type="bugtracker">https://github.com/DaBarkle/kase/issues</url>
+  <url type="vcs-browser">https://github.com/DaBarkle/kase</url>
 
   <categories>
     <category>Utility</category>
@@ -68,15 +68,15 @@
   <screenshots>
     <screenshot type="default">
       <caption>Battery levels for both earbuds and the case</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/window-airpods.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/docs/screenshots/window-airpods.png</image>
     </screenshot>
     <screenshot>
       <caption>The island overlay shown when the earbuds connect</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/island-card.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/docs/screenshots/island-card.png</image>
     </screenshot>
     <screenshot>
       <caption>Placing and styling the island overlay</caption>
-      <image>https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/docs/screenshots/window-island.png</image>
+      <image>https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/docs/screenshots/window-island.png</image>
     </screenshot>
   </screenshots>
 

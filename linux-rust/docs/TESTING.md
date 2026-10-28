@@ -8,7 +8,7 @@ Download `Kase.flatpak` from the latest successful **Flatpak (Kase)** run on the
 `bazzite` branch (Actions tab → run → Artifacts), unzip it, then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh \
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh \
   | bash -s -- ~/Downloads/Kase.flatpak
 ```
 

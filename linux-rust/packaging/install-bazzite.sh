@@ -2,7 +2,7 @@
 # Kase installer for Bazzite (and any Flatpak-based Linux desktop).
 #
 #   Install / update the latest release:
-#     curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh | bash
+#     curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh | bash
 #   Install a bundle you already downloaded:
 #     ./install-bazzite.sh ~/Downloads/Kase.flatpak
 #   Uninstall (app, its data and the autostart entry):
@@ -13,9 +13,9 @@
 set -euo pipefail
 
 readonly APP_ID="io.github.dabarkle.Kase"
-readonly REPO="DaBarkle/bazzitepods"
+readonly REPO="DaBarkle/kase"
 readonly API_URL="https://api.github.com/repos/${REPO}/releases/latest"
-readonly ONE_LINER="curl -fsSL https://raw.githubusercontent.com/DaBarkle/bazzitepods/main/linux-rust/packaging/install-bazzite.sh | bash -s --"
+readonly ONE_LINER="curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh | bash -s --"
 readonly FLATHUB_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
 readonly ASSET_NAME="Kase.flatpak"
 readonly AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
