@@ -235,7 +235,7 @@ impl ksni::Tray for LibreTray {
             StandardItem {
                 label: "Quit".into(),
                 icon_name: "application-exit".into(),
-                activate: Box::new(|_| std::process::exit(0)),
+                activate: Box::new(|_| crate::request_quit()),
                 ..Default::default()
             }
             .into(),

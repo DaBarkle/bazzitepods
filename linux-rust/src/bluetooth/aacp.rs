@@ -1,13 +1,11 @@
 use crate::devices::airpods::AirPodsInformation;
 use crate::devices::enums::{DeviceData, DeviceInformation, DeviceType};
-use crate::utils::get_devices_path;
 use bluer::{
     Address, AddressType, Error, Result,
     l2cap::{SeqPacket, Socket, SocketAddr},
 };
 use log::{debug, error, info};
 use serde::{Deserialize, Serialize};
-use serde_json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -305,7 +303,6 @@ pub enum AACPEvent {
     ControlCommand(ControlCommandStatus),
     EarDetection(Vec<EarDetectionStatus>, Vec<EarDetectionStatus>),
     ConversationalAwareness(u8),
-    ProximityKeys(#[allow(dead_code)] Vec<(u8, Vec<u8>)>),
     AudioSource(AudioSource),
     ConnectedDevices(Vec<ConnectedDevice>, Vec<ConnectedDevice>),
     OwnershipToFalseRequest,
@@ -346,10 +343,7 @@ pub struct AACPManagerState {
 
 impl AACPManagerState {
     fn new() -> Self {
-        let devices: HashMap<String, DeviceData> = std::fs::read_to_string(get_devices_path())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let devices = crate::store::load_devices();
         AACPManagerState {
             sender: None,
             control_command_status_list: Vec::new(),
@@ -600,7 +594,10 @@ impl AACPManager {
             }
             opcodes::EAR_DETECTION => {
                 let Some((primary, secondary)) = parse_ear_detection(packet) else {
-                    error!("Ear Detection packet too short: {}", hex::encode(packet));
+                    debug!(
+                        "Ignoring short or unknown Ear Detection packet: {}",
+                        hex::encode(packet)
+                    );
                     return;
                 };
                 let statuses = vec![primary, secondary];
@@ -651,7 +648,7 @@ impl AACPManager {
                     return;
                 };
                 let mac_str = mac.to_string();
-                let result = update_devices_file(|devices| {
+                let result = crate::store::update_devices(|devices| {
                     merge_information(devices, &mac_str, info);
                 })
                 .await;
@@ -694,16 +691,13 @@ impl AACPManager {
                     return;
                 }
                 let mac_str = mac.to_string();
-                let result = update_devices_file(|devices| {
+                let result = crate::store::update_devices(|devices| {
                     merge_le_keys(devices, &mac_str, irk.as_deref(), enc_key.as_deref());
                 })
                 .await;
                 match result {
                     Ok(devices) => self.state.lock().await.devices = devices,
                     Err(e) => error!("Failed to save devices: {}", e),
-                }
-                if let Some(ref tx) = self.state.lock().await.event_tx {
-                    let _ = tx.send(AACPEvent::ProximityKeys(keys));
                 }
             }
             opcodes::STEM_PRESS => {
@@ -1160,7 +1154,8 @@ pub fn parse_battery_info(payload: &[u8]) -> Option<Vec<BatteryInfo>> {
 
 /// Merge freshly parsed records into the accumulated per-component list.
 /// Components absent from `new` are kept. A `Disconnected`/`Unknown` record with
-/// level 0, or any record with a level above 100, keeps the previously known level.
+/// level 0, or any record with a level above 100, keeps the previously known level
+/// (a component seen for the first time is stored as sent).
 pub fn merge_battery_info(existing: &mut Vec<BatteryInfo>, new: &[BatteryInfo]) {
     for rec in new {
         let no_data = matches!(
@@ -1174,33 +1169,30 @@ pub fn merge_battery_info(existing: &mut Vec<BatteryInfo>, new: &[BatteryInfo]) 
             }
             old.status = rec.status;
         } else {
-            existing.push(BatteryInfo {
-                level: if rec.level <= 100 { rec.level } else { 0 },
-                ..rec.clone()
-            });
+            // Kept as sent: the tracker treats a level above 100 as "no reading". Storing
+            // 0 instead turned an impossible first report into a live, saved "0%".
+            existing.push(rec.clone());
         }
     }
 }
 
-fn ear_status_from_u8(v: u8) -> EarDetectionStatus {
+fn ear_status_from_u8(v: u8) -> Option<EarDetectionStatus> {
     match v {
-        0x00 => EarDetectionStatus::InEar,
-        0x01 => EarDetectionStatus::OutOfEar,
-        0x02 => EarDetectionStatus::InCase,
-        0x03 => EarDetectionStatus::Disconnected,
-        _ => {
-            debug!("Unknown ear detection status: {:#04x}", v);
-            EarDetectionStatus::OutOfEar
-        }
+        0x00 => Some(EarDetectionStatus::InEar),
+        0x01 => Some(EarDetectionStatus::OutOfEar),
+        0x02 => Some(EarDetectionStatus::InCase),
+        0x03 => Some(EarDetectionStatus::Disconnected),
+        _ => None,
     }
 }
 
 /// Parse an EAR_DETECTION packet (full packet including header). Returns
-/// (primary, secondary).
+/// (primary, secondary). A status byte we don't know is rejected rather than guessed:
+/// reading it as "out of ear" paused media at random.
 pub fn parse_ear_detection(packet: &[u8]) -> Option<(EarDetectionStatus, EarDetectionStatus)> {
-    let primary = *packet.get(6)?;
-    let secondary = *packet.get(7)?;
-    Some((ear_status_from_u8(primary), ear_status_from_u8(secondary)))
+    let primary = ear_status_from_u8(*packet.get(6)?)?;
+    let secondary = ear_status_from_u8(*packet.get(7)?)?;
+    Some((primary, secondary))
 }
 
 fn empty_le_keys() -> AirPodsLEKeys {
@@ -1439,69 +1431,6 @@ pub fn merge_le_keys(
     }
 }
 
-/// Serialises read-modify-write cycles of devices.json within this process.
-static DEVICES_FILE_LOCK: Mutex<()> = Mutex::const_new(());
-
-/// Write `devices` to `path` atomically: write a temp file next to it, then rename.
-/// Creates the parent directory if needed.
-pub async fn save_devices_atomic(
-    path: &std::path::Path,
-    devices: &HashMap<String, DeviceData>,
-) -> std::io::Result<()> {
-    let json = serde_json::to_string_pretty(devices)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let mut tmp = path.as_os_str().to_owned();
-    tmp.push(format!(".tmp.{}", std::process::id()));
-    let tmp = std::path::PathBuf::from(tmp);
-    tokio::fs::write(&tmp, json).await?;
-    if let Err(e) = tokio::fs::rename(&tmp, path).await {
-        let _ = tokio::fs::remove_file(&tmp).await;
-        return Err(e);
-    }
-    Ok(())
-}
-
-/// Re-read devices.json at `path`, apply `f`, and write it back atomically.
-/// Re-reading avoids clobbering entries written by other device tasks. A file
-/// that exists but cannot be parsed is moved aside to `<path>.bak` rather than lost.
-pub async fn update_devices_file_at<F>(
-    path: &std::path::Path,
-    f: F,
-) -> std::io::Result<HashMap<String, DeviceData>>
-where
-    F: FnOnce(&mut HashMap<String, DeviceData>),
-{
-    let _guard = DEVICES_FILE_LOCK.lock().await;
-    let mut devices: HashMap<String, DeviceData> = match tokio::fs::read_to_string(path).await {
-        Ok(s) if s.trim().is_empty() => HashMap::new(),
-        Ok(s) => match serde_json::from_str(&s) {
-            Ok(d) => d,
-            Err(e) => {
-                error!("devices.json is corrupt ({}); moving it aside", e);
-                let mut bak = path.as_os_str().to_owned();
-                bak.push(".bak");
-                let _ = tokio::fs::rename(path, std::path::PathBuf::from(bak)).await;
-                HashMap::new()
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => HashMap::new(),
-        Err(e) => return Err(e),
-    };
-    f(&mut devices);
-    save_devices_atomic(path, &devices).await?;
-    Ok(devices)
-}
-
-async fn update_devices_file<F>(f: F) -> std::io::Result<HashMap<String, DeviceData>>
-where
-    F: FnOnce(&mut HashMap<String, DeviceData>),
-{
-    update_devices_file_at(&get_devices_path(), f).await
-}
-
 /// Room for one AACP packet. Mic audio packets come close to 1 KB and a longer one
 /// would be cut off silently, so this has headroom.
 const RECV_BUFFER: usize = 4096;
@@ -1566,7 +1495,14 @@ async fn send_thread(mut rx: mpsc::Receiver<Vec<u8>>, sp: Arc<SeqPacket>) {
 impl AACPManager {
     /// True while the L2CAP control channel is up.
     pub async fn is_connected(&self) -> bool {
-        self.state.lock().await.sender.is_some()
+        // The send task ends on a hard send error while the receive task keeps running, so
+        // a sender whose task is gone means the channel is unusable.
+        self.state
+            .lock()
+            .await
+            .sender
+            .as_ref()
+            .is_some_and(|s| !s.is_closed())
     }
 
     /// Tear down the control channel and its I/O tasks. Safe to call more than once.
@@ -1740,6 +1676,8 @@ mod tests {
     fn ear_detection_bounds() {
         assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00]).is_none());
         assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00]).is_none());
+        // Unknown status bytes (e.g. from newer firmware) are ignored, not read as "out".
+        assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x04, 0x04]).is_none());
         let (p, s) =
             parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x02]).unwrap();
         assert_eq!(p, EarDetectionStatus::InEar);
@@ -1852,11 +1790,11 @@ mod tests {
         let path = dir.join("nested").join("devices.json");
         let _ = tokio::fs::remove_dir_all(&dir).await;
         let mac = "AA:BB:CC:DD:EE:FF";
-        update_devices_file_at(&path, |d| merge_le_keys(d, mac, Some("aa"), Some("bb")))
+        crate::store::update_devices_at(&path, |d| merge_le_keys(d, mac, Some("aa"), Some("bb")))
             .await
             .unwrap();
         let info = parse_information(&info_payload(&["Pods", "A2698"])).unwrap();
-        let devices = update_devices_file_at(&path, |d| merge_information(d, mac, info))
+        let devices = crate::store::update_devices_at(&path, |d| merge_information(d, mac, info))
             .await
             .unwrap();
         assert_eq!(le_keys_of(&devices, mac), ("aa".into(), "bb".into()));

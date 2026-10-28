@@ -159,6 +159,12 @@ impl Hub {
     }
 
     /// Mutate one device; creates it if missing. Only notifies when something changed.
+    /// Whether the hub has an entry for this device.
+    pub fn knows(&self, mac: &str) -> bool {
+        self.tx.borrow().devices.contains_key(mac)
+    }
+
+    /// Changes a device, creating it with `name` if the hub doesn't have it yet.
     pub fn update_device(&self, mac: &str, name: &str, f: impl FnOnce(&mut DeviceSnapshot)) {
         self.tx.send_if_modified(|s| {
             let created = !s.devices.contains_key(mac);

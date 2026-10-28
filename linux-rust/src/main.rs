@@ -15,6 +15,7 @@ mod overlay_feed;
 mod overlay_protocol;
 mod single_instance;
 mod sleep_monitor;
+mod store;
 mod ui;
 mod utils;
 
@@ -25,7 +26,6 @@ use crate::devices::enums::{DeviceData, DeviceType};
 use crate::disconnect_watch::{DropReason, ReconnectPlan};
 use crate::hub::{AdapterState, Hub};
 use crate::ui::messages::BluetoothUIMessage;
-use crate::utils::get_devices_path;
 use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, DeviceProperty};
 use clap::Parser;
 use futures::StreamExt;
@@ -38,6 +38,21 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
+
+/// Cancelled when the user quits (tray Quit) or the session ends (SIGTERM, SIGINT).
+static QUIT: std::sync::LazyLock<CancellationToken> = std::sync::LazyLock::new(Default::default);
+
+/// Stops the device sessions cleanly (desk mic back, volume and speakers restored), then
+/// exits the app.
+pub fn request_quit() {
+    info!("Quitting");
+    QUIT.cancel();
+}
+
+/// True once [`request_quit`] was called.
+pub fn quitting() -> bool {
+    QUIT.is_cancelled()
+}
 
 /// BlueZ service UUID advertised by AirPods (and Beats) for the AACP control channel.
 const AIRPODS_UUID: uuid::Uuid = uuid::uuid!("74ec2172-0bad-4d01-8f77-997b2be0722a");
@@ -126,11 +141,14 @@ fn main() -> iced::Result {
 
     if args.no_tray {
         info!("Running in headless mode (no GUI)");
+        // Nothing reads window messages without a window; don't let them pile up.
+        drop(ui_rx);
         runtime.block_on(async_main(
             ui_tx,
             device_managers,
             hub,
             active_commands,
+            settings,
             args.no_tray,
         ));
         Ok(())
@@ -139,8 +157,18 @@ fn main() -> iced::Result {
         let no_tray = args.no_tray;
         let hub_bg = hub.clone();
         let commands_bg = active_commands.clone();
+        let settings_bg = settings.clone();
         std::thread::spawn(move || {
-            runtime.block_on(async_main(ui_tx, dm, hub_bg, commands_bg, no_tray))
+            runtime.block_on(async_main(
+                ui_tx,
+                dm,
+                hub_bg,
+                commands_bg,
+                settings_bg,
+                no_tray,
+            ));
+            // Returns only after a quit request; the window runs on the main thread.
+            std::process::exit(0);
         });
         ui::window::start_ui(ui::window::UiContext {
             hub,
@@ -159,10 +187,30 @@ async fn async_main(
     device_managers: Arc<RwLock<HashMap<String, DeviceManagers>>>,
     hub: Hub,
     active_commands: Arc<Mutex<Option<devices::airpods::CommandSender>>>,
+    settings: ui::settings::SettingsStore,
     no_tray: bool,
 ) {
+    tokio::spawn(async {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut term), Ok(mut int)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::interrupt()),
+        ) else {
+            warn!("Could not listen for SIGTERM/SIGINT");
+            return;
+        };
+        tokio::select! {
+            _ = term.recv() => {}
+            _ = int.recv() => {}
+        }
+        request_quit();
+    });
+    // Speakers a crash or kill left muted in the middle of an audio rebuild.
+    tokio::spawn(async {
+        audio::guard::unmute_left_hushed(&audio::pulse::LibPulse, &audio::guard::hush_file()).await;
+    });
     let battery = BatteryService::spawn(hub.clone());
-    overlay_feed::spawn(hub.clone());
+    overlay_feed::spawn(hub.clone(), settings);
     fullscreen_watch::spawn();
 
     // Zero-config: register for login autostart unless the user switched it off.
@@ -344,7 +392,7 @@ const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 /// unplug/replug and rfkill all end up back here instead of crashing the app.
 async fn supervise(mut ctx: SupervisorCtx) {
     let mut backoff = 1u64;
-    loop {
+    while !QUIT.is_cancelled() {
         let adapter = match acquire_adapter().await {
             Ok(a) => a,
             Err(e) => {
@@ -354,6 +402,7 @@ async fn supervise(mut ctx: SupervisorCtx) {
                 tokio::select! {
                     _ = ctx.kick_rx.recv() => {}
                     _ = sleep(Duration::from_secs(backoff)) => {}
+                    _ = QUIT.cancelled() => {}
                 }
                 backoff = (backoff * 2).min(30);
                 continue;
@@ -362,6 +411,9 @@ async fn supervise(mut ctx: SupervisorCtx) {
         backoff = 1;
         info!("Using Bluetooth adapter {}", adapter.name());
         run_adapter(&adapter, &mut ctx).await;
+        if QUIT.is_cancelled() {
+            break;
+        }
         ctx.hub.set_adapter(AdapterState::Missing);
         sleep(Duration::from_secs(2)).await;
     }
@@ -440,6 +492,7 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         }
 
         tokio::select! {
+            _ = QUIT.cancelled() => break,
             ev = adapter_events.next() => match ev {
                 // New objects appear for every nearby BLE advertiser; only paired devices
                 // matter, and watch_device filters those.
@@ -509,9 +562,8 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         }
     }
 
-    for (_, dev) in st.running.drain() {
-        stop_task(dev).await;
-    }
+    // In parallel: on quit every session restores its own state before the app exits.
+    futures::future::join_all(st.running.drain().map(|(_, dev)| stop_task(dev))).await;
     for (_, h) in watched.drain() {
         h.abort();
     }
@@ -738,8 +790,5 @@ async fn run_nothing(
 }
 
 fn saved_devices() -> HashMap<String, DeviceData> {
-    std::fs::read_to_string(get_devices_path())
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
+    store::load_devices()
 }

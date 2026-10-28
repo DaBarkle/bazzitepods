@@ -499,34 +499,12 @@ impl App {
     fn live_overlay(&mut self, f: impl FnOnce(&mut Settings)) {
         self.store.update(f);
         self.settings = self.store.get();
-        let s = &self.settings;
-        crate::overlay_feed::apply_config(crate::overlay_protocol::OverlayConfig {
-            mode: s.overlay_mode,
-            position: s.overlay_position,
-            opacity: s.overlay_opacity,
-            glass: s.overlay_glass,
-            style: s.overlay_style,
-            size: s.overlay_size,
-            ..Default::default()
-        });
+        // The overlay feed follows the store and pushes the new config.
     }
 
-    /// Save overlay settings, then push the new config to the running overlay.
+    /// Save overlay settings; the overlay feed pushes them to the running overlay.
     fn save_overlay(&mut self, f: impl FnOnce(&mut Settings)) -> Task<Message> {
-        self.store.update(f);
-        self.settings = self.store.get();
-        let store = self.store.clone();
-        Task::perform(
-            async move {
-                store.persist().await;
-                // load_config reads the file we just wrote.
-                if let Ok(cfg) = tokio::task::spawn_blocking(crate::overlay_feed::load_config).await
-                {
-                    crate::overlay_feed::apply_config(cfg);
-                }
-            },
-            |_| Message::Ignore,
-        )
+        self.save_settings(f)
     }
 
     fn expire_pending(&mut self) {
@@ -929,7 +907,6 @@ impl App {
                 self.nothing.remove(&mac);
                 Task::none()
             }
-            _ => Task::none(),
         }
     }
 
@@ -1768,14 +1745,9 @@ impl App {
 fn load_saved_devices() -> Task<Message> {
     Task::perform(
         async {
-            tokio::task::spawn_blocking(|| {
-                std::fs::read_to_string(crate::utils::get_devices_path())
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<HashMap<String, DeviceData>>(&s).ok())
-                    .unwrap_or_default()
-            })
-            .await
-            .unwrap_or_default()
+            tokio::task::spawn_blocking(crate::store::load_devices)
+                .await
+                .unwrap_or_default()
         },
         Message::SavedDevices,
     )

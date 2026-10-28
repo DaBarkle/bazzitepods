@@ -141,3 +141,31 @@ async fn persist_failure_is_logged_not_fatal() {
     store.persist().await;
     let _ = std::fs::remove_file(file);
 }
+
+#[test]
+fn overlay_config_follows_the_settings_defaults() {
+    // A fresh install has no overlay keys: the island must use the same values the
+    // Settings page shows (it used to draw at 100% while the slider said 60%).
+    let cfg = Settings::from_json("{}").overlay_config();
+    let d = Settings::default();
+    assert_eq!(cfg.mode, OverlayMode::Compact);
+    assert_eq!(cfg.opacity, d.overlay_opacity);
+    assert_eq!(cfg.glass, d.overlay_glass);
+    assert_eq!(cfg.position, d.overlay_position);
+}
+
+#[test]
+fn overlay_config_reads_and_clamps_values() {
+    let cfg = Settings::from_json(
+        r#"{"overlay_mode":"always","overlay_position":"bottom-center",
+            "overlay_opacity":0.05,"overlay_glass":3.5,
+            "overlay_style":"classic","overlay_size":"extra_large"}"#,
+    )
+    .overlay_config();
+    assert_eq!(cfg.mode, OverlayMode::Always);
+    assert_eq!(cfg.position, OverlayPosition::BottomCenter);
+    assert_eq!(cfg.opacity, 0.2);
+    assert_eq!(cfg.glass, 1.0);
+    assert_eq!(cfg.style, OverlayStyle::Classic);
+    assert_eq!(cfg.size, OverlaySize::ExtraLarge);
+}

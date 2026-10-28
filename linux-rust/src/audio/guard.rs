@@ -54,6 +54,9 @@ pub struct GuardConfig {
     /// After the link comes up, the output was just built: a take-back this soon doesn't
     /// rebuild it again (a stall is still repaired).
     pub fresh_link: Duration,
+    /// Where the names of outputs muted by [`Guard::hush`] are kept until they are unmuted,
+    /// so a crash or kill mid-rebuild can be undone at the next start. `None` in tests.
+    pub hush_file: Option<std::path::PathBuf>,
 }
 
 impl Default for GuardConfig {
@@ -73,8 +76,35 @@ impl Default for GuardConfig {
             retry_after_failure: Duration::from_secs(30),
             max_ensure_attempts: 3,
             fresh_link: Duration::from_secs(10),
+            hush_file: Some(hush_file()),
         }
     }
+}
+
+/// Outputs a guard muted for a rebuild and has not unmuted yet.
+pub fn hush_file() -> std::path::PathBuf {
+    crate::utils::get_devices_path().with_file_name("hushed_outputs.json")
+}
+
+/// Unmutes outputs left muted by a guard that never finished its rebuild (the app crashed
+/// or was killed during it). Run once at startup, before any guard exists.
+pub async fn unmute_left_hushed<P: PulseApi>(pulse: &P, file: &std::path::Path) {
+    let Ok(json) = tokio::fs::read_to_string(file).await else {
+        return;
+    };
+    let names: Vec<String> = serde_json::from_str(&json).unwrap_or_default();
+    if let Ok(snap) = pulse.snapshot().await {
+        for sink in snap.sinks.iter().filter(|s| names.contains(&s.name)) {
+            info!(
+                "Unmuting {} (left muted by an interrupted rebuild)",
+                sink.name
+            );
+            if let Err(e) = pulse.set_sink_mute(sink.index, false).await {
+                warn!("Could not unmute {}: {}", sink.name, e);
+            }
+        }
+    }
+    let _ = tokio::fs::remove_file(file).await;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -325,6 +355,8 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     away: bool,
     /// Other outputs muted while ours is rebuilt, so nothing plays on the speakers.
     hushed: Vec<u32>,
+    /// Names of `hushed`, as saved to `cfg.hush_file`.
+    hushed_names: Vec<String>,
     /// A [`Cmd::Hush`] waiting to be applied.
     hush_pending: bool,
     /// When outputs muted by [`Cmd::Hush`] get unmuted if no rebuild did it first.
@@ -373,6 +405,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             linked_at: None,
             away: false,
             hushed: Vec::new(),
+            hushed_names: Vec::new(),
         }
     }
 
@@ -600,6 +633,9 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         match self.ensure_audio().await {
             Ok(health) => {
                 info!("[audio {}] ready: {:?}", self.mac_str, health);
+                // The limit is for setups that keep failing, not for a card that comes
+                // back every time it goes.
+                self.ensure_attempts = 0;
                 // WirePlumber remembers a fallback codec as the device's profile: go
                 // back to the best one (once nothing plays) rather than keep it forever.
                 self.note_codec().await;
@@ -873,12 +909,24 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             s.card.is_some() && s.mac.as_deref() != Some(self.mac_str.as_str()) && !s.muted
         }) {
             match self.pulse.set_sink_mute(sink.index, true).await {
-                Ok(()) => self.hushed.push(sink.index),
+                Ok(()) => {
+                    self.hushed.push(sink.index);
+                    self.hushed_names.push(sink.name.clone());
+                }
                 Err(e) => debug!(
                     "[audio {}] mute output {} failed: {}",
                     self.mac_str, sink.name, e
                 ),
             }
+        }
+        // shortcut: one file shared by all guards; two AirPods rebuilding at once could
+        // drop the other's names. Key it by MAC if that ever happens in practice.
+        if let Some(file) = self.cfg.hush_file.clone()
+            && !self.hushed_names.is_empty()
+            && let Ok(json) = serde_json::to_string(&self.hushed_names)
+        {
+            let _ =
+                tokio::task::spawn_blocking(move || crate::store::write_atomic(&file, &json)).await;
         }
     }
 
@@ -921,6 +969,11 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                     self.mac_str, sink, e
                 );
             }
+        }
+        if !std::mem::take(&mut self.hushed_names).is_empty()
+            && let Some(file) = &self.cfg.hush_file
+        {
+            let _ = tokio::fs::remove_file(file).await;
         }
     }
 

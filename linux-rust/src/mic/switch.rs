@@ -125,7 +125,7 @@ fn load_saved(path: &Path) -> Option<Saved> {
 
 fn save(path: &Path, saved: &Saved) {
     let json = serde_json::to_string(saved).unwrap_or_default();
-    if let Err(e) = crate::ui::settings::write_atomic(path, &json) {
+    if let Err(e) = crate::store::write_atomic(path, &json) {
         warn!("[mic] could not save the mic state: {e}");
     }
 }

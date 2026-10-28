@@ -37,6 +37,11 @@ pub fn auto_paused_recently() -> bool {
         .is_some_and(|t| t.elapsed() < AUTO_PAUSE_SETTLE)
 }
 
+/// Volumes a conversation lowered when the link dropped mid-conversation, by AirPods MAC.
+static PENDING_RESTORE: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, u32>>,
+> = std::sync::LazyLock::new(Default::default);
+
 const DBUS_TIMEOUT: Duration = Duration::from_secs(2);
 const MPRIS_PATH: &str = "/org/mpris/MediaPlayer2";
 const MPRIS_PLAYER: &str = "org.mpris.MediaPlayer2.Player";
@@ -158,7 +163,6 @@ impl MediaController {
 
     /// Stops the playback listener started by `start_playback_listener`. Idempotent.
     /// Call it when the device task ends so the listener and its D-Bus thread exit.
-    #[allow(dead_code)] // called by the device supervisor once integrated
     pub async fn stop_playback_listener(&self) {
         let mut state = self.state.lock().await;
         if let Some(stop) = state.listener_stop.take() {
@@ -218,20 +222,27 @@ impl MediaController {
                     );
                     continue;
                 }
-                info!("Media playback started, taking ownership and checking A2DP");
+                info!("Media playback started, taking ownership");
                 // The device task notifies the other devices once this is sent.
                 let _ = control_tx.send((
                     crate::bluetooth::aacp::ControlCommandIdentifiers::OwnsConnection,
                     vec![0x01],
                 ));
-                self.activate_a2dp_profile().await;
                 debug!("completed playback takeover process");
             }
         }
         info!("Playback listener loop stopped");
+        // Only clear the state if it is still ours: a reconnect may already have stopped this
+        // loop and started a new one, whose stop handle must survive.
         let mut state = self.state.lock().await;
-        state.playback_listener_running = false;
-        state.listener_stop = None;
+        if state
+            .listener_stop
+            .as_ref()
+            .is_some_and(|s| s.subscribe().same_channel(&stop))
+        {
+            state.playback_listener_running = false;
+            state.listener_stop = None;
+        }
     }
 
     /// Tells every other device on the AirPods whether this PC is streaming media. Apple
@@ -292,8 +303,8 @@ impl MediaController {
         }
 
         if new_has_at_least_one_in && old_all_out {
-            debug!("Condition met: buds inserted, checking A2DP and play state");
-            self.activate_a2dp_profile().await;
+            // The audio guard (audio/guard.rs) owns the card profile and fixes it on its own.
+            debug!("Condition met: buds inserted, checking play state");
             {
                 let mut state = self.state.lock().await;
                 if state.is_playing {
@@ -347,22 +358,6 @@ impl MediaController {
             let mut state = self.state.lock().await;
             state.old_in_ear_data = new_in_ear_data;
             debug!("Updated old_in_ear_data to {:?}", state.old_in_ear_data);
-        }
-    }
-
-    /// Makes sure the AirPods card is on an A2DP profile when it is `off` (or on HFP
-    /// with no microphone in use). Looks the card up fresh by MAC every time, so a
-    /// card recreated by PipeWire after a reconnect is found. Never restarts
-    /// WirePlumber.
-    pub async fn activate_a2dp_profile(&self) {
-        let mac = self.state.lock().await.connected_device_mac.clone();
-        if mac.is_empty() {
-            warn!("Connected device MAC is empty, cannot activate A2DP profile");
-            return;
-        }
-        match crate::audio::ensure_a2dp_profile(&mac).await {
-            Ok(profile) => debug!("Audio profile for {} is {}", mac, profile),
-            Err(e) => warn!("Could not ensure A2DP profile for {}: {}", mac, e),
         }
     }
 
@@ -508,7 +503,14 @@ impl MediaController {
 
         match status {
             1 => {
-                let original = current_volume_opt.unwrap_or(0);
+                // Without a reading we have nothing safe to restore later (a guessed 0
+                // would silence the AirPods when the conversation ends), so leave it alone.
+                let Some(original) = current_volume_opt else {
+                    warn!(
+                        "Conversation start: could not read the volume of {sink}; not lowering it"
+                    );
+                    return;
+                };
                 debug!("Conversation start (1). Current volume: {}", original);
                 {
                     let mut state = self.state.lock().await;
@@ -620,6 +622,58 @@ impl MediaController {
             })
         })
         .await;
+    }
+
+    /// Puts back the volume a conversation lowered, if one is still in progress. Called when
+    /// the device session ends, so a link lost mid-conversation doesn't leave it low. If the
+    /// AirPods' sink is already gone, the volume is restored when it next appears
+    /// (see [`MediaController::restore_pending_volume`]).
+    pub async fn end_conversation(&self) {
+        let (mac, original) = {
+            let mut state = self.state.lock().await;
+            if !state.conv_conversation_started {
+                return;
+            }
+            state.conv_conversation_started = false;
+            (
+                state.connected_device_mac.clone(),
+                state.conv_original_volume.take(),
+            )
+        };
+        let Some(original) = original else { return };
+        match get_sink_name_by_mac(&mac).await {
+            Some(sink) => {
+                tokio::task::spawn_blocking(move || transition_sink_volume(&sink, original))
+                    .await
+                    .unwrap_or(false);
+            }
+            None => {
+                info!("Conversation cut off; restoring volume {original}% when {mac} is back");
+                PENDING_RESTORE.lock().unwrap().insert(mac, original);
+            }
+        }
+    }
+
+    /// Restores a volume left lowered by a conversation the previous link lost. Waits up to
+    /// a minute for the AirPods' sink to appear.
+    pub async fn restore_pending_volume(&self) {
+        let mac = self.state.lock().await.connected_device_mac.clone();
+        if !PENDING_RESTORE.lock().unwrap().contains_key(&mac) {
+            return;
+        }
+        for _ in 0..30 {
+            if let Some(sink) = get_sink_name_by_mac(&mac).await {
+                let Some(original) = PENDING_RESTORE.lock().unwrap().remove(&mac) else {
+                    return;
+                };
+                info!("Restoring volume {original}% a lost conversation left lowered");
+                tokio::task::spawn_blocking(move || transition_sink_volume(&sink, original))
+                    .await
+                    .unwrap_or(false);
+                return;
+            }
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
     }
 
     async fn restore_volume_if_needed(&self, sink: &str) {

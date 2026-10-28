@@ -5,17 +5,17 @@
 
 use crate::Kick;
 use dbus::message::MatchRule;
-use log::{debug, info};
+use log::debug;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub fn spawn(kick_tx: UnboundedSender<Kick>) {
-    tokio::spawn(async move {
-        if let Err(e) = run(kick_tx).await {
-            // Not fatal: without logind (or without the Flatpak permission) we simply rely on
-            // BlueZ disconnect events and the periodic sweep.
-            info!("Sleep monitor unavailable: {e}");
-        }
-    });
+    // Not fatal while it's down: without logind (or without the Flatpak permission) we
+    // rely on BlueZ disconnect events and the periodic sweep.
+    tokio::spawn(crate::disconnect_watch::keep_watching(
+        "Sleep monitor",
+        kick_tx,
+        run,
+    ));
 }
 
 async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {

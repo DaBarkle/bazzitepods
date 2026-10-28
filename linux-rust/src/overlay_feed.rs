@@ -7,74 +7,15 @@ use crate::hub::MicRoute;
 use crate::hub::{AppSnapshot, DeviceSnapshot, Hub, LinkState};
 use crate::overlay_client::OverlayClient;
 use crate::overlay_protocol::{
-    ComponentState, ListeningMode, MicChoice, OverlayConfig, OverlayMode, OverlayState,
+    ComponentState, ListeningMode, MicChoice, OverlayMode, OverlayState,
 };
-use crate::utils::get_app_settings_path;
+use crate::ui::format::LOW_THRESHOLD;
+use crate::ui::settings::SettingsStore;
 use log::{debug, info};
 use std::sync::{Arc, OnceLock};
 use std::time::SystemTime;
 
 static CLIENT: OnceLock<Arc<OverlayClient>> = OnceLock::new();
-
-/// Overlay settings as stored in app_settings.json (`overlay_mode`, `overlay_position`,
-/// `overlay_opacity`). A missing mode means compact, the app's default.
-pub fn load_config() -> OverlayConfig {
-    let json = std::fs::read_to_string(get_app_settings_path()).unwrap_or_default();
-    config_from_json(&json)
-}
-
-/// [`load_config`] without the disk: missing, broken or out-of-range values fall back.
-fn config_from_json(json: &str) -> OverlayConfig {
-    let mut cfg = OverlayConfig {
-        mode: OverlayMode::Compact,
-        ..OverlayConfig::default()
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(json) else {
-        return cfg;
-    };
-    if let Some(mode) = v
-        .get("overlay_mode")
-        .cloned()
-        .and_then(|m| serde_json::from_value(m).ok())
-    {
-        cfg.mode = mode;
-    }
-    if let Some(pos) = v
-        .get("overlay_position")
-        .cloned()
-        .and_then(|p| serde_json::from_value(p).ok())
-    {
-        cfg.position = pos;
-    }
-    if let Some(style) = v
-        .get("overlay_style")
-        .cloned()
-        .and_then(|s| serde_json::from_value(s).ok())
-    {
-        cfg.style = style;
-    }
-    if let Some(size) = v
-        .get("overlay_size")
-        .cloned()
-        .and_then(|s| serde_json::from_value(s).ok())
-    {
-        cfg.size = size;
-    }
-    if let Some(g) = v.get("overlay_glass").and_then(|g| g.as_f64()) {
-        cfg.glass = (g as f32).clamp(0.0, 1.0);
-    }
-    if let Some(o) = v.get("overlay_opacity").and_then(|o| o.as_f64()) {
-        cfg.opacity = (o as f32).clamp(0.2, 1.0);
-    }
-    cfg
-}
-
-/// Called by the settings UI after the user changes overlay options.
-pub fn apply_config(cfg: OverlayConfig) {
-    if let Some(client) = CLIENT.get() {
-        client.set_config(cfg);
-    }
-}
 
 /// Briefly show the overlay (e.g. a "preview" button in settings).
 pub fn preview() {
@@ -98,18 +39,26 @@ pub fn set_fullscreen(active: bool) {
     }
 }
 
-pub fn spawn(hub: Hub) {
+pub fn spawn(hub: Hub, settings: SettingsStore) {
     let client = CLIENT
-        .get_or_init(|| Arc::new(OverlayClient::spawn(load_config())))
+        .get_or_init(|| Arc::new(OverlayClient::spawn(settings.get().overlay_config())))
         .clone();
-    tokio::spawn(run(hub, client));
+    tokio::spawn(run(hub, settings, client));
 }
 
-async fn run(hub: Hub, client: Arc<OverlayClient>) {
+async fn run(hub: Hub, settings: SettingsStore, client: Arc<OverlayClient>) {
     let mut rx = hub.subscribe();
+    let mut settings_rx = settings.subscribe();
+    let mut config = settings_rx.borrow_and_update().overlay_config();
     let mut last: Option<OverlayState> = None;
     let mut notifier = Notifier::default();
     loop {
+        // Settings changed in the window (also while a slider is dragged).
+        let now = settings_rx.borrow_and_update().overlay_config();
+        if now != config {
+            config = now;
+            client.set_config(config.clone());
+        }
         let snap = rx.borrow_and_update().clone();
         let state = to_overlay_state(&snap);
         if state != last {
@@ -119,14 +68,20 @@ async fn run(hub: Hub, client: Arc<OverlayClient>) {
             }
             last = state.clone();
         }
-        if client.unsupported() && load_config().mode != OverlayMode::Off {
+        if client.unsupported() && config.mode != OverlayMode::Off {
             for (summary, body) in notifier.observe(snap.primary()) {
                 notify(summary, body);
             }
         }
-        if rx.changed().await.is_err() {
-            client.shutdown();
-            return;
+        tokio::select! {
+            changed = rx.changed() => if changed.is_err() {
+                client.shutdown();
+                return;
+            },
+            changed = settings_rx.changed() => if changed.is_err() {
+                // The store lives as long as the app; keep following the hub alone.
+                settings_rx = settings.subscribe();
+            },
         }
     }
 }
@@ -235,7 +190,7 @@ impl Notifier {
             self.low_warned = false;
             out.push((format!("{} connected", display_name(d)), summary.clone()));
         }
-        let low = d.battery.is_low(15);
+        let low = d.battery.is_low(LOW_THRESHOLD);
         if low && !self.low_warned {
             self.low_warned = true;
             out.push((format!("{} battery low", display_name(d)), summary));

@@ -12,13 +12,13 @@ use crate::bluetooth::aacp::{
 };
 use crate::bluetooth::managers::DeviceManagers;
 use crate::core::models::ModelInfo;
-use crate::devices::enums::{DeviceData, DeviceInformation};
+use crate::devices::enums::DeviceInformation;
 use crate::hub::{Hub, LinkState};
 use crate::media_controller::MediaController;
 use crate::mic::switch::{MicReport, MicRequest, MicSwitchHandle, SwitchConfig};
 use crate::mic::{AacpMicLink, MicRoute, PulseMicHost};
 use crate::ui::messages::BluetoothUIMessage;
-use crate::utils::{get_app_settings_path, get_devices_path};
+use crate::utils::get_app_settings_path;
 use bluer::Address;
 use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
@@ -52,6 +52,8 @@ const CLAIM_RESEND_AFTER: Duration = Duration::from_secs(6);
 /// A session step that takes longer than this is stuck: the control channel is dropped
 /// and opened again, so battery and controls come back without restarting the app.
 const SESSION_STUCK: Duration = Duration::from_secs(20);
+/// How long a finished session waits for its audio guard to end a repair in progress.
+const GUARD_STOP_WAIT: Duration = Duration::from_secs(30);
 
 /// What the session is doing right now, for the stuck-session watchdog.
 #[derive(Clone, Default)]
@@ -97,6 +99,10 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         mac_s.clone(),
         ctx.local_mac.clone(),
     )));
+    {
+        let media = media.lock().await.clone();
+        tokio::spawn(async move { media.restore_pending_volume().await });
+    }
 
     // The audio guard runs for the whole Bluetooth link, independent of the control channel:
     // audio must keep working even when AACP is down.
@@ -150,6 +156,7 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         }
 
         aacp.shutdown().await;
+        media.lock().await.end_conversation().await;
         media.lock().await.stop_playback_listener().await;
         ctx.battery.send(BatteryInput::AacpLink(mac, false));
         release_shared_state(&ctx, &mac_s, &aacp).await;
@@ -182,9 +189,11 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
         .get(&mac_s)
         .is_some_and(|d| d.in_ear.0 == Some(true) || d.in_ear.1 == Some(true));
     let controller = media.lock().await;
-    if was_worn {
+    // Quitting the app is not walking away: leave the music playing.
+    if was_worn && !crate::quitting() {
         controller.pause_all_media().await;
     }
+    controller.end_conversation().await;
     controller.stop_playback_listener().await;
     drop(controller);
 
@@ -198,6 +207,19 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
     let _ = ctx
         .ui_tx
         .send(BluetoothUIMessage::DeviceDisconnected(mac_s.clone()));
+    // Wait for the guard to finish a repair in progress: the supervisor starts the next
+    // session for these AirPods only once this task ends, so two guards never change the
+    // same card at once.
+    if let Some(audio) = &audio
+        && tokio::time::timeout(GUARD_STOP_WAIT, audio.stopped())
+            .await
+            .is_err()
+    {
+        warn!(
+            "Audio guard for {} is still busy; not waiting longer",
+            mac_s
+        );
+    }
     info!("Device task finished for {}", mac_s);
 }
 
@@ -378,7 +400,9 @@ async fn session(
                 keep_mic_allowed(aacp, ctx, &mac_s, &route, &mic).await;
             }
             req = mic_requests.recv() => {
-                if matches!(req, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                // A lag report is not a request (the requests still buffered follow), and
+                // the sender is a static that never closes.
+                if req.is_err() {
                     continue;
                 }
                 if stems.mic_switch {
@@ -1000,12 +1024,7 @@ async fn handle_event(
                 _ => {}
             }
         }
-        _ => {}
     }
-    // The legacy window still consumes raw events; it ignores the ones it doesn't know.
-    let _ = ctx
-        .ui_tx
-        .send(BluetoothUIMessage::AACPUIEvent(mac_s, event));
 }
 
 /// Another device has the AirPods now. When it is playing media (YouTube on the iPhone),
@@ -1326,9 +1345,7 @@ fn setting_bool(key: &str) -> bool {
 
 /// Name stored in devices.json for a MAC, if any.
 pub fn saved_device_name(mac: &str) -> Option<String> {
-    let json = std::fs::read_to_string(get_devices_path()).ok()?;
-    let devices: HashMap<String, DeviceData> = serde_json::from_str(&json).ok()?;
-    devices
+    crate::store::load_devices()
         .get(mac)
         .map(|d| d.name.clone())
         .filter(|n| !n.is_empty())

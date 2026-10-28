@@ -19,8 +19,8 @@ pub mod guard;
 pub mod pulse;
 
 use bluez::{BluerBackend, BluezApi};
-use guard::{Cmd, Guard, GuardConfig, ProfileAction, decide_profile};
-use log::{debug, warn};
+use guard::{Cmd, Guard, GuardConfig};
+use log::debug;
 use pulse::{LibPulse, PulseApi};
 use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
@@ -144,42 +144,11 @@ impl AudioGuardHandle {
     pub fn shutdown(&self) {
         self.send(Cmd::Shutdown);
     }
-}
 
-/// One-shot fix used by `MediaController`: if the card for `mac` is on `off`, or
-/// on HFP without the microphone in use, switch it to the best A2DP profile.
-/// Returns the profile that is active afterwards.
-pub async fn ensure_a2dp_profile(mac: &str) -> Result<String, String> {
-    ensure_a2dp_profile_with(&LibPulse, mac).await
-}
-
-pub(crate) async fn ensure_a2dp_profile_with<P: PulseApi>(
-    pulse: &P,
-    mac: &str,
-) -> Result<String, String> {
-    let snap = pulse.snapshot().await.map_err(|e| e.to_string())?;
-    let card = snap
-        .card_for(mac)
-        .ok_or_else(|| format!("no audio card for {mac}"))?;
-    let active = card.active_profile.clone().unwrap_or_default();
-    // Called on playback start / buds inserted. A headset profile here means a call app put
-    // it there (maybe with the mic muted, so not "recording"); never yank the user out of it.
-    if active.starts_with("headset") {
-        return Ok(active);
-    }
-    match decide_profile(card, snap.is_recording_from_card(card.index)) {
-        ProfileAction::Keep | ProfileAction::LeaveHeadset => Ok(active),
-        ProfileAction::Set(candidates) => {
-            for profile in &candidates {
-                match pulse.set_card_profile(card.index, profile).await {
-                    Ok(()) => return Ok(profile.clone()),
-                    Err(e) => warn!("setting {profile} on {} failed: {e}", card.name),
-                }
-            }
-            Err(format!(
-                "no A2DP profile could be activated (tried {candidates:?})"
-            ))
-        }
+    /// Resolves once the guard task has ended (it drops its health sender when it stops).
+    pub async fn stopped(&self) {
+        let mut rx = self.health_rx.clone();
+        while rx.changed().await.is_ok() {}
     }
 }
 
