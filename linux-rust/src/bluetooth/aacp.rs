@@ -600,7 +600,7 @@ impl AACPManager {
             }
             opcodes::EAR_DETECTION => {
                 let Some((primary, secondary)) = parse_ear_detection(packet) else {
-                    error!("Ear Detection packet too short: {}", hex::encode(packet));
+                    debug!("Ignoring short or unknown Ear Detection packet: {}", hex::encode(packet));
                     return;
                 };
                 let statuses = vec![primary, secondary];
@@ -1160,7 +1160,8 @@ pub fn parse_battery_info(payload: &[u8]) -> Option<Vec<BatteryInfo>> {
 
 /// Merge freshly parsed records into the accumulated per-component list.
 /// Components absent from `new` are kept. A `Disconnected`/`Unknown` record with
-/// level 0, or any record with a level above 100, keeps the previously known level.
+/// level 0, or any record with a level above 100, keeps the previously known level
+/// (a component seen for the first time is stored as sent).
 pub fn merge_battery_info(existing: &mut Vec<BatteryInfo>, new: &[BatteryInfo]) {
     for rec in new {
         let no_data = matches!(
@@ -1174,33 +1175,30 @@ pub fn merge_battery_info(existing: &mut Vec<BatteryInfo>, new: &[BatteryInfo]) 
             }
             old.status = rec.status;
         } else {
-            existing.push(BatteryInfo {
-                level: if rec.level <= 100 { rec.level } else { 0 },
-                ..rec.clone()
-            });
+            // Kept as sent: the tracker treats a level above 100 as "no reading". Storing
+            // 0 instead turned an impossible first report into a live, saved "0%".
+            existing.push(rec.clone());
         }
     }
 }
 
-fn ear_status_from_u8(v: u8) -> EarDetectionStatus {
+fn ear_status_from_u8(v: u8) -> Option<EarDetectionStatus> {
     match v {
-        0x00 => EarDetectionStatus::InEar,
-        0x01 => EarDetectionStatus::OutOfEar,
-        0x02 => EarDetectionStatus::InCase,
-        0x03 => EarDetectionStatus::Disconnected,
-        _ => {
-            debug!("Unknown ear detection status: {:#04x}", v);
-            EarDetectionStatus::OutOfEar
-        }
+        0x00 => Some(EarDetectionStatus::InEar),
+        0x01 => Some(EarDetectionStatus::OutOfEar),
+        0x02 => Some(EarDetectionStatus::InCase),
+        0x03 => Some(EarDetectionStatus::Disconnected),
+        _ => None,
     }
 }
 
 /// Parse an EAR_DETECTION packet (full packet including header). Returns
-/// (primary, secondary).
+/// (primary, secondary). A status byte we don't know is rejected rather than guessed:
+/// reading it as "out of ear" paused media at random.
 pub fn parse_ear_detection(packet: &[u8]) -> Option<(EarDetectionStatus, EarDetectionStatus)> {
-    let primary = *packet.get(6)?;
-    let secondary = *packet.get(7)?;
-    Some((ear_status_from_u8(primary), ear_status_from_u8(secondary)))
+    let primary = ear_status_from_u8(*packet.get(6)?)?;
+    let secondary = ear_status_from_u8(*packet.get(7)?)?;
+    Some((primary, secondary))
 }
 
 fn empty_le_keys() -> AirPodsLEKeys {
@@ -1566,7 +1564,14 @@ async fn send_thread(mut rx: mpsc::Receiver<Vec<u8>>, sp: Arc<SeqPacket>) {
 impl AACPManager {
     /// True while the L2CAP control channel is up.
     pub async fn is_connected(&self) -> bool {
-        self.state.lock().await.sender.is_some()
+        // The send task ends on a hard send error while the receive task keeps running, so
+        // a sender whose task is gone means the channel is unusable.
+        self.state
+            .lock()
+            .await
+            .sender
+            .as_ref()
+            .is_some_and(|s| !s.is_closed())
     }
 
     /// Tear down the control channel and its I/O tasks. Safe to call more than once.
@@ -1740,6 +1745,8 @@ mod tests {
     fn ear_detection_bounds() {
         assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00]).is_none());
         assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00]).is_none());
+        // Unknown status bytes (e.g. from newer firmware) are ignored, not read as "out".
+        assert!(parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x04, 0x04]).is_none());
         let (p, s) =
             parse_ear_detection(&[0x04, 0x00, 0x04, 0x00, 0x06, 0x00, 0x00, 0x02]).unwrap();
         assert_eq!(p, EarDetectionStatus::InEar);

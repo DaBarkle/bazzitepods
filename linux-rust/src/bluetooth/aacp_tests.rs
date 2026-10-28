@@ -175,17 +175,13 @@ async fn ear_detection_reports_previous_and_new_state() {
         vec![EarDetectionStatus::OutOfEar, EarDetectionStatus::InCase]
     );
 
-    // Unknown status bytes read as "out of ear", never as "in ear".
+    // Unknown status bytes are ignored: no event, and the last known state is kept, so
+    // media is not paused for a status we can't read.
     m.receive_packet(&packet(&[0x06, 0x00, 0x09, 0x03])).await;
-    let AACPEvent::EarDetection(_, new) = next(&mut rx) else {
-        panic!("not ear detection");
-    };
+    none(&mut rx);
     assert_eq!(
-        new,
-        vec![
-            EarDetectionStatus::OutOfEar,
-            EarDetectionStatus::Disconnected
-        ]
+        m.state.lock().await.ear_detection_status,
+        vec![EarDetectionStatus::OutOfEar, EarDetectionStatus::InCase]
     );
 
     m.receive_packet(&packet(&[0x06, 0x00, 0x00])).await;
@@ -558,7 +554,8 @@ fn merge_never_stores_impossible_levels() {
             status: BatteryStatus::NotCharging,
         }],
     );
-    assert_eq!(list[0].level, 0);
+    // Stored as sent; the battery tracker ignores levels above 100.
+    assert_eq!(list[0].level, 200);
     merge_battery_info(
         &mut list,
         &[BatteryInfo {
@@ -577,4 +574,13 @@ fn merge_never_stores_impossible_levels() {
     );
     assert_eq!(list[0].level, 55);
     assert_eq!(list[0].status, BatteryStatus::Unknown);
+}
+
+#[tokio::test]
+async fn a_dead_send_task_means_not_connected() {
+    let (m, rx) = connected().await;
+    assert!(m.is_connected().await);
+    // The send task exits on a hard send error and drops its receiver.
+    drop(rx);
+    assert!(!m.is_connected().await);
 }

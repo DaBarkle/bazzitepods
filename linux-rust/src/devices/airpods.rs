@@ -384,7 +384,9 @@ async fn session(
                 keep_mic_allowed(aacp, ctx, &mac_s, &route, &mic).await;
             }
             req = mic_requests.recv() => {
-                if matches!(req, Err(tokio::sync::broadcast::error::RecvError::Closed)) {
+                // A lag report is not a request (the requests still buffered follow), and
+                // the sender is a static that never closes.
+                if req.is_err() {
                     continue;
                 }
                 if stems.mic_switch {

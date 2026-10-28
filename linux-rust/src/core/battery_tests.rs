@@ -97,6 +97,38 @@ fn taking_pods_out_of_the_case_keeps_the_case_level_dimmed() {
 }
 
 #[test]
+fn impossible_first_case_level_is_not_shown_as_zero() {
+    let (mut t, t0, _) = setup();
+    let mut aacp = Aacp::new();
+    t.set_aacp_connected(true);
+    // The first report after connecting says "case 255%, not charging".
+    aacp.send(
+        &mut t,
+        &[
+            (LEFT, 80, NOT_CHARGING),
+            (RIGHT, 78, NOT_CHARGING),
+            (CASE, 0xFF, NOT_CHARGING),
+        ],
+        t0,
+    );
+    let s = t.snapshot();
+    assert_eq!(s.case.level, None, "no live or saved 0% for the case");
+    assert!(!s.case.is_live());
+
+    // The real level follows and is shown.
+    aacp.send(
+        &mut t,
+        &[
+            (LEFT, 80, NOT_CHARGING),
+            (RIGHT, 78, NOT_CHARGING),
+            (CASE, 52, NOT_CHARGING),
+        ],
+        secs(t0, 5),
+    );
+    assert_eq!(t.snapshot().case.level, Some(52));
+}
+
+#[test]
 fn one_pod_out_of_range_shows_its_last_level_dimmed() {
     let (mut t, t0, _) = setup();
     let mut aacp = Aacp::new();
