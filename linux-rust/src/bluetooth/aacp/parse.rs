@@ -42,10 +42,7 @@ pub fn parse_battery_info(payload: &[u8]) -> Option<Vec<BatteryInfo>> {
     }
     let records = payload.get(3..3 + count * BATTERY_RECORD_LEN)?;
     let mut out = Vec::with_capacity(count);
-    for rec in records.chunks_exact(BATTERY_RECORD_LEN) {
-        let [comp, spacer, level, status, end] = rec else {
-            return None;
-        };
+    for [comp, spacer, level, status, end] in records.as_chunks::<BATTERY_RECORD_LEN>().0 {
         if *spacer != 0x01 || *end != 0x01 {
             return None;
         }

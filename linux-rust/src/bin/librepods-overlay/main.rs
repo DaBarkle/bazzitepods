@@ -490,11 +490,9 @@ fn main() -> ExitCode {
     // forcing the integrated one breaks on hybrid PCs where the compositor runs on the
     // discrete card, because it can't import buffers drawn on the other GPU. Both can be
     // overridden from outside (WGPU_BACKEND, WGPU_POWER_PREF).
-    for (key, value) in [("WGPU_BACKEND", "vulkan")] {
-        if std::env::var_os(key).is_none() {
-            // SAFETY: first thing in main, before any other thread exists.
-            unsafe { std::env::set_var(key, value) };
-        }
+    if std::env::var_os("WGPU_BACKEND").is_none() {
+        // SAFETY: first thing in main, before any other thread exists.
+        unsafe { std::env::set_var("WGPU_BACKEND", "vulkan") };
     }
 
     let (args, probe_only) = match parse_args() {
