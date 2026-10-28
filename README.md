@@ -571,9 +571,10 @@ battery and audio logic, device switching, the mic switch and the packaging. The
 mic stream follows the approach found in LibrePods
 [pull request #655](https://github.com/librepods-org/librepods/pull/655).
 
-This repository is a fork of LibrePods. The Rust app in `linux-rust/` is Kase; the
-`android/` and `linux/` folders are upstream's Android app and older Qt app, kept as they
-were. Upstream's original branches are kept as `upstream-main` and `linux/rust`.
+This repository is a fork of LibrePods, trimmed to the Kase desktop app in `linux-rust/`.
+LibrePods' notes on the AirPods protocol live on in
+[`linux-rust/docs/protocol/`](linux-rust/docs/protocol/). Upstream's original branches are
+kept as `upstream-main` and `linux/rust`.
 
 The interface uses the [Inter](https://rsms.me/inter/) typeface (SIL Open Font License).
 
