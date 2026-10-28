@@ -1,11 +1,12 @@
 use crate::devices::airpods::AirPodsInformation;
-use crate::devices::nothing::NothingInformation;
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DeviceType {
     AirPods,
+    /// A Nothing Ear entry saved by LibrePods. Kase no longer supports these devices, but
+    /// the variant stays so a `devices.json` holding one still loads (with its AirPods keys).
     Nothing,
 }
 
@@ -22,7 +23,8 @@ impl Display for DeviceType {
 #[serde(tag = "kind", content = "data")]
 pub enum DeviceInformation {
     AirPods(AirPodsInformation),
-    Nothing(NothingInformation),
+    /// Kept as-is from a LibrePods `devices.json`; see [`DeviceType::Nothing`].
+    Nothing(serde_json::Value),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

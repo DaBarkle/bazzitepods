@@ -6,7 +6,6 @@
 //! through `active_commands` from an async task; settings are written by a background task.
 
 use crate::bluetooth::aacp::ControlCommandIdentifiers;
-use crate::bluetooth::att::ATTHandles;
 use crate::bluetooth::managers::DeviceManagers;
 use crate::devices::airpods::CommandSender;
 use crate::devices::enums::{DeviceData, DeviceInformation};
@@ -22,15 +21,14 @@ use crate::ui::style::{self, Tokens};
 use crate::ui::widgets::{self, Glyph, Ink};
 use futures::Stream;
 use iced::widget::{
-    Space, button, column, container, pick_list, row, scrollable, slider, stack, text, text_input,
-    toggler,
+    Space, button, column, container, row, scrollable, slider, stack, text, text_input, toggler,
 };
 use iced::{
     Center, Color, Element, Fill, FillPortion, Length, Padding, Size, Subscription, Task, Theme,
     window,
 };
 use log::{debug, info, warn};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -49,7 +47,7 @@ pub struct UiContext {
     pub active_commands: Arc<Mutex<Option<CommandSender>>>,
     pub device_managers: Arc<RwLock<HashMap<String, DeviceManagers>>>,
     pub settings: SettingsStore,
-    /// Legacy event channel: tray "Open" requests, Nothing devices, adaptive volume state.
+    /// Legacy event channel: tray "Open" requests and device connect/disconnect notices.
     pub ui_rx: UnboundedReceiver<BluetoothUIMessage>,
     pub start_minimized: bool,
     /// `--ui-demo`: no Bluetooth; controls act on the hub directly.
@@ -181,7 +179,6 @@ pub enum Message {
     RenameDone(Result<(), String>),
     CommandSent(bool),
     AutostartDone(Result<(), String>),
-    NothingConnected(Option<String>),
     SavedDevices(HashMap<String, DeviceData>),
     AppleMode(Option<bool>),
     /// Whether the app can ask for admin rights itself (pkexec on the host).
@@ -194,7 +191,6 @@ pub enum Message {
     AppleDone(Result<bool, crate::apple_mode::Failure>),
     CopyAppleCommand,
     TakeAudio,
-    SetNothingMode(String, NothingMode),
     Ignore,
 }
 
@@ -241,52 +237,6 @@ enum Anim {
     Ring(usize),
     /// Status island edge light.
     Glow,
-}
-
-/// Nothing Ear noise control modes (legacy device support behind "More").
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NothingMode {
-    Off,
-    Transparency,
-    Adaptive,
-    Low,
-    Mid,
-    High,
-}
-
-impl NothingMode {
-    const ALL: [NothingMode; 6] = [
-        NothingMode::Off,
-        NothingMode::Transparency,
-        NothingMode::Adaptive,
-        NothingMode::Low,
-        NothingMode::Mid,
-        NothingMode::High,
-    ];
-
-    fn byte(self) -> u8 {
-        match self {
-            NothingMode::Off => 0x05,
-            NothingMode::Transparency => 0x07,
-            NothingMode::Adaptive => 0x04,
-            NothingMode::Low => 0x03,
-            NothingMode::Mid => 0x02,
-            NothingMode::High => 0x01,
-        }
-    }
-}
-
-impl std::fmt::Display for NothingMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            NothingMode::Off => "Off",
-            NothingMode::Transparency => "Transparency",
-            NothingMode::Adaptive => "Adaptive noise cancellation",
-            NothingMode::Low => "Noise cancellation · Low",
-            NothingMode::Mid => "Noise cancellation · Mid",
-            NothingMode::High => "Noise cancellation · High",
-        })
-    }
 }
 
 /// Where the Apple device mode switch is in its flow.
@@ -337,7 +287,6 @@ pub struct App {
     apple_can_change: Option<bool>,
     apple_copied: bool,
     rename_status: Option<String>,
-    nothing: BTreeMap<String, Option<NothingMode>>,
     /// devices.json (serials, firmware), loaded off the UI thread.
     saved: HashMap<String, DeviceData>,
 }
@@ -398,7 +347,6 @@ impl App {
             apple_can_change: demo.then_some(true),
             apple_copied: false,
             rename_status: None,
-            nothing: BTreeMap::new(),
             saved: HashMap::new(),
         };
         let theme = iced::system::theme().map(Message::SystemTheme);
@@ -844,43 +792,10 @@ impl App {
                 }
                 Task::none()
             }
-            Message::NothingConnected(Some(mac)) => {
-                self.nothing.entry(mac).or_insert(None);
-                Task::none()
-            }
-            Message::NothingConnected(None) | Message::Ignore => Task::none(),
+            Message::Ignore => Task::none(),
             Message::SavedDevices(map) => {
                 self.saved = map;
                 Task::none()
-            }
-            Message::SetNothingMode(mac, mode) => {
-                self.nothing.insert(mac.clone(), Some(mode));
-                let managers = self.device_managers.clone();
-                Task::perform(
-                    async move {
-                        let att = managers.read().await.get(&mac).and_then(|m| m.get_att());
-                        let Some(att) = att else { return };
-                        let packet = [
-                            0x55,
-                            0x60,
-                            0x01,
-                            0x0F,
-                            0xF0,
-                            0x03,
-                            0x00,
-                            0x00,
-                            0x01,
-                            mode.byte(),
-                            0x00,
-                            0x00,
-                            0x00,
-                        ];
-                        if let Err(e) = att.write(ATTHandles::NothingEverything, &packet).await {
-                            warn!("Failed to set Nothing noise control on {mac}: {e}");
-                        }
-                    },
-                    |_| Message::Ignore,
-                )
             }
         }
     }
@@ -891,22 +806,7 @@ impl App {
                 info!("Opening main window");
                 self.open_window()
             }
-            BluetoothUIMessage::DeviceConnected(mac) => {
-                let managers = self.device_managers.clone();
-                let nothing = Task::perform(
-                    async move {
-                        let guard = managers.read().await;
-                        let m = guard.get(&mac)?;
-                        (m.get_att().is_some() && m.get_aacp().is_none()).then_some(mac)
-                    },
-                    Message::NothingConnected,
-                );
-                Task::batch([nothing, load_saved_devices()])
-            }
-            BluetoothUIMessage::DeviceDisconnected(mac) => {
-                self.nothing.remove(&mac);
-                Task::none()
-            }
+            BluetoothUIMessage::DeviceConnected => load_saved_devices(),
         }
     }
 
@@ -1531,22 +1431,6 @@ impl App {
 
         if let Some(d) = device {
             page = page.push(section_label("About")).push(self.about(d));
-        }
-        for (mac, mode) in &self.nothing {
-            let mac_c = mac.clone();
-            page = page.push(section_label("Nothing Ear")).push(group(vec![
-                column![
-                    text(mac.clone()).size(12).style(faint_text),
-                    pick_list(NothingMode::ALL, *mode, move |m| {
-                        Message::SetNothingMode(mac_c.clone(), m)
-                    })
-                    .placeholder("Noise control")
-                    .text_size(13)
-                    .width(Fill),
-                ]
-                .spacing(8)
-                .into(),
-            ]));
         }
         page.into()
     }
