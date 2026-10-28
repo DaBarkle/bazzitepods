@@ -1,4 +1,4 @@
-//! Wire protocol between the main app and the `librepods-overlay` process.
+//! Wire protocol between the main app and the `kase-overlay` process.
 //!
 //! The parent writes one JSON object per line on the overlay's stdin (see
 //! `docs/ARCHITECTURE.md`, "Overlay protocol"). This file is compiled into both

@@ -1,5 +1,5 @@
 [package]
-name = "librepods"
+name = "kase"
 version = "0.6.0"
 edition = "2024"
 
@@ -31,12 +31,12 @@ name = "kase"
 path = "src/lib.rs"
 
 [[bin]]
-name = "librepods"
+name = "kase"
 path = "src/main.rs"
 
 [[bin]]
-name = "librepods-overlay"
-path = "src/bin/librepods-overlay/main.rs"
+name = "kase-overlay"
+path = "src/bin/kase-overlay/main.rs"
 
 [profile.release]
 opt-level = "s"

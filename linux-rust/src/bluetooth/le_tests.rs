@@ -190,7 +190,7 @@ fn rpa_for(irk: &[u8; 16]) -> Address {
 
 #[tokio::test]
 async fn key_store_loads_devices_file_and_reloads_when_it_changes() {
-    let dir = std::env::temp_dir().join(format!("librepods-le-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("kase-le-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("devices.json");
     let irk = [0x5Au8; 16];

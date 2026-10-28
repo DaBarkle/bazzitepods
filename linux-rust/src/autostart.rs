@@ -6,7 +6,7 @@
 //! Outside Flatpak (a plain `cargo run` / AppImage / distro package) we manage that
 //! file ourselves.
 //!
-//! Either way the app is launched as `librepods --start-minimized`, i.e. tray and background
+//! Either way the app is launched as `kase --start-minimized`, i.e. tray and background
 //! work only, with the main window hidden.
 //!
 //! Nothing in here panics: every failure is reported as `Err(String)` for the caller to log.
@@ -96,7 +96,7 @@ fn request_background_portal(enable: bool) -> Result<(), String> {
     options.insert(
         "commandline".into(),
         variant(vec![
-            String::from("librepods"),
+            String::from("kase"),
             String::from(START_MINIMIZED_FLAG),
         ]),
     );
@@ -188,7 +188,7 @@ fn handle_token() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    format!("librepods_{}_{}", std::process::id(), nanos)
+    format!("kase_{}_{}", std::process::id(), nanos)
 }
 
 /// `/org/freedesktop/portal/desktop/request/SENDER/TOKEN`, where SENDER is our unique bus name
@@ -297,7 +297,7 @@ mod tests {
     /// A fresh directory under the system temp dir, used as XDG_CONFIG_HOME.
     fn temp_config_home(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "librepods-autostart-test-{}-{}-{name}",
+            "kase-autostart-test-{}-{}-{name}",
             std::process::id(),
             handle_token()
         ));
@@ -312,12 +312,12 @@ mod tests {
         let dir = autostart_dir(Some(config_home.clone().into_os_string()), None).expect("dir");
         assert_eq!(dir, config_home.join("autostart"));
 
-        let exe = Path::new("/opt/Libre Pods/bin/librepods");
+        let exe = Path::new("/opt/My Apps/bin/kase");
         set_autostart_file(&dir, exe, true).expect("enable");
         let file = dir.join("io.github.dabarkle.Kase.desktop");
         let text = std::fs::read_to_string(&file).expect("read entry");
         assert!(text.starts_with("[Desktop Entry]\n"));
-        assert!(text.contains("Exec=\"/opt/Libre Pods/bin/librepods\" --start-minimized\n"));
+        assert!(text.contains("Exec=\"/opt/My Apps/bin/kase\" --start-minimized\n"));
         assert!(text.contains("X-GNOME-Autostart-enabled=true\n"));
 
         // Idempotent.
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn exec_quoting() {
-        assert_eq!(quote_exec_arg("/usr/bin/librepods"), "/usr/bin/librepods");
+        assert_eq!(quote_exec_arg("/usr/bin/kase"), "/usr/bin/kase");
         assert_eq!(quote_exec_arg("/a b/c"), "\"/a b/c\"");
         assert_eq!(quote_exec_arg("/a$b"), "\"/a\\$b\"");
         assert_eq!(quote_exec_arg("/100%"), "\"/100%%\"");

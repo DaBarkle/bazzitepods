@@ -547,11 +547,11 @@ mod tests {
         assert_eq!(off.bucket, None);
     }
 
-    /// `LIBREPODS_ICON_DUMP=/some/dir cargo test dump_tray_icons -- --ignored` writes previews.
+    /// `KASE_ICON_DUMP=/some/dir cargo test dump_tray_icons -- --ignored` writes previews.
     #[test]
     #[ignore]
     fn dump_tray_icons() {
-        let Some(dir) = std::env::var_os("LIBREPODS_ICON_DUMP") else {
+        let Some(dir) = std::env::var_os("KASE_ICON_DUMP") else {
             return;
         };
         let dir = std::path::PathBuf::from(dir);

@@ -609,7 +609,7 @@ mod tests {
     #[tokio::test]
     async fn devices_file_roundtrip_atomic() {
         let dir = std::env::temp_dir().join(format!(
-            "librepods-test-{}-{:?}",
+            "kase-test-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));

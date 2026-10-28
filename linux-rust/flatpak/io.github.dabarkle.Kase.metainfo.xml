@@ -43,8 +43,8 @@
 
   <launchable type="desktop-id">io.github.dabarkle.Kase.desktop</launchable>
   <provides>
-    <binary>librepods</binary>
-    <binary>librepods-overlay</binary>
+    <binary>kase</binary>
+    <binary>kase-overlay</binary>
     <!-- The app was called BazzitePods until 0.5.0. -->
     <id>io.github.dabarkle.BazzitePods</id>
   </provides>

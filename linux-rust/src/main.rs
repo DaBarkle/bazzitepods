@@ -55,6 +55,7 @@ fn main() -> iced::Result {
         };
     }
     env_logger::init();
+    kase::utils::migrate_legacy_dirs();
 
     let (ui_tx, ui_rx) = unbounded_channel::<BluetoothUIMessage>();
     let device_managers: Arc<RwLock<HashMap<String, kase::bluetooth::managers::DeviceManagers>>> =

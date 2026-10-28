@@ -30,7 +30,7 @@ Uninstall: append `--uninstall` instead of the file path.
 5. Change the noise control mode (press and hold a stem, or use the window): a short
    *Noise Cancellation* / *Transparency* alert appears. Put the case on a charger: *Case
    charging* with a green ring.
-6. With the island at rest, `top -p $(pgrep -f librepods-overlay)` shows 0.0% CPU.
+6. With the island at rest, `top -p $(pgrep -f kase-overlay)` shows 0.0% CPU.
 
 ## 3. The walk-away bug
 
@@ -42,7 +42,7 @@ Uninstall: append `--uninstall` instead of the file path.
 If audio stays silent, run this and send the output:
 
 ```bash
-flatpak run --command=sh io.github.dabarkle.Kase -c 'RUST_LOG=librepods=debug librepods' 2>&1 | tee ~/librepods-debug.log
+flatpak run --command=sh io.github.dabarkle.Kase -c 'RUST_LOG=kase=debug kase' 2>&1 | tee ~/kase-debug.log
 pactl list cards short; wpctl status
 grep bluez ~/.local/state/wireplumber/default-profile
 ```
@@ -62,4 +62,4 @@ should come back without touching anything.
 
 ## Logs
 
-`journalctl --user -b | grep -i librepods` or run with `RUST_LOG=librepods=debug` as above.
+`journalctl --user -b | grep -i kase` or run with `RUST_LOG=kase=debug` as above.
