@@ -85,22 +85,39 @@ pub(super) fn kv<'a>(k: &'a str, v: String) -> Element<'a, Message> {
 
 /// A setting whose control needs the full width: title and caption above it.
 /// The confirm step under the Apple device mode switch.
-pub(super) fn apple_confirm<'a>(on: bool) -> Element<'a, Message> {
-    let (title, body, action) = if on {
-        (
+pub(super) fn apple_confirm<'a>(
+    setting: crate::apple_mode::Setting,
+    on: bool,
+) -> Element<'a, Message> {
+    use crate::apple_mode::Setting;
+    let (title, body, action) = match (setting, on) {
+        (Setting::AppleMode, true) => (
             "Turn on Apple device mode?",
             "Bluetooth will restart, so your AirPods and other Bluetooth devices disconnect \
              for a few seconds and reconnect on their own. Your system will ask for your \
              password once.",
             "Restart Bluetooth",
-        )
-    } else {
-        (
+        ),
+        (Setting::AppleMode, false) => (
             "Turn off Apple device mode?",
             "Your original Bluetooth settings come back. Bluetooth restarts, so devices \
              disconnect for a few seconds, and your system will ask for your password.",
             "Turn Off",
-        )
+        ),
+        (Setting::Experimental, true) => (
+            "Turn on experimental Bluetooth?",
+            "Bluetooth's experimental features let Kase watch for your AirPods' battery \
+             while they're away. They're widely used, but marked experimental by Linux. \
+             Bluetooth restarts, so devices disconnect for a few seconds, and your system \
+             will ask for your password once.",
+            "Restart Bluetooth",
+        ),
+        (Setting::Experimental, false) => (
+            "Turn off experimental Bluetooth?",
+            "Bluetooth goes back to its default features. It restarts, so devices disconnect \
+             for a few seconds, and your system will ask for your password.",
+            "Turn Off",
+        ),
     };
     let pad = Padding {
         top: 7.0,

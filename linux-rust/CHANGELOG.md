@@ -6,6 +6,15 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+### Added
+- **Faster battery while away** switch in Settings → Diagnostics (off by default). It turns
+  on Bluetooth's experimental features (`Experimental = true` in
+  `/etc/bluetooth/main.conf`) so Kase can use the advertisement monitor instead of fallback
+  scanning, with the same password prompt, Bluetooth restart and distribution handling
+  (NixOS, SteamOS, no systemd) as Apple device mode. The switch shows what the running
+  Bluetooth service really does, the two settings stay independent, and turning it off
+  removes only its own line. ([#39])
+
 ## [0.8.1] - 2026-10-30
 
 ### Added
@@ -404,3 +413,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#34]: https://github.com/DaBarkle/kase/pull/34
 [#35]: https://github.com/DaBarkle/kase/pull/35
 [#37]: https://github.com/DaBarkle/kase/pull/37
+[#39]: https://github.com/DaBarkle/kase/pull/39
