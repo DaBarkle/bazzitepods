@@ -19,12 +19,17 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::Command;
 
-/// Runs as root under pkexec, with `$1` = `on` | `off`. Idempotent both ways.
+/// Runs as root under pkexec, with `$1` = `on` | `off` (Apple device mode) or
+/// `exp-on` | `exp-off` (BlueZ experimental features). Idempotent; each pair only touches
+/// its own key.
 ///
 /// * on: backs up main.conf once, drops any earlier Kase line, comments out a
 ///   DeviceID the user set themselves (marked so `off` can restore it), then adds ours
 ///   under `[General]`.
 /// * off: removes our line and restores anything `on` commented out.
+/// * exp-on: backs up main.conf once (its own backup), then adds `Experimental = true` under
+///   `[General]` unless it's already set; an active `Experimental = false` is replaced.
+/// * exp-off: removes active `Experimental = true` lines (BlueZ's default is off).
 ///
 /// Then bluetoothd is restarted so the change applies (connected devices drop briefly),
 /// through systemd, OpenRC or runit. Only POSIX sed and awk: no GNU-only addresses.
@@ -33,22 +38,37 @@ f=/etc/bluetooth/main.conf
 ours='DeviceID = bluetooth:004C:0000:0000'
 mark='#kase-disabled# '
 old_mark='#bazzitepods-disabled# '
+exp='^[[:space:]]*Experimental[[:space:]]*='
 if [ ! -f "$f" ]; then
   mkdir -p /etc/bluetooth
   printf '[General]\n' > "$f"
 fi
+# Adds a line right under the first [General], or a new [General] section with it.
+add_general() {
+  if grep -q '^[[:space:]]*\[General\]' "$f"; then
+    awk -v l="$1" '{ print } !d && /^[[:space:]]*\[General\]/ { print l; d = 1 }' "$f" > "$f.kase-tmp"
+    cat "$f.kase-tmp" > "$f"
+    rm -f "$f.kase-tmp"
+  else
+    printf '\n[General]\n%s\n' "$1" >> "$f"
+  fi
+}
 case "${1:-}" in
   on)
     [ -e "$f.bak-kase" ] || [ -e "$f.bak-bazzitepods" ] || cp -a "$f" "$f.bak-kase"
     sed -i '/^[[:space:]]*DeviceID[[:space:]]*=[[:space:]]*bluetooth:004C:/d' "$f"
     sed -i "s|^\([[:space:]]*DeviceID[[:space:]]*=\)|$mark\1|" "$f"
-    if grep -q '^[[:space:]]*\[General\]' "$f"; then
-      awk -v l="$ours" '{ print } !d && /^[[:space:]]*\[General\]/ { print l; d = 1 }' "$f" > "$f.kase-tmp"
-      cat "$f.kase-tmp" > "$f"
-      rm -f "$f.kase-tmp"
-    else
-      printf '\n[General]\n%s\n' "$ours" >> "$f"
+    add_general "$ours"
+    ;;
+  exp-on)
+    [ -e "$f.bak-kase-experimental" ] || cp -a "$f" "$f.bak-kase-experimental"
+    if ! grep -qi "${exp}[[:space:]]*true[[:space:]]*\$" "$f"; then
+      sed -i "/$exp/d" "$f"
+      add_general 'Experimental = true'
     fi
+    ;;
+  exp-off)
+    sed -i "/${exp}[[:space:]]*[Tt][Rr][Uu][Ee][[:space:]]*\$/d" "$f"
     ;;
   off)
     sed -i '/^[[:space:]]*DeviceID[[:space:]]*=[[:space:]]*bluetooth:004C:/d' "$f"
@@ -115,8 +135,11 @@ pub fn parse_os(os_release: &str) -> HostOs {
 }
 
 /// The command Settings copies when the app can't make the change itself.
-pub fn manual_command(on: bool, host: Host) -> String {
+pub fn manual_command(setting: Setting, on: bool, host: Host) -> String {
     const CONF: &str = "/etc/bluetooth/main.conf";
+    if setting == Setting::Experimental {
+        return manual_experimental(on, host);
+    }
     if host.os == HostOs::NixOs {
         return if on {
             "hardware.bluetooth.settings.General.DeviceID = \"bluetooth:004C:0000:0000\";".into()
@@ -124,11 +147,7 @@ pub fn manual_command(on: bool, host: Host) -> String {
             "# remove hardware.bluetooth.settings.General.DeviceID from configuration.nix, then: sudo nixos-rebuild switch".into()
         };
     }
-    let restart = if host.systemd {
-        "sudo systemctl restart bluetooth"
-    } else {
-        "sudo rc-service bluetooth restart  # or: sudo sv restart bluetoothd"
-    };
+    let restart = restart_command(host);
     if on {
         format!(
             "sudo cp -a {CONF} {CONF}.bak-kase && \
@@ -137,6 +156,34 @@ sudo sed -i '/^\\[General\\]/a DeviceID = bluetooth:004C:0000:0000' {CONF} && \
         )
     } else {
         format!("sudo sed -i '/^DeviceID = bluetooth:004C:/d' {CONF} && {restart}")
+    }
+}
+
+fn manual_experimental(on: bool, host: Host) -> String {
+    const CONF: &str = "/etc/bluetooth/main.conf";
+    if host.os == HostOs::NixOs {
+        return if on {
+            "hardware.bluetooth.settings.General.Experimental = true;".into()
+        } else {
+            "# remove hardware.bluetooth.settings.General.Experimental from configuration.nix, then: sudo nixos-rebuild switch".into()
+        };
+    }
+    let restart = restart_command(host);
+    if on {
+        format!(
+            "sudo cp -a {CONF} {CONF}.bak-kase-experimental && \
+sudo sed -i '/^\\[General\\]/a Experimental = true' {CONF} && {restart}"
+        )
+    } else {
+        format!("sudo sed -i '/^Experimental = true/d' {CONF} && {restart}")
+    }
+}
+
+fn restart_command(host: Host) -> &'static str {
+    if host.systemd {
+        "sudo systemctl restart bluetooth"
+    } else {
+        "sudo rc-service bluetooth restart  # or: sudo sv restart bluetoothd"
     }
 }
 
@@ -228,22 +275,85 @@ pub async fn status() -> Option<bool> {
     Some(m.vendor == 0x004C)
 }
 
-/// Turns Apple device mode on or off. Shows the system password prompt, restarts
-/// Bluetooth, then waits for the adapter to come back and confirms the new state.
-pub async fn set(on: bool) -> Result<bool, Failure> {
-    let arg = if on { "on" } else { "off" };
-    info!("Apple device mode: asking pkexec to turn it {arg}");
-    let out = host_command("pkexec", &["/bin/sh", "-c", SCRIPT, "kase-apple-mode", arg])
-        .output()
+/// The system Bluetooth settings Kase can change, each with its own switch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Setting {
+    #[default]
+    AppleMode,
+    /// BlueZ's experimental features (`Experimental = true`), which bring the LE
+    /// advertisement monitor: faster battery while the AirPods are away.
+    Experimental,
+}
+
+impl Setting {
+    fn arg(self, on: bool) -> &'static str {
+        match (self, on) {
+            (Setting::AppleMode, true) => "on",
+            (Setting::AppleMode, false) => "off",
+            (Setting::Experimental, true) => "exp-on",
+            (Setting::Experimental, false) => "exp-off",
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Setting::AppleMode => "Apple device mode",
+            Setting::Experimental => "Bluetooth experimental features",
+        }
+    }
+
+    /// What the running bluetoothd actually does, not what the file says; None if there's
+    /// no adapter.
+    pub async fn status(self) -> Option<bool> {
+        match self {
+            Setting::AppleMode => status().await,
+            Setting::Experimental => experimental_status().await,
+        }
+    }
+}
+
+/// Whether an adapter's D-Bus introspection lists the advertisement monitor manager, which
+/// bluetoothd only offers with its experimental features on.
+pub fn exposes_monitor(introspection_xml: &str) -> bool {
+    introspection_xml.contains("\"org.bluez.AdvertisementMonitorManager1\"")
+}
+
+/// True when bluetoothd runs with its experimental features; None if there's no adapter.
+pub async fn experimental_status() -> Option<bool> {
+    let session = bluer::Session::new().await.ok()?;
+    let adapter = crate::bluetooth::adapter::airpods_adapter(&session)
         .await
-        .map_err(|e| Failure::Other(e.to_string()))?;
+        .ok()?;
+    let path = format!("/org/bluez/{}", adapter.name());
+    tokio::task::spawn_blocking(move || {
+        let conn = dbus::blocking::Connection::new_system().ok()?;
+        let proxy = conn.with_proxy("org.bluez", path, Duration::from_secs(3));
+        let (xml,): (String,) = proxy
+            .method_call("org.freedesktop.DBus.Introspectable", "Introspect", ())
+            .ok()?;
+        Some(exposes_monitor(&xml))
+    })
+    .await
+    .ok()?
+}
+
+/// Turns a setting on or off. Shows the system password prompt, restarts Bluetooth, then
+/// waits for the adapter to come back and confirms the new state.
+pub async fn set(setting: Setting, on: bool) -> Result<bool, Failure> {
+    let arg = setting.arg(on);
+    let name = setting.name();
+    info!("{name}: asking pkexec to run {arg}");
+    let out = host_command(
+        "pkexec",
+        &["/bin/sh", "-c", SCRIPT, "kase-bluetooth-setting", arg],
+    )
+    .output()
+    .await
+    .map_err(|e| Failure::Other(e.to_string()))?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        warn!(
-            "Apple device mode: helper exited {:?}: {stderr}",
-            out.status.code()
-        );
+        warn!("{name}: helper exited {:?}: {stderr}", out.status.code());
         return Err(match out.status.code() {
             // pkexec: 126 = dialog dismissed, 127 = not authorized (or couldn't authenticate).
             Some(126) => Failure::Cancelled,
@@ -272,8 +382,8 @@ pub async fn set(on: bool) -> Result<bool, Failure> {
     // bluetoothd takes a moment to come back and re-register the adapter.
     for _ in 0..20 {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        if status().await == Some(on) {
-            info!("Apple device mode is now {arg}");
+        if setting.status().await == Some(on) {
+            info!("{name}: now {arg}");
             return Ok(on);
         }
     }
@@ -322,7 +432,7 @@ mod tests {
             .as_nanos()
     }
 
-    use super::{Host, HostOs, manual_command, parse_os};
+    use super::{Host, HostOs, Setting, exposes_monitor, manual_command, parse_os};
 
     #[test]
     fn os_release_is_recognised() {
@@ -342,16 +452,101 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            manual_command(true, nix),
+            manual_command(Setting::AppleMode, true, nix),
             "hardware.bluetooth.settings.General.DeviceID = \"bluetooth:004C:0000:0000\";"
         );
         let systemd = Host {
             systemd: true,
             ..Default::default()
         };
-        assert!(manual_command(true, systemd).ends_with("sudo systemctl restart bluetooth"));
-        assert!(manual_command(false, systemd).starts_with("sudo sed -i '/^DeviceID"));
-        assert!(manual_command(false, Host::default()).contains("rc-service bluetooth restart"));
+        assert!(
+            manual_command(Setting::AppleMode, true, systemd)
+                .ends_with("sudo systemctl restart bluetooth")
+        );
+        assert!(
+            manual_command(Setting::AppleMode, false, systemd)
+                .starts_with("sudo sed -i '/^DeviceID")
+        );
+        assert!(
+            manual_command(Setting::AppleMode, false, Host::default())
+                .contains("rc-service bluetooth restart")
+        );
+    }
+
+    #[test]
+    fn experimental_manual_command_fits_the_host() {
+        let nix = Host {
+            os: HostOs::NixOs,
+            ..Default::default()
+        };
+        assert_eq!(
+            manual_command(Setting::Experimental, true, nix),
+            "hardware.bluetooth.settings.General.Experimental = true;"
+        );
+        let systemd = Host {
+            systemd: true,
+            ..Default::default()
+        };
+        let on = manual_command(Setting::Experimental, true, systemd);
+        assert!(
+            on.contains("a Experimental = true") && on.ends_with("systemctl restart bluetooth")
+        );
+        assert!(
+            manual_command(Setting::Experimental, false, systemd)
+                .starts_with("sudo sed -i '/^Experimental = true/d'")
+        );
+    }
+
+    #[test]
+    fn monitor_manager_in_introspection_means_experimental_is_on() {
+        let on = r#"<node><interface name="org.bluez.Adapter1"/><interface name="org.bluez.AdvertisementMonitorManager1"/></node>"#;
+        let off = r#"<node><interface name="org.bluez.Adapter1"/><interface name="org.bluez.LEAdvertisingManager1"/></node>"#;
+        assert!(exposes_monitor(on));
+        assert!(!exposes_monitor(off));
+    }
+
+    /// Bazzite's main.conf, cut down: a commented default and KernelExperimental.
+    const BAZZITE: &str = "[General]\n#Experimental = false\nKernelExperimental = 15c0a148\n\n[Policy]\nAutoEnable=true\n";
+
+    #[test]
+    fn experimental_on_adds_one_line_and_off_restores() {
+        let on = run(BAZZITE, "exp-on");
+        assert_eq!(
+            on,
+            "[General]\nExperimental = true\n#Experimental = false\nKernelExperimental = 15c0a148\n\n[Policy]\nAutoEnable=true\n"
+        );
+        assert_eq!(run(&on, "exp-on"), on, "idempotent");
+        assert_eq!(run(&on, "exp-off"), BAZZITE);
+        assert_eq!(run(BAZZITE, "exp-off"), BAZZITE);
+    }
+
+    #[test]
+    fn experimental_replaces_an_active_false_and_keeps_a_user_true() {
+        assert_eq!(
+            run("[General]\nName = PC\nExperimental = false\n", "exp-on"),
+            "[General]\nExperimental = true\nName = PC\n"
+        );
+        let user = "[General]\nName = PC\nExperimental=true\n";
+        assert_eq!(run(user, "exp-on"), user);
+        assert_eq!(run(user, "exp-off"), "[General]\nName = PC\n");
+    }
+
+    #[test]
+    fn experimental_without_a_general_section_adds_one() {
+        assert_eq!(
+            run("[Policy]\nAutoEnable=true\n", "exp-on"),
+            "[Policy]\nAutoEnable=true\n\n[General]\nExperimental = true\n"
+        );
+    }
+
+    #[test]
+    fn apple_mode_and_experimental_stay_independent() {
+        let both = run(&run(BAZZITE, "on"), "exp-on");
+        assert!(both.contains("DeviceID = bluetooth:004C:0000:0000"));
+        assert!(both.contains("Experimental = true"));
+        let apple_only = run(&both, "exp-off");
+        assert_eq!(apple_only, run(BAZZITE, "on"));
+        assert_eq!(run(&both, "off"), run(BAZZITE, "exp-on"));
     }
 
     const FEDORA: &str = "[General]\n#Name = BlueZ\n#DeviceID = bluetooth:1234:5678:abcd\n\n[Policy]\nAutoEnable=true\n";

@@ -182,16 +182,20 @@ pub enum Message {
     AutostartDone(Result<(), String>),
     SavedDevices(HashMap<String, DeviceData>),
     AppleMode(Option<bool>),
+    /// bluetoothd runs with its experimental features (None = no adapter).
+    ExperimentalMode(Option<bool>),
     /// Whether the app can ask for admin rights itself (pkexec on the host).
     AppleHost(crate::apple_mode::Host),
     Diagnostics(crate::diagnostics::Diagnostics),
     /// The Apple device mode switch was flipped: show the confirm step.
     AppleToggle(bool),
+    /// The "Faster battery while away" switch was flipped: show the confirm step.
+    ExperimentalToggle(bool),
     AppleCancel,
     /// "Restart Bluetooth" in the confirm step: password prompt, then restart.
     AppleConfirm,
     AppleDone(Result<bool, crate::apple_mode::Failure>),
-    CopyAppleCommand,
+    CopyCommand(crate::apple_mode::Setting),
     TakeAudio,
     Ignore,
 }
@@ -285,10 +289,14 @@ pub struct App {
     /// Bluetooth adapter reports Apple's vendor id (DeviceID spoofing); None = unknown.
     apple_mode: Option<bool>,
     apple_flow: AppleFlow,
+    /// Which setting `apple_flow` belongs to.
+    apple_target: crate::apple_mode::Setting,
+    experimental: Option<bool>,
     /// None until probed; false shows the copy-a-command fallback.
     apple_host: Option<crate::apple_mode::Host>,
     diagnostics: Option<crate::diagnostics::Diagnostics>,
-    apple_copied: bool,
+    /// The setting whose terminal command was just copied.
+    apple_copied: Option<crate::apple_mode::Setting>,
     rename_status: Option<String>,
     /// devices.json (serials, firmware), loaded off the UI thread.
     saved: HashMap<String, DeviceData>,
@@ -352,7 +360,9 @@ impl App {
                 can_change: true,
                 ..Default::default()
             }),
-            apple_copied: false,
+            apple_copied: None,
+            apple_target: Default::default(),
+            experimental: demo.then_some(false),
             rename_status: None,
             saved: HashMap::new(),
         };
@@ -376,6 +386,14 @@ impl App {
             ])
         };
         (app, Task::batch([theme, open, saved, apple]))
+    }
+
+    /// Shows the confirm step for a system setting, unless a change is already running.
+    fn confirm_setting(&mut self, setting: crate::apple_mode::Setting, on: bool) {
+        if !matches!(self.apple_flow, AppleFlow::Working(_)) {
+            self.apple_target = setting;
+            self.apple_flow = AppleFlow::Confirm(on);
+        }
     }
 
     fn open_window(&mut self) -> Task<Message> {
@@ -690,7 +708,7 @@ impl App {
                     return Task::none();
                 }
                 self.tab = tab;
-                self.apple_copied = false;
+                self.apple_copied = None;
                 if !matches!(self.apple_flow, AppleFlow::Working(_)) {
                     self.apple_flow = AppleFlow::Idle;
                 }
@@ -707,6 +725,10 @@ impl App {
                 self.apple_mode = on;
                 Task::none()
             }
+            Message::ExperimentalMode(on) => {
+                self.experimental = on;
+                Task::none()
+            }
             Message::Diagnostics(d) => {
                 self.diagnostics = Some(d);
                 Task::none()
@@ -716,9 +738,11 @@ impl App {
                 Task::none()
             }
             Message::AppleToggle(on) => {
-                if !matches!(self.apple_flow, AppleFlow::Working(_)) {
-                    self.apple_flow = AppleFlow::Confirm(on);
-                }
+                self.confirm_setting(crate::apple_mode::Setting::AppleMode, on);
+                Task::none()
+            }
+            Message::ExperimentalToggle(on) => {
+                self.confirm_setting(crate::apple_mode::Setting::Experimental, on);
                 Task::none()
             }
             Message::AppleCancel => {
@@ -733,27 +757,49 @@ impl App {
                 if self.demo {
                     return Task::none();
                 }
-                Task::perform(crate::apple_mode::set(on), Message::AppleDone)
+                Task::perform(
+                    crate::apple_mode::set(self.apple_target, on),
+                    Message::AppleDone,
+                )
             }
             Message::AppleDone(res) => {
                 self.apple_flow = match res {
                     Ok(on) => {
-                        self.apple_mode = Some(on);
+                        match self.apple_target {
+                            crate::apple_mode::Setting::AppleMode => self.apple_mode = Some(on),
+                            crate::apple_mode::Setting::Experimental => {
+                                self.experimental = Some(on)
+                            }
+                        }
                         AppleFlow::Done(on)
                     }
                     Err(crate::apple_mode::Failure::Cancelled) => AppleFlow::Idle,
                     Err(e) => AppleFlow::Failed(e.message()),
                 };
-                load_apple_mode()
+                // The LE monitor re-probes on its own after Bluetooth restarts; look again
+                // once it has, so "Battery while away" shows the new mode.
+                let later = Task::perform(
+                    async {
+                        tokio::time::sleep(Duration::from_secs(8)).await;
+                        crate::diagnostics::collect().await
+                    },
+                    Message::Diagnostics,
+                );
+                Task::batch([load_apple_mode(), later])
             }
             Message::TakeAudio => {
                 self.taking_audio = Some(Instant::now());
                 self.send(ControlCommandIdentifiers::OwnsConnection, 0x01)
             }
-            Message::CopyAppleCommand => {
-                self.apple_copied = true;
+            Message::CopyCommand(setting) => {
+                self.apple_copied = Some(setting);
+                let on = match setting {
+                    crate::apple_mode::Setting::AppleMode => self.apple_mode,
+                    crate::apple_mode::Setting::Experimental => self.experimental,
+                } != Some(true);
                 let cmd = crate::apple_mode::manual_command(
-                    self.apple_mode != Some(true),
+                    setting,
+                    on,
                     self.apple_host.unwrap_or_default(),
                 );
                 iced::clipboard::write(cmd)
@@ -922,8 +968,16 @@ fn load_saved_devices() -> Task<Message> {
 }
 
 /// Reads the adapter's modalias: BlueZ reports the DeviceID it's running with there.
+/// Reads what the running bluetoothd does: Apple vendor id (from the adapter's modalias)
+/// and experimental features (from its D-Bus interfaces).
 fn load_apple_mode() -> Task<Message> {
-    Task::perform(crate::apple_mode::status(), Message::AppleMode)
+    Task::batch([
+        Task::perform(crate::apple_mode::status(), Message::AppleMode),
+        Task::perform(
+            crate::apple_mode::experimental_status(),
+            Message::ExperimentalMode,
+        ),
+    ])
 }
 
 /// Demo/screenshots only: KASE_UI_APPLE=confirm|working|done|failed.

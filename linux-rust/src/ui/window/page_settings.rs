@@ -1,6 +1,7 @@
 //! The Settings tab: app, AirPods and Apple device mode settings.
 
 use super::*;
+use crate::apple_mode::Setting;
 use iced::widget::{column, row};
 
 /// One Diagnostics line: a name, its value and an optional explanation underneath.
@@ -15,6 +16,7 @@ fn diag_row<'a>(name: &'a str, value: String, note: Option<String>) -> Element<'
 fn diagnostics<'a>(
     diag: &crate::diagnostics::Diagnostics,
     device: Option<&DeviceSnapshot>,
+    experimental: Element<'a, Message>,
 ) -> Element<'a, Message> {
     use crate::diagnostics::{codec_note, le_note};
     let adapter = match &diag.adapter {
@@ -52,6 +54,7 @@ fn diagnostics<'a>(
         };
         rows.push(diag_row("Battery while away", value, note));
     }
+    rows.push(experimental);
     group(rows)
 }
 
@@ -161,12 +164,14 @@ impl App {
             section_label("AirPods"),
             group(airpods),
             section_label("This PC"),
-            group(vec![self.apple_mode_row()]),
+            group(vec![self.system_setting_row(Setting::AppleMode)]),
         ];
         if let Some(diag) = &self.diagnostics {
-            page = page
-                .push(section_label("Diagnostics"))
-                .push(diagnostics(diag, device));
+            page = page.push(section_label("Diagnostics")).push(diagnostics(
+                diag,
+                device,
+                self.system_setting_row(Setting::Experimental),
+            ));
         }
 
         if let Some(d) = device {
@@ -287,46 +292,47 @@ impl App {
         group(rows)
     }
 
-    /// Opt-in Apple DeviceID ("VendorID spoofing"): a switch, a short confirm step that
-    /// warns about the Bluetooth restart, the system password prompt, then the result.
-    /// Falls back to copying a terminal command when the app can't ask for admin rights.
-    pub(super) fn apple_mode_row(&self) -> Element<'_, Message> {
-        const CAPTION: &str = "Lets your AirPods switch between this PC and your iPhone or iPad \
-                               the way they do with a Mac, by having this PC introduce itself \
-                               as an Apple device.";
+    /// A system Bluetooth setting (Apple device mode, experimental features): a switch, a
+    /// short confirm step that warns about the Bluetooth restart, the system password
+    /// prompt, then the result. Falls back to copying a terminal command when the app can't
+    /// ask for admin rights. One change runs at a time, so both rows share one flow.
+    pub(super) fn system_setting_row(&self, setting: Setting) -> Element<'_, Message> {
+        let t = SettingTexts::of(setting);
+        let state = self.setting_state(setting);
         let can_change = self.apple_host.is_none_or(|h| h.can_change);
-        let working = matches!(self.apple_flow, AppleFlow::Working(_));
-        let shown_on = match self.apple_flow {
-            AppleFlow::Confirm(on) | AppleFlow::Working(on) => on,
-            _ => self.apple_mode.unwrap_or(false),
+        let flow = if self.apple_target == setting {
+            &self.apple_flow
+        } else {
+            &AppleFlow::Idle
         };
-        let toggle = (can_change && !working && self.apple_mode.is_some())
-            .then_some(Message::AppleToggle as fn(bool) -> Message);
-        let header = setting_row("Apple device mode", Some(CAPTION), switch(shown_on, toggle));
+        let busy = matches!(self.apple_flow, AppleFlow::Working(_));
+        let shown_on = match flow {
+            AppleFlow::Confirm(on) | AppleFlow::Working(on) => *on,
+            _ => state.unwrap_or(false),
+        };
+        let toggle = (can_change && !busy && state.is_some()).then_some(match setting {
+            Setting::AppleMode => Message::AppleToggle as fn(bool) -> Message,
+            Setting::Experimental => Message::ExperimentalToggle as fn(bool) -> Message,
+        });
+        let header = setting_row(t.title, Some(t.caption), switch(shown_on, toggle));
 
-        let detail: Option<Element<'_, Message>> = match &self.apple_flow {
-            _ if !can_change => Some(self.apple_manual_fallback()),
-            AppleFlow::Idle if self.apple_mode.is_none() => Some(
+        let detail: Option<Element<'_, Message>> = match flow {
+            _ if !can_change => Some(self.manual_fallback(setting)),
+            AppleFlow::Idle if state.is_none() => Some(
                 text("Turn on Bluetooth to change this.")
                     .size(12)
                     .style(faint_text)
                     .into(),
             ),
             AppleFlow::Idle => None,
-            AppleFlow::Confirm(on) => Some(apple_confirm(*on)),
+            AppleFlow::Confirm(on) => Some(apple_confirm(setting, *on)),
             AppleFlow::Working(_) => Some(apple_note(
                 "Enter your password in the system prompt. Bluetooth restarts right after, \
                  so your AirPods will drop for a few seconds.",
                 dim_text,
             )),
-            AppleFlow::Done(true) => Some(apple_note(
-                "Apple device mode is on. Your AirPods will reconnect on their own.",
-                dim_text,
-            )),
-            AppleFlow::Done(false) => Some(apple_note(
-                "Apple device mode is off and your original Bluetooth settings are back.",
-                dim_text,
-            )),
+            AppleFlow::Done(true) => Some(apple_note(t.done_on, dim_text)),
+            AppleFlow::Done(false) => Some(apple_note(t.done_off, dim_text)),
             AppleFlow::Failed(msg) => Some(apple_note(msg.as_str(), red_text)),
         };
         match detail {
@@ -335,14 +341,21 @@ impl App {
         }
     }
 
-    /// No pkexec, or the sandbox can't start host commands: hand over a command instead.
-    pub(super) fn apple_manual_fallback(&self) -> Element<'_, Message> {
-        let action = if self.apple_mode == Some(true) {
+    fn setting_state(&self, setting: Setting) -> Option<bool> {
+        match setting {
+            Setting::AppleMode => self.apple_mode,
+            Setting::Experimental => self.experimental,
+        }
+    }
+
+    /// No pkexec, NixOS, or the sandbox can't start host commands: hand over a command.
+    fn manual_fallback(&self, setting: Setting) -> Element<'_, Message> {
+        let action = if self.setting_state(setting) == Some(true) {
             "Copy command to turn off"
         } else {
             "Copy command to turn on"
         };
-        let label = if self.apple_copied {
+        let label = if self.apple_copied == Some(setting) {
             "Copied. Paste it in a terminal"
         } else {
             action
@@ -370,10 +383,44 @@ impl App {
                     right: 12.0,
                 })
                 .style(style::secondary)
-                .on_press(Message::CopyAppleCommand),
+                .on_press(Message::CopyCommand(setting)),
         ]
         .spacing(12)
         .align_y(Center)
         .into()
+    }
+}
+
+/// What each system setting's row says.
+struct SettingTexts {
+    title: &'static str,
+    caption: &'static str,
+    done_on: &'static str,
+    done_off: &'static str,
+}
+
+impl SettingTexts {
+    fn of(setting: Setting) -> Self {
+        match setting {
+            Setting::AppleMode => SettingTexts {
+                title: "Apple device mode",
+                caption: "Lets your AirPods switch between this PC and your iPhone or iPad \
+                          the way they do with a Mac, by having this PC introduce itself \
+                          as an Apple device.",
+                done_on: "Apple device mode is on. Your AirPods will reconnect on their own.",
+                done_off: "Apple device mode is off and your original Bluetooth settings are \
+                           back.",
+            },
+            Setting::Experimental => SettingTexts {
+                title: "Faster battery while away",
+                caption: "Turns on Bluetooth's experimental features so the case and pod \
+                          levels update sooner while the AirPods aren't connected. Bluetooth \
+                          restarts, so devices drop for a few seconds.",
+                done_on: "Experimental Bluetooth is on. Battery while away switches to the \
+                          advertisement monitor within a minute.",
+                done_off: "Experimental Bluetooth is off. Battery while away goes back to \
+                           fallback scanning.",
+            },
+        }
     }
 }
