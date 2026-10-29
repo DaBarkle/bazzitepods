@@ -6,6 +6,12 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+### Changed
+- **Clearer wording for the battery setting.** The switch added in 0.8.2 is now called
+  **Quicker battery updates when not connected**, with a plain explanation of what it does,
+  and the Diagnostics row reads **Battery when not connected**: *Quick updates* or
+  *Standard (updates less often)*. The technical names stay in the log. ([#41])
+
 ## [0.8.2] - 2026-10-30
 
 ### Added
@@ -417,3 +423,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#35]: https://github.com/DaBarkle/kase/pull/35
 [#37]: https://github.com/DaBarkle/kase/pull/37
 [#39]: https://github.com/DaBarkle/kase/pull/39
+[#41]: https://github.com/DaBarkle/kase/pull/41

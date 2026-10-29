@@ -105,16 +105,16 @@ pub(super) fn apple_confirm<'a>(
             "Turn Off",
         ),
         (Setting::Experimental, true) => (
-            "Turn on experimental Bluetooth?",
-            "Bluetooth's experimental features let Kase watch for your AirPods' battery \
-             while they're away. They're widely used, but marked experimental by Linux. \
-             Bluetooth restarts, so devices disconnect for a few seconds, and your system \
-             will ask for your password once.",
+            "Turn on quicker battery updates?",
+            "This switches on a newer Linux Bluetooth feature, still labelled experimental, \
+             that lets Kase see your AirPods' battery as soon as they send it. Bluetooth \
+             restarts, so devices disconnect for a few seconds, and your system will ask for \
+             your password once.",
             "Restart Bluetooth",
         ),
         (Setting::Experimental, false) => (
-            "Turn off experimental Bluetooth?",
-            "Bluetooth goes back to its default features. It restarts, so devices disconnect \
+            "Turn off quicker battery updates?",
+            "Bluetooth goes back to its standard features. It restarts, so devices disconnect \
              for a few seconds, and your system will ask for your password.",
             "Turn Off",
         ),

@@ -298,7 +298,7 @@ impl Setting {
     fn name(self) -> &'static str {
         match self {
             Setting::AppleMode => "Apple device mode",
-            Setting::Experimental => "Bluetooth experimental features",
+            Setting::Experimental => "Quicker battery updates (BlueZ experimental features)",
         }
     }
 

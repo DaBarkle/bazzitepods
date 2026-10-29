@@ -24,3 +24,14 @@ fn codec_note_explains_sbc() {
     assert_eq!(codec_note(Some("Restoring audio")), "Restoring audio");
     assert!(codec_note(None).starts_with("Connect"));
 }
+
+#[test]
+fn battery_mode_is_described_in_plain_words() {
+    assert_eq!(le_note(LeMode::Monitor), "Quick updates");
+    let standard = le_note(LeMode::Discovery);
+    assert!(standard.starts_with("Standard (updates less often): "));
+    for mode in [LeMode::Monitor, LeMode::Discovery, LeMode::NotRunning] {
+        let text = le_note(mode).to_ascii_lowercase();
+        assert!(!text.contains("bluetoothd") && !text.contains("monitor"));
+    }
+}
