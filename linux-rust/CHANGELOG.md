@@ -6,6 +6,8 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-29
+
 ### Fixed
 - **PCs with two Bluetooth adapters.** Kase now uses the adapter your AirPods are paired
   on, not just the default one, and switches when that adapter is plugged in later. ([#32])
@@ -14,7 +16,6 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
   without systemd restart Bluetooth through OpenRC or runit; SteamOS explains that the
   account needs a password first (`passwd`); a missing password prompt (polkit agent) gets
   a clear message. The script no longer relies on GNU-only `sed`. ([#32])
-
 - **Audio on PulseAudio as well as PipeWire.** The audio guard understands PulseAudio's
   profile names (`a2dp_sink`, `headset_head_unit`), and the log says which sound server is
   running. ([#33])
@@ -26,11 +27,6 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 - **The AirPods mic on newer FFmpeg.** libavcodec 63 is accepted, an unknown version says
   so clearly in the log, and a sound server that refuses Kase's mixer rights is logged as
   such instead of a bare failure. ([#33])
-
-- **The last "BazzitePods" names are gone.** The virtual mic is now `kase_airpods_mic`, and
-  Apple device mode keeps its backup at `main.conf.bak-kase`. Leftovers from older builds
-  (the old virtual mic, pipe and parked DeviceID line) are still found, cleaned up and
-  undone. ([#35])
 - **Coming back to a KDE desktop brings the AirPods back.** KDE never marks the session idle
   in logind, so Kase now also listens for the screen saver ending (KDE and GNOME). ([#34])
 - **Fullscreen transparency on Plasma 5.** The KWin script works with Plasma 5's window
@@ -61,6 +57,10 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
   availability per distribution, a troubleshooting section for NVIDIA, older GPUs and
   dual-GPU laptops, and build packages for Fedora, Arch and Ubuntu. ([#31])
 - The installer scripts are checked with shellcheck (`just lint-packaging`). ([#31])
+- **The last "BazzitePods" names are gone.** The virtual mic is now `kase_airpods_mic`, and
+  Apple device mode keeps its backup at `main.conf.bak-kase`. Leftovers from older builds
+  (the old virtual mic, pipe and parked DeviceID line) are still found, cleaned up and
+  undone. ([#35])
 
 ## [0.7.0] - 2026-10-29
 
@@ -358,6 +358,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.8.0]: https://github.com/DaBarkle/kase/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/DaBarkle/kase/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/DaBarkle/kase/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/DaBarkle/kase/compare/v0.4.0...v0.5.0
