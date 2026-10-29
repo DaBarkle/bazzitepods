@@ -125,6 +125,8 @@ pub enum Kick {
     BleSeen(Address, bool),
     /// BlueZ dropped a link, and said why.
     Disconnected(Address, DropReason),
+    /// Someone is at the PC again: the screen was unlocked or the session stopped idling.
+    UserActive,
 }
 
 struct SupervisorCtx {
@@ -149,86 +151,118 @@ struct AdapterState_ {
     /// Tasks that were cancelled but may still be cleaning up. A new task for the same device
     /// waits until the old one is gone so the two never overwrite each other's state.
     stopping: HashMap<Address, JoinHandle<()>>,
-    /// AirPods whose link dropped on its own (walked out of range), and when.
-    lost_link: HashMap<Address, Instant>,
-    /// Last time we asked BlueZ to reconnect a device.
-    last_reconnect: HashMap<Address, Instant>,
-    /// AirPods worth reconnecting without waiting for their adverts: when they dropped
-    /// this PC, and for how long to keep trying.
-    eager: HashMap<Address, (Instant, Duration)>,
+    /// AirPods that dropped this PC and are wanted back: since when, and when we last asked
+    /// BlueZ to connect them.
+    away: HashMap<Address, Away>,
     /// Why BlueZ last dropped each device, until it connects again.
     drop_reason: HashMap<Address, DropReason>,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Away {
+    since: Instant,
+    last_try: Option<Instant>,
+}
+
 impl AdapterState_ {
     fn note_lost(&mut self, addr: Address) {
-        self.lost_link.entry(addr).or_insert_with(Instant::now);
-        self.plan_reconnect(addr);
+        let new = !self.away.contains_key(&addr);
+        self.away.entry(addr).or_insert(Away {
+            since: Instant::now(),
+            last_try: None,
+        });
+        self.plan_reconnect(addr, new);
+    }
+
+    /// AirPods that are paired here but away when the app starts (after a reboot, say), or
+    /// whose session was restarted after sleep: bring them back like any other drop.
+    fn want_back(&mut self, addr: Address) {
+        self.away.insert(
+            addr,
+            Away {
+                since: Instant::now(),
+                last_try: None,
+            },
+        );
     }
 
     /// Decide whether to keep reconnecting AirPods that dropped this PC. Runs when the drop is
     /// noticed and again when BlueZ says why, whichever comes first.
-    fn plan_reconnect(&mut self, addr: Address) {
-        let Some(&lost_at) = self.lost_link.get(&addr) else {
+    fn plan_reconnect(&mut self, addr: Address, log_it: bool) {
+        if !self.away.contains_key(&addr) {
             return;
-        };
-        let mac = addr.to_string();
+        }
         let reason = self.drop_reason.get(&addr).copied();
-        let in_case = devices::airpods::dropped_in_case(&mac);
-        let for_peer = devices::airpods::dropped_for_peer(&mac);
-        let window = match disconnect_watch::plan(reason, in_case, for_peer) {
+        match disconnect_watch::plan(reason) {
             ReconnectPlan::Never => {
                 info!(
                     "AirPods {} were disconnected on this PC; leaving them disconnected",
                     addr
                 );
-                self.lost_link.remove(&addr);
-                self.eager.remove(&addr);
-                return;
+                self.away.remove(&addr);
             }
-            ReconnectPlan::Briefly => PEER_DROP_WINDOW,
-            ReconnectPlan::UntilBack => CASE_DROP_WINDOW,
-        };
-        let entry = self.eager.entry(addr).or_insert((lost_at, Duration::ZERO));
-        if entry.1 == window {
-            return;
+            ReconnectPlan::UntilBack if log_it => {
+                if devices::airpods::dropped_in_case(&addr.to_string()) {
+                    info!(
+                        "AirPods {} went into the case; reconnecting when they come out",
+                        addr
+                    );
+                } else {
+                    info!(
+                        "AirPods {} left this PC (out of range or another device); reconnecting when they come back",
+                        addr
+                    );
+                }
+            }
+            ReconnectPlan::UntilBack => {}
         }
-        entry.1 = window;
-        match (window == PEER_DROP_WINDOW, in_case) {
-            (true, _) => info!("AirPods {} dropped this PC for another device", addr),
-            (false, true) => info!(
-                "AirPods {} went into the case; reconnecting when they come out",
-                addr
-            ),
-            (false, false) => info!(
-                "AirPods {} went out of range; reconnecting when they come back",
-                addr
-            ),
-        }
+    }
+
+    /// AirPods due another background connect attempt.
+    fn due(&self) -> Vec<Address> {
+        self.away
+            .iter()
+            .filter(|(addr, away)| {
+                !self.running.contains_key(addr)
+                    && away
+                        .last_try
+                        .is_none_or(|t| t.elapsed() >= retry_interval(away.since.elapsed()))
+            })
+            .map(|(addr, _)| *addr)
+            .collect()
     }
 }
 
-/// How long after losing the link we still reconnect automatically when the AirPods come back.
-const AUTO_RECONNECT_WINDOW: Duration = Duration::from_secs(4 * 60 * 60);
+/// Background connect attempts while AirPods are away: every 20 s for the first 3 minutes,
+/// then every minute for as long as it takes. A failed attempt costs nothing and connecting
+/// never takes the audio from an iPhone that is playing, so there is no reason to give up
+/// or slow down further: the AirPods come back within a minute whenever they are back.
+fn retry_interval(away_for: Duration) -> Duration {
+    if away_for < FAST_RECONNECT_PERIOD {
+        RECONNECT_INTERVAL
+    } else {
+        SLOW_RECONNECT_INTERVAL
+    }
+}
+
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(20);
-/// Reconnecting without adverts. Out of the case, or busy with an iPhone, AirPods often
-/// advertise only Find My beacons this PC can't match to them, so after a drop keep asking
-/// BlueZ to connect: a failed attempt costs nothing, and connecting never takes the audio
-/// from an iPhone that is playing. Never after they were disconnected here (see
-/// disconnect_watch::plan), so disconnecting the AirPods here keeps them disconnected.
-/// - They dropped this PC to make room for an iPhone: it can't hear the iPhone let go.
-const PEER_DROP_WINDOW: Duration = Duration::from_secs(3 * 60);
-/// - They went into the case or out of range: come back when they do, as on a Mac, however
-///   long they were away.
-const CASE_DROP_WINDOW: Duration = Duration::MAX;
-/// Retry every RECONNECT_INTERVAL at first, every minute after FAST_RECONNECT_PERIOD and
-/// every few minutes after SLOW_RECONNECT_PERIOD.
 const FAST_RECONNECT_PERIOD: Duration = Duration::from_secs(3 * 60);
 const SLOW_RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
-const SLOW_RECONNECT_PERIOD: Duration = Duration::from_secs(30 * 60);
-const IDLE_RECONNECT_INTERVAL: Duration = Duration::from_secs(3 * 60);
+/// The least time between two attempts, whatever asks for them (adverts, the user coming
+/// back, the sweep): BlueZ refuses a connect while the previous one is still paging.
+const MIN_RECONNECT_GAP: Duration = Duration::from_secs(5);
 /// Upper bound on waiting for a cancelled device task to finish.
 const TASK_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+/// Upper bound on one pass over BlueZ's devices. A D-Bus call that never answers must not
+/// stop the supervisor: AirPods would then never connect again until the app restarts.
+const RECONCILE_LIMIT: Duration = Duration::from_secs(30);
+/// Upper bound on any single D-Bus question to BlueZ outside a reconcile pass.
+const DBUS_LIMIT: Duration = Duration::from_secs(5);
+
+/// Runs a BlueZ call with a time limit; `None` when it failed or took too long.
+async fn bounded<T, E>(fut: impl std::future::Future<Output = Result<T, E>>) -> Option<T> {
+    tokio::time::timeout(DBUS_LIMIT, fut).await.ok()?.ok()
+}
 
 /// Outer loop: (re)acquire the BlueZ session and adapter forever. bluetoothd restarts, adapter
 /// unplug/replug and rfkill all end up back here instead of crashing the app.
@@ -309,28 +343,38 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
             // AirPods away when the app starts (after a reboot, say) come back like ones
             // that went into the case while it ran.
             if let Ok(device) = adapter.device(addr)
-                && device.is_paired().await.unwrap_or(false)
-                && !device.is_connected().await.unwrap_or(true)
-                && device
-                    .uuids()
+                && bounded(device.is_paired()).await == Some(true)
+                && bounded(device.is_connected()).await == Some(false)
+                && bounded(device.uuids())
                     .await
-                    .ok()
                     .flatten()
                     .is_some_and(|u| u.contains(&AIRPODS_UUID))
             {
-                let now = Instant::now();
-                st.lost_link.insert(addr, now);
-                st.eager.insert(addr, (now, CASE_DROP_WINDOW));
+                st.want_back(addr);
             }
         }
     }
 
     let mut sweep = tokio::time::interval(Duration::from_secs(10));
     loop {
-        reconcile(adapter, &local_mac, ctx, &mut st).await;
-        // Adapter vanished: stop everything and let the outer loop re-acquire.
-        if adapter.is_powered().await.is_err() {
-            break;
+        if tokio::time::timeout(
+            RECONCILE_LIMIT,
+            reconcile(adapter, &local_mac, ctx, &mut st),
+        )
+        .await
+        .is_err()
+        {
+            warn!("BlueZ did not answer for {RECONCILE_LIMIT:?}; trying again");
+        }
+        // Adapter vanished (or BlueZ stopped answering): stop everything and let the outer
+        // loop re-acquire.
+        match tokio::time::timeout(DBUS_LIMIT, adapter.is_powered()).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => break,
+            Err(_) => {
+                warn!("BlueZ stopped answering; reconnecting to it");
+                break;
+            }
         }
 
         tokio::select! {
@@ -358,45 +402,38 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     info!("System resumed; restarting device sessions");
                     // Sleep often kills the L2CAP channel without a clean disconnect. Restart
                     // device tasks so they reconnect fresh instead of waiting on a dead socket.
-                    for (addr, dev) in st.running.drain() {
-                        let now = Instant::now();
-                        st.lost_link.insert(addr, now);
-                        st.eager.insert(addr, (now, CASE_DROP_WINDOW));
+                    let sessions: Vec<_> = st.running.drain().collect();
+                    for (addr, dev) in sessions {
+                        st.want_back(addr);
                         stop_task(dev).await;
                     }
                 }
+                let mut everyone = false;
                 for k in kicks {
                     match k {
-                        Kick::BleSeen(addr, in_use) => {
-                            maybe_reconnect(adapter, addr, in_use, &mut st).await;
+                        Kick::BleSeen(addr, true) => {
+                            maybe_reconnect(adapter, addr, &mut st).await;
                         }
                         Kick::Disconnected(addr, reason) => {
                             st.drop_reason.insert(addr, reason);
                             if !st.running.contains_key(&addr) {
-                                st.plan_reconnect(addr);
+                                st.plan_reconnect(addr, false);
                             }
                         }
+                        Kick::UserActive | Kick::Resumed => everyone = true,
                         _ => {}
+                    }
+                }
+                if everyone {
+                    let away: Vec<Address> = st.away.keys().copied().collect();
+                    for addr in away {
+                        maybe_reconnect(adapter, addr, &mut st).await;
                     }
                 }
             }
             _ = sweep.tick() => {
-                st.eager.retain(|_, (t, window)| t.elapsed() < *window);
-                let due: Vec<Address> = st
-                    .eager
-                    .iter()
-                    .filter(|(addr, (t, _))| {
-                        let every = match t.elapsed() {
-                            e if e < FAST_RECONNECT_PERIOD => RECONNECT_INTERVAL,
-                            e if e < SLOW_RECONNECT_PERIOD => SLOW_RECONNECT_INTERVAL,
-                            _ => IDLE_RECONNECT_INTERVAL,
-                        };
-                        st.last_reconnect.get(addr).is_none_or(|l| l.elapsed() >= every)
-                    })
-                    .map(|(addr, _)| *addr)
-                    .collect();
-                for addr in due {
-                    maybe_reconnect(adapter, addr, true, &mut st).await;
+                for addr in st.due() {
+                    maybe_reconnect(adapter, addr, &mut st).await;
                 }
             }
         }
@@ -409,40 +446,37 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
     }
 }
 
-/// Bring AirPods back after they dropped the link: out of range, or dropped to make room
-/// for an iPhone. BlueZ doesn't reconnect by itself, so when we see the AirPods advertising
-/// (case open / pods out), or shortly after the drop, we ask BlueZ to connect. Connecting
-/// doesn't take the audio from an iPhone that is playing; it only lets this PC hear when
-/// the iPhone lets go. Only for AirPods that dropped off this PC, never ones the user
-/// disconnected here.
-async fn maybe_reconnect(adapter: &Adapter, addr: Address, in_use: bool, st: &mut AdapterState_) {
-    if !in_use || st.running.contains_key(&addr) {
+/// Bring AirPods back after they dropped the link: out of range, into the case, or dropped
+/// to make room for an iPhone. BlueZ doesn't reconnect by itself, so we ask it to connect
+/// on a steady schedule, when the AirPods advertise nearby (case open / pods out), and when
+/// the user comes back to the PC. Connecting doesn't take the audio from an iPhone that is
+/// playing; it only lets this PC take over when the iPhone lets go. Only for AirPods that
+/// dropped off this PC, never ones the user disconnected here.
+async fn maybe_reconnect(adapter: &Adapter, addr: Address, st: &mut AdapterState_) {
+    if st.running.contains_key(&addr) {
         return;
     }
-    let Some(lost_at) = st.lost_link.get(&addr).copied() else {
+    let Some(away) = st.away.get_mut(&addr) else {
         return;
     };
-    if lost_at.elapsed() > AUTO_RECONNECT_WINDOW && !st.eager.contains_key(&addr) {
-        st.lost_link.remove(&addr);
-        return;
-    }
-    if st
-        .last_reconnect
-        .get(&addr)
-        .is_some_and(|t| t.elapsed() < RECONNECT_INTERVAL)
+    if away
+        .last_try
+        .is_some_and(|t| t.elapsed() < MIN_RECONNECT_GAP)
     {
         return;
     }
-    if !adapter.is_powered().await.unwrap_or(false) {
+    away.last_try = Some(Instant::now());
+    if bounded(adapter.is_powered()).await != Some(true) {
         return;
     }
     let Ok(device) = adapter.device(addr) else {
         return;
     };
-    if !device.is_paired().await.unwrap_or(false) || device.is_connected().await.unwrap_or(true) {
+    if bounded(device.is_paired()).await != Some(true)
+        || bounded(device.is_connected()).await != Some(false)
+    {
         return;
     }
-    st.last_reconnect.insert(addr, Instant::now());
     info!("Reconnecting to AirPods {}", addr);
     tokio::spawn(async move {
         match tokio::time::timeout(Duration::from_secs(15), device.connect()).await {
@@ -571,8 +605,7 @@ async fn reconcile(
             .unwrap_or_else(|| "AirPods".to_string());
         let cancel = CancellationToken::new();
         info!("AirPods connected: {} ({})", name, addr);
-        st.lost_link.remove(&addr);
-        st.eager.remove(&addr);
+        st.away.remove(&addr);
         st.drop_reason.remove(&addr);
         let dctx = DeviceContext {
             hub: ctx.hub.clone(),

@@ -173,12 +173,20 @@ Pick how much of the island you want to see in the **Island** tab:
 <img src="linux-rust/docs/screenshots/island-switch.webp" width="450" alt="The island shows Right AirPod low with an amber glow, then Playing on iPhone with a blue glow when the iPhone takes the audio, then Back on this PC when the PC takes it back">
 </div>
 
-The device you last pressed play on gets the AirPods, as between an iPhone and a Mac. When
-your iPhone takes them, Kase pauses what's playing here and the island shows **Playing on
-iPhone**, while the AirPods stay connected. Press play in any app on the PC, or **Use on
-this PC** in the window, and they come back within about a second. A notification on the
-phone doesn't take them away while the PC is playing, and a phone call is never
-interrupted.
+Your PC is home. When your iPhone plays something, it gets the AirPods: Kase pauses what's
+playing here and the island shows **Playing on iPhone**, while the AirPods stay connected.
+A few seconds after the iPhone stops, they come back to the PC by themselves, even if
+you're in another room. Press play in any app on the PC, or **Use on this PC** in the
+window, and they come back straight away.
+
+While you game, watch something or sit in a Discord call, a notification on your phone
+only borrows the AirPods for its sound; they're back on the PC about three seconds later.
+A phone call is never interrupted. If you'd rather the AirPods stay on the iPhone until you
+press play on the PC, as with a Mac, turn off **Bring AirPods back to this PC** in Settings.
+
+When the AirPods leave the PC, for the iPhone or for the day, Kase keeps looking for them.
+Open the case when you get home, or just sit down and unlock the PC, and they reconnect
+without a trip to the Bluetooth menu.
 
 ### The app window
 
@@ -325,12 +333,14 @@ Only the controls your model supports are shown.
 - Fixes "walked away, came back, connected but silent"
 - Never leaves the audio card switched off, and repairs a stalled connection by itself
 - Returns to AAC after a fallback codec
-- Reconnects when the AirPods come back in range, however long they were away
+- Reconnects when the AirPods come back, however long they were away, including after a
+  day out with your iPhone
 - Disconnecting on purpose keeps them disconnected
 
 **Multiple devices**
-- The device you last pressed play on gets the AirPods
-- Works with apps that don't report playback, such as the Plex desktop app
+- Your PC is home: the AirPods come back a few seconds after your iPhone stops
+- A phone notification never keeps them while you game, watch or talk on Discord
+- Works with apps that don't report playback, such as games and the Plex desktop app
 - Never interrupts a phone call
 - Optional Apple device mode for Mac-like switching
 
@@ -471,8 +481,10 @@ has no overlay layer for apps.
 
 <br>
 
-Kase repairs this by itself within a few seconds. If it doesn't, collect a debug log and
-[open an issue](https://github.com/DaBarkle/kase/issues) with it:
+Kase repairs this by itself within a few seconds. If it doesn't, attach Kase's log,
+`~/.var/app/io.github.dabarkle.Kase/.local/state/kase/kase.log`, to
+[an issue](https://github.com/DaBarkle/kase/issues). For more detail, run it with debug
+logging:
 
 ```bash
 flatpak kill io.github.dabarkle.Kase

@@ -33,7 +33,7 @@ folders whose `mod.rs` holds the state and entry points, with one file per job b
 | `audio/` | audio | `AudioGuard` (`audio/guard/`): per-device state machine that keeps A2DP alive. `decide.rs` holds the pure decisions; `monitor.rs`, `rebuild.rs` and `hush.rs` the ready state, recovery and muting. |
 | `mic/` | audio | The AirPods mic switch: the AACP 0x58 AAC-ELD mic stream, its FFmpeg decoder (loaded at run time), the virtual "AirPods mic" and the desk/AirPods state machine. See "AirPods mic switch" below. |
 | `media_controller.rs` | audio | MPRIS pause/resume, conversational awareness volume. Never sets the card to `off`. |
-| `supervisor.rs`, `devices/airpods/` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. The AirPods session splits into `controls.rs` (handshake, settings, AACP events) and `route.rs` (who owns the audio). |
+| `supervisor.rs`, `devices/airpods/` | lifecycle | Device supervisor: one task per device, cancellation on disconnect, AACP retry/backoff, sleep/resume, adapter hotplug. The AirPods session splits into `controls.rs` (handshake, settings, AACP events) `route.rs` (who owns the audio) and `arbiter.rs` (the pure "take the AirPods back?" decision: the PC is home). |
 | `overlay_client.rs` + `src/bin/kase-overlay/` | overlay | Spawns and feeds the overlay process over stdin (JSON lines, `overlay_protocol.rs`). |
 | `autostart.rs` | packaging | Requests autostart through the XDG Background portal. |
 | `ui/` | ui | Tray and main window (`ui/window/`: one file per tab plus shared `controls.rs`), reading `AppSnapshot`. |

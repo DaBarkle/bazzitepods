@@ -54,7 +54,17 @@ fn main() -> iced::Result {
             )
         };
     }
-    env_logger::init();
+    let log_path = kase::log_file::path();
+    env_logger::Builder::from_default_env()
+        .target(env_logger::Target::Pipe(Box::new(kase::log_file::Tee(
+            kase::log_file::open(&log_path),
+        ))))
+        .init();
+    info!(
+        "Kase {} starting; logging to {}",
+        env!("CARGO_PKG_VERSION"),
+        log_path.display()
+    );
     kase::utils::migrate_legacy_dirs();
 
     let (ui_tx, ui_rx) = unbounded_channel::<BluetoothUIMessage>();
