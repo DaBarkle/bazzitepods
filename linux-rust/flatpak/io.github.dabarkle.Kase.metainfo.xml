@@ -97,6 +97,18 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.8.0" date="2026-10-29">
+      <description>
+        <p>AirPods for Linux: Kase now feels at home on every major distribution and desktop.</p>
+        <ul>
+          <li>One install command for Fedora, Bazzite, SteamOS, Ubuntu, Debian, Arch, openSUSE and NixOS</li>
+          <li>The island turns see-through over fullscreen games on Plasma 5, Sway, Hyprland and niri</li>
+          <li>Works with PulseAudio as well as PipeWire, and knows many more call and effects apps</li>
+          <li>Uses the Bluetooth adapter your AirPods are paired on, on PCs with two adapters</li>
+          <li>A Diagnostics section in Settings shows what your system supports</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-10-29">
       <description>
         <p>Your PC is home: the AirPods come back to it by themselves, and reconnect after a day away.</p>
