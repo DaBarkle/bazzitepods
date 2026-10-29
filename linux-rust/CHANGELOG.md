@@ -6,6 +6,8 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-10-30
+
 ### Changed
 - **Clearer wording for the battery setting.** The switch added in 0.8.2 is now called
   **Quicker battery updates when not connected**, with a plain explanation of what it does,
@@ -385,6 +387,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.8.3]: https://github.com/DaBarkle/kase/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/DaBarkle/kase/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/DaBarkle/kase/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/DaBarkle/kase/compare/v0.7.0...v0.8.0

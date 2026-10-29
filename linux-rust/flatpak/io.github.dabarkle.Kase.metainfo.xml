@@ -97,6 +97,11 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.8.3" date="2026-10-30">
+      <description>
+        <p>Clearer wording for the battery setting: it is now called Quicker battery updates when not connected, with a plain explanation of what it does.</p>
+      </description>
+    </release>
     <release version="0.8.2" date="2026-10-30">
       <description>
         <p>Faster battery while away, one switch away.</p>
