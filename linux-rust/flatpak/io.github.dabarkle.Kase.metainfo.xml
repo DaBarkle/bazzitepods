@@ -4,7 +4,7 @@
   <id>io.github.dabarkle.Kase</id>
 
   <name>Kase</name>
-  <summary>AirPods battery, controls and island overlay for KDE Plasma</summary>
+  <summary>AirPods battery, controls and island overlay for Linux</summary>
 
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>AGPL-3.0-only</project_license>
@@ -15,7 +15,7 @@
 
   <description>
     <p>
-      Kase is a zero-configuration AirPods companion for KDE Plasma and other Linux desktops.
+      Kase is a zero-configuration AirPods companion for Linux desktops, at its best on KDE Plasma.
       It finds your earbuds on its own, starts with your session and stays out of the way in the
       system tray.
     </p>
@@ -199,7 +199,7 @@
     </release>
     <release version="0.2.0" date="2026-10-25">
       <description>
-        <p>First release of the Bazzite edition.</p>
+        <p>First release of Kase as its own app.</p>
         <ul>
           <li>New app id, icon and Flatpak with a minimal set of permissions</li>
           <li>Starts automatically with your session, minimized to the tray</li>

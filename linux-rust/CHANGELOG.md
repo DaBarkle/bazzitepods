@@ -6,6 +6,17 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+### Changed
+- **One installer for every distribution.** `install.sh` replaces `install-bazzite.sh`
+  (the old link still works). If Flatpak is missing it prints the exact command for your
+  distribution (apt, dnf, pacman, zypper, or the NixOS option), and it stops with a clear
+  message on CPUs without a Kase build. ([#31])
+- **AirPods for Linux.** The README, app metadata and docs are no longer Bazzite-only: a
+  compatibility table per desktop (Plasma 5 and 6, GNOME, X11, Sway and Hyprland), AAC
+  availability per distribution, a troubleshooting section for NVIDIA, older GPUs and
+  dual-GPU laptops, and build packages for Fedora, Arch and Ubuntu. ([#31])
+- The installer scripts are checked with shellcheck (`just lint-packaging`). ([#31])
+
 ## [0.7.0] - 2026-10-29
 
 ### Fixed
@@ -330,3 +341,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#26]: https://github.com/DaBarkle/kase/pull/26
 [#27]: https://github.com/DaBarkle/kase/pull/27
 [#30]: https://github.com/DaBarkle/kase/pull/30
+[#31]: https://github.com/DaBarkle/kase/pull/31

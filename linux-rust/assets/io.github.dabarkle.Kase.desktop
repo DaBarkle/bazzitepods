@@ -2,7 +2,7 @@
 Type=Application
 Name=Kase
 GenericName=Earbuds Companion
-Comment=AirPods battery, controls and island overlay for KDE Plasma
+Comment=AirPods battery, controls and island overlay for Linux
 Exec=kase
 Icon=io.github.dabarkle.Kase
 Terminal=false
