@@ -6,7 +6,17 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-29
+
 ### Fixed
+- **AirPods come back after a day away.** When the iPhone took them, Kase tried for only
+  3 minutes and gave up after 4 hours, so after work they didn't reconnect until you
+  restarted Kase. It now keeps trying (every minute) until they're back. ([#30])
+- **A phone notification no longer steals the sound while you game.** A notification only
+  borrows the AirPods; they're back on the PC about 3 seconds later whenever something
+  plays here, games included, or you're in a Discord call. ([#30])
+- **No tug of war.** If you move the AirPods back to the iPhone, or the two keep swapping,
+  Kase stops taking them back for two minutes. ([#30])
 - **Quitting puts your audio back.** Tray Quit and logging out now restore the desk mic,
   a volume lowered by a conversation, and speakers muted mid-repair before Kase exits.
   After a crash, the next start unmutes anything left muted. ([#24])
@@ -23,6 +33,15 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
   and is restored if the link drops mid-conversation. ([#24])
 - If the island crashes straight away (for example, no Vulkan), Kase now falls back to
   notifications instead of restarting it forever. ([#24])
+
+### Added
+- **Your PC is home.** A few seconds after your iPhone stops playing, the AirPods come back
+  to the PC by themselves, even from another room. Turn off **Bring AirPods back to this
+  PC** in Settings to keep the Mac behaviour. ([#30])
+- **Reconnects the moment you're back.** Unlocking the PC, or using it after it went idle,
+  looks for the AirPods straight away. ([#30])
+- **A log file** at `~/.var/app/io.github.dabarkle.Kase/.local/state/kase/kase.log`, with
+  one line explaining each decision about who gets the AirPods. ([#30])
 
 ### Changed
 - **A leaner, tidier codebase.** Everything Kase doesn't use from LibrePods is gone:
@@ -283,6 +302,8 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.7.0]: https://github.com/DaBarkle/kase/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/DaBarkle/kase/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/DaBarkle/kase/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/DaBarkle/kase/compare/v0.2.2...v0.4.0
 [0.3.0]: https://github.com/DaBarkle/kase/compare/v0.2.2...v0.3.0
@@ -308,3 +329,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#25]: https://github.com/DaBarkle/kase/pull/25
 [#26]: https://github.com/DaBarkle/kase/pull/26
 [#27]: https://github.com/DaBarkle/kase/pull/27
+[#30]: https://github.com/DaBarkle/kase/pull/30
