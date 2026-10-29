@@ -68,6 +68,23 @@ should come back without touching anything.
    **On another device** and the overlay pops up. Press **Use on this PC**: the audio
    comes back to the PC within a few seconds.
 
+## 6. Switching with an iPhone
+
+Wear the AirPods with both the PC and the iPhone nearby. Every decision about who gets the
+AirPods is one `route:` line in the log, with the reason.
+
+| Do this | Expected |
+| --- | --- |
+| Play a game on the PC; get a notification on the iPhone | Back on the PC about 3 s after the ding |
+| Sit in a Discord voice channel; get a notification | Back about 3 s after the ding |
+| Play a video on the iPhone, then stop it (nothing playing on the PC) | Back on the PC about 5 s after stopping |
+| Same with **Bring AirPods back to this PC** off | Stays on the iPhone until you press play on the PC |
+| Take a phone call while gaming | Stays on the phone for the whole call, then comes back |
+| Leave with the AirPods on the iPhone for hours; come home and open the case | Connected to the PC within a minute, sooner if you unlock the PC |
+| Press Disconnect on the PC | Stays disconnected |
+
 ## Logs
 
-`journalctl --user -b | grep -i kase` or run with `RUST_LOG=kase=debug` as above.
+Kase writes its log to `~/.var/app/io.github.dabarkle.Kase/.local/state/kase/kase.log`
+(the previous run's is `kase.log.1` once it grows past 5 MB). For more detail, run with
+`RUST_LOG=kase=debug` as above.

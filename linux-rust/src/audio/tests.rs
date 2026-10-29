@@ -510,6 +510,7 @@ async fn headset_with_active_recording_is_left_alone() {
         index: 31,
         source: 30,
         corked: false,
+        app: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();

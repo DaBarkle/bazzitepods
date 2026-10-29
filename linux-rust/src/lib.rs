@@ -12,6 +12,7 @@ pub mod devices;
 mod disconnect_watch;
 mod fullscreen_watch;
 pub mod hub;
+pub mod log_file;
 mod media_controller;
 mod mic;
 mod overlay_client;

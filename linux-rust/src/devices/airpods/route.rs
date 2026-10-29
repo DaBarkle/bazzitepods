@@ -1,6 +1,7 @@
 //! Who has the AirPods' audio: claiming it, noticing when another device takes it, and
 //! putting the PC's audio back together when it returns.
 
+use super::arbiter::{Inputs, Need, Verdict, decide};
 use super::*;
 
 /// The audio came back from another device. While it was away the AirPods usually broke
@@ -161,8 +162,17 @@ pub(super) struct RouteState {
     /// When this PC last lost the AirPods, and whether only to a notification.
     pub(super) lost_at: Option<Instant>,
     pub(super) lost_to_borrow: bool,
-    /// The other device said its media stopped.
-    pub(super) peer_stopped: bool,
+    /// Since when the other device has been quiet: it said its media stopped, the AirPods
+    /// reported nobody playing, or it left.
+    pub(super) peer_quiet_since: Option<Instant>,
+    /// When the streaming state was last announced (it is repeated now and then).
+    pub(super) announced_at: Option<Instant>,
+    /// Automatic take-backs in the last few minutes, to stop a tug of war.
+    pub(super) auto_takes: Vec<Instant>,
+    /// No automatic take-backs until then.
+    pub(super) backoff_until: Option<Instant>,
+    /// The last decision logged, so the log shows each change once.
+    pub(super) last_verdict: Option<Verdict>,
 }
 
 /// Follows playing audio streams between ticks. A stream counts once it has played for
@@ -219,15 +229,53 @@ impl RouteWatch {
         let mut state = self.lock();
         state.lost_at = Some(Instant::now());
         state.lost_to_borrow = borrowed;
-        state.peer_stopped = false;
+        state.peer_quiet_since = None;
     }
 
-    /// Whether "the other device let go" may be taken as a cue to take the AirPods back:
-    /// it only borrowed them or has stopped its media, and the hand-over gap is over.
-    pub(super) fn may_reclaim(&self) -> bool {
-        let state = self.lock();
-        let settled = state.lost_at.is_none_or(|t| t.elapsed() >= HANDOVER_GAP);
-        settled && !state.call && (state.lost_to_borrow || state.peer_stopped)
+    /// The other device went quiet (stopped its media, or the AirPods say nobody plays).
+    pub(super) fn peer_quiet(&self) {
+        self.lock()
+            .peer_quiet_since
+            .get_or_insert_with(Instant::now);
+    }
+
+    /// The other device is playing (again).
+    pub(super) fn peer_playing(&self) {
+        self.lock().peer_quiet_since = None;
+    }
+
+    /// The other device took the AirPods back right after this PC took them: the user
+    /// wants them there, so stop taking them back automatically for a while.
+    pub(super) fn moved_back(&self) {
+        let mut state = self.lock();
+        if state
+            .auto_takes
+            .last()
+            .is_some_and(|t| t.elapsed() < MOVED_BACK_WINDOW)
+        {
+            info!(
+                "The AirPods were moved back to the other device; not taking them back for {BACKOFF:?}"
+            );
+            state.backoff_until = Some(Instant::now() + BACKOFF);
+            state.auto_takes.clear();
+        }
+    }
+
+    /// Records an automatic take-back. Returns false when there have been too many lately:
+    /// the two devices are fighting, so stop for a while.
+    pub(super) fn note_auto_take(&self) -> bool {
+        let mut state = self.lock();
+        state.auto_takes.retain(|t| t.elapsed() < TAKE_WINDOW);
+        if state.auto_takes.len() >= MAX_AUTO_TAKES {
+            warn!(
+                "Took the AirPods back {MAX_AUTO_TAKES} times in {TAKE_WINDOW:?}; pausing automatic switching for {BACKOFF:?}"
+            );
+            state.backoff_until = Some(Instant::now() + BACKOFF);
+            state.auto_takes.clear();
+            return false;
+        }
+        state.auto_takes.push(Instant::now());
+        true
     }
 
     /// True for a moment after this PC took the AirPods, while reports from before the
@@ -242,19 +290,25 @@ impl RouteWatch {
 /// How long after taking the AirPods to ignore reports that say another device has them.
 pub(super) const CLAIM_GRACE: Duration = Duration::from_secs(3);
 
-/// A hand-over to another device can pass through "nobody" for a moment; ignore that.
-pub(super) const HANDOVER_GAP: Duration = Duration::from_secs(2);
+/// At most this many automatic take-backs within TAKE_WINDOW, then BACKOFF.
+const MAX_AUTO_TAKES: usize = 4;
+const TAKE_WINDOW: Duration = Duration::from_secs(2 * 60);
+const BACKOFF: Duration = Duration::from_secs(2 * 60);
+/// The other device taking them back this soon after an automatic take-back means the
+/// user moved them back on purpose.
+const MOVED_BACK_WINDOW: Duration = Duration::from_secs(20);
+/// While this PC plays, it reminds the other devices now and then, so one that joined or
+/// missed the last message doesn't take the AirPods for a notification.
+const ANNOUNCE_EVERY: Duration = Duration::from_secs(30);
 
 /// How often to compare local playback with who has the AirPods.
 pub(super) const ROUTE_WATCH_INTERVAL: Duration = Duration::from_millis(500);
 
-/// Runs only while another device shares the AirPods. It reads local playback directly
+/// Runs every tick while the AirPods are connected. It reads local playback directly
 /// instead of relying on catching each play press, which a quick pause/play can hide.
-/// - This PC has the AirPods: tell the other devices whenever playback starts or stops, so
-///   an iPhone doesn't take them for a notification while we play.
-/// - Another device has them and something here plays: the user pressed play here (we
-///   paused when it took over), so take them back. While a notification only borrows
-///   them, wait for it to let go instead.
+/// - This PC has the AirPods: tell the other devices whether it is playing (or in a
+///   voice chat), so an iPhone doesn't take them for a notification.
+/// - Another device has them: decide whether to take them back (see `arbiter`).
 pub(super) async fn watch_route(
     aacp: &AACPManager,
     ctx: &DeviceContext,
@@ -271,69 +325,130 @@ pub(super) async fn watch_route(
         .filter(|d| !d.mac.eq_ignore_ascii_case(&ctx.local_mac))
         .map(|d| d.mac.clone())
         .collect();
+    let owns = owns_audio(&ctx.hub, mac_s);
     if peers.is_empty() {
         let mut state = route.lock();
         state.announced = None;
         state.streams.reset();
-        return;
+        if owns != Some(false) {
+            return;
+        }
+        // The device that had them left (out of range, switched off): it is quiet now.
+        state.peer_quiet_since.get_or_insert_with(Instant::now);
     }
     let mpris = !MediaController::playing_players().await.is_empty();
-    let streams = tokio::task::spawn_blocking(|| {
-        crate::audio::pulse::snapshot_sync(crate::audio::pulse::DEFAULT_DEADLINE)
-            .map(|s| s.playing_streams())
-            .unwrap_or_default()
+    let snapshot = tokio::task::spawn_blocking(|| {
+        crate::audio::pulse::snapshot_sync(crate::audio::pulse::DEFAULT_DEADLINE).ok()
     })
     .await
-    .unwrap_or_default();
+    .ok()
+    .flatten();
+    let streams = snapshot
+        .as_ref()
+        .map(|s| s.playing_streams())
+        .unwrap_or_default();
+    let voice = snapshot.as_ref().is_some_and(|s| s.voice_in_use());
     let (stream_playing, stream_started) = route.lock().streams.update(&streams);
     let playing = mpris || stream_playing;
     route.lock().local_playing = playing;
-    match owns_audio(&ctx.hub, mac_s) {
-        Some(true) => {
-            if route.lock().announced == Some(playing) {
+    let need = if voice {
+        Need::Voice
+    } else if playing {
+        Need::Playing
+    } else {
+        Need::Nothing
+    };
+
+    if owns == Some(true) {
+        let busy = need >= Need::Playing;
+        {
+            let mut state = route.lock();
+            let due = state.announced != Some(busy)
+                || (busy
+                    && state
+                        .announced_at
+                        .is_none_or(|t| t.elapsed() >= ANNOUNCE_EVERY));
+            if !due {
                 return;
             }
-            route.lock().announced = Some(playing);
-            debug!("Telling the other devices this PC is streaming: {playing}");
-            for peer in peers {
-                if let Err(e) = aacp
-                    .send_media_information(&ctx.local_mac, &peer, playing)
-                    .await
-                {
-                    debug!("Could not tell {peer} the streaming state: {e}");
-                }
-            }
+            state.announced = Some(busy);
+            state.announced_at = Some(Instant::now());
         }
-        // MPRIS players were paused when the other device took over, so one playing now
-        // was started here. A player without MPRIS can't be paused, so only a stream
-        // that just started counts for those.
-        // Not right after pausing for the other device: that playback is the tail end of
-        // what was paused, not a fresh press of play.
-        Some(false)
-            if (mpris || stream_started) && !crate::media_controller::auto_paused_recently() =>
-        {
-            route.lock().announced = None;
-            let borrowed = route
-                .lock()
-                .borrowed_until
-                .is_some_and(|until| Instant::now() < until);
-            let worn = aacp
-                .state
-                .lock()
+        debug!("Telling the other devices this PC is streaming: {busy}");
+        for peer in peers {
+            if let Err(e) = aacp
+                .send_media_information(&ctx.local_mac, &peer, busy)
                 .await
-                .ear_detection_status
-                .contains(&EarDetectionStatus::InEar);
-            let call = route.lock().call;
-            if worn && !borrowed && !call {
-                info!(
-                    "Media is playing here while another device has the AirPods; taking them back"
-                );
-                let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x01]));
+            {
+                debug!("Could not tell {peer} the streaming state: {e}");
             }
         }
-        _ => route.lock().announced = None,
+        return;
+    }
+    route.lock().announced = None;
+    if owns != Some(false) || route.just_claimed() {
+        return;
+    }
+
+    let (worn, peer_streaming) = {
+        let state = aacp.state.lock().await;
+        (
+            state
+                .ear_detection_status
+                .contains(&EarDetectionStatus::InEar),
+            state.peer_streaming,
+        )
+    };
+    let inputs = {
+        let state = route.lock();
+        let now = Instant::now();
+        // While a notification only borrows them, a player still going here is not a
+        // fresh press of play; the borrow rule brings them back.
+        let borrowed = state.borrowed_until.is_some_and(|until| now < until);
+        Inputs {
+            owns,
+            worn,
+            call: state.call,
+            peer_streaming,
+            peer_quiet_for: state.peer_quiet_since.map(|t| t.elapsed()),
+            lost_for: state.lost_at.map(|t| t.elapsed()),
+            lost_to_borrow: state.lost_to_borrow,
+            need,
+            // MPRIS players were paused when the other device took over, so one playing
+            // now was started here. A player without MPRIS can't be paused, so only a
+            // stream that just started counts for those. Not right after pausing for the
+            // other device: that playback is the tail end of what was paused.
+            fresh_play: (mpris || stream_started)
+                && !borrowed
+                && !crate::media_controller::auto_paused_recently(),
+            backing_off: state.backoff_until.is_some_and(|until| now < until),
+            return_home: crate::utils::app_setting_bool(RETURN_HOME_SETTING).unwrap_or(true),
+        }
+    };
+    let verdict = decide(&inputs);
+    let changed = route.lock().last_verdict.replace(verdict) != Some(verdict);
+    match verdict {
+        Verdict::Take { why, auto } => {
+            if auto && !route.note_auto_take() {
+                return;
+            }
+            info!(
+                "route: taking the AirPods back ({why}; PC need {:?}, worn {}, other device playing {})",
+                inputs.need, inputs.worn, inputs.peer_streaming
+            );
+            route.lock().last_verdict = None;
+            let _ = command_tx.send((ControlCommandIdentifiers::OwnsConnection, vec![0x01]));
+        }
+        Verdict::Wait(why) if changed => info!(
+            "route: leaving the AirPods on the other device ({why}; PC need {:?}, worn {})",
+            inputs.need, inputs.worn
+        ),
+        _ => {}
     }
 }
+
+/// The settings key for "Bring my AirPods back to this PC" (on unless switched off).
+pub(super) const RETURN_HOME_SETTING: &str = "return_to_pc";
 
 /// How long a device may borrow the AirPods without media (a notification) before local
 /// playback is paused.

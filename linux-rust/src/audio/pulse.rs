@@ -85,6 +85,8 @@ pub struct SourceOutputInfo {
     pub index: u32,
     pub source: u32,
     pub corked: bool,
+    /// `application.name` of the recording client, if published.
+    pub app: Option<String>,
 }
 
 /// Everything the audio guard needs to know, read in one round trip.
@@ -150,6 +152,26 @@ impl PulseSnapshot {
             })
             .map(|i| i.index)
             .collect()
+    }
+
+    /// Whether a voice app is in use here: something records from a microphone (Discord,
+    /// a call, a recorder), or a voice chat stream is open (Discord keeps one open for the
+    /// whole time you sit in a voice channel). Audio effects apps that record the mic all
+    /// the time don't count.
+    pub fn voice_in_use(&self) -> bool {
+        let recording = self.source_outputs.iter().any(|o| {
+            !o.corked
+                && !o.app.as_deref().is_some_and(is_effects_app)
+                && self
+                    .sources
+                    .iter()
+                    .any(|s| s.index == o.source && !s.is_monitor)
+        });
+        let voice_chat = self
+            .sink_inputs
+            .iter()
+            .any(|i| !i.corked && i.app.as_deref().is_some_and(is_voice_app));
+        recording || voice_chat
     }
 
     /// Whether something is recording from a (non-monitor) source of this card.
@@ -245,15 +267,28 @@ impl PulseApi for LibPulse {
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-/// Parses `AA:BB:CC:DD:EE:FF` / `aa_bb_cc_dd_ee_ff` (optionally embedded at the start
-/// of a longer string) into upper-case colon form.
+/// Streams that never mean "the user pressed play".
 fn is_background_app(app: &str) -> bool {
+    is_effects_app(app) || is_voice_app(app)
+}
+
+/// Apps that re-play or record everything all the time (audio effects).
+fn is_effects_app(app: &str) -> bool {
     let app = app.to_ascii_lowercase();
-    ["easyeffects", "pulseeffects", "webrtc", "discord"]
+    ["easyeffects", "pulseeffects"]
         .iter()
         .any(|a| app.contains(a))
 }
 
+/// Voice chat: its streams stay open for a whole call, so they mean "in a call", not "the
+/// user pressed play".
+fn is_voice_app(app: &str) -> bool {
+    let app = app.to_ascii_lowercase();
+    ["webrtc", "discord"].iter().any(|a| app.contains(a))
+}
+
+/// Parses `AA:BB:CC:DD:EE:FF` / `aa_bb_cc_dd_ee_ff` (optionally embedded at the start
+/// of a longer string) into upper-case colon form.
 pub fn normalize_mac(s: &str) -> Option<String> {
     let candidate: String = s.chars().take(17).collect();
     if candidate.len() != 17 {
@@ -524,6 +559,7 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 index: item.index,
                 source: item.source,
                 corked: item.corked,
+                app: item.proplist.get_str("application.name"),
             });
         }
     });
@@ -896,6 +932,49 @@ mod tests {
     }
 
     #[test]
+    fn voice_in_use_from_a_mic_or_an_open_voice_chat() {
+        let mic = SourceInfo {
+            index: 1,
+            card: None,
+            is_monitor: false,
+        };
+        let monitor = SourceInfo {
+            index: 2,
+            card: None,
+            is_monitor: true,
+        };
+        let rec = |source, corked, app: &str| SourceOutputInfo {
+            index: 9,
+            source,
+            corked,
+            app: Some(app.into()),
+        };
+        let mut snap = PulseSnapshot {
+            sources: vec![mic, monitor],
+            ..Default::default()
+        };
+        assert!(!snap.voice_in_use());
+        // EasyEffects records the desk mic all the time; OBS-style monitor capture is no call.
+        snap.source_outputs = vec![rec(1, false, "easyeffects"), rec(2, false, "OBS")];
+        assert!(!snap.voice_in_use());
+        // A paused recording isn't one either.
+        snap.source_outputs.push(rec(1, true, "Discord"));
+        assert!(!snap.voice_in_use());
+        snap.source_outputs.push(rec(1, false, "Discord"));
+        assert!(snap.voice_in_use());
+        // Sitting in a Discord voice channel with the mic muted still counts.
+        snap.source_outputs.clear();
+        snap.sink_inputs = vec![SinkInputInfo {
+            index: 4,
+            sink: 1,
+            corked: false,
+            app: Some("WEBRTC VoiceEngine".into()),
+            role: Some("phone".into()),
+        }];
+        assert!(snap.voice_in_use());
+    }
+
+    #[test]
     fn playing_streams_skip_background_and_system_sounds() {
         let input = |index, corked, app: &str, role: Option<&str>| SinkInputInfo {
             index,
@@ -971,6 +1050,7 @@ mod tests {
                 index: 10,
                 source: 1,
                 corked: false,
+                app: None,
             }],
             ..Default::default()
         };
@@ -980,12 +1060,14 @@ mod tests {
             index: 11,
             source: 2,
             corked: true,
+            app: None,
         });
         assert!(!s2.is_recording_from_card(7));
         s2.source_outputs.push(SourceOutputInfo {
             index: 12,
             source: 2,
             corked: false,
+            app: None,
         });
         assert!(s2.is_recording_from_card(7));
         assert!(!s2.is_recording_from_card(8));

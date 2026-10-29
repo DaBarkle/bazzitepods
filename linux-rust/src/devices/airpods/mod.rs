@@ -417,18 +417,6 @@ async fn session(
     while tasks.join_next().await.is_some() {}
 }
 
-/// When another device last joined each AirPods (by AirPods MAC).
-static PEER_JOINED: std::sync::Mutex<Option<HashMap<String, Instant>>> =
-    std::sync::Mutex::new(None);
-
-fn note_peer_joined(mac: &str) {
-    if let Ok(mut joined) = PEER_JOINED.lock() {
-        joined
-            .get_or_insert_with(HashMap::new)
-            .insert(mac.to_ascii_uppercase(), Instant::now());
-    }
-}
-
 /// Whether each AirPods' last ear report had them put away: in the case, none in an ear.
 static PUT_AWAY: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);
 
@@ -449,16 +437,6 @@ pub fn dropped_in_case(mac: &str) -> bool {
         .ok()
         .and_then(|away| away.as_ref()?.get(&mac.to_ascii_uppercase()).copied())
         .unwrap_or(false)
-}
-
-/// Whether another device joined these AirPods just before they dropped this PC: they
-/// keep a limited number of links and let go of this one to make room.
-pub fn dropped_for_peer(mac: &str) -> bool {
-    PEER_JOINED
-        .lock()
-        .ok()
-        .and_then(|joined| joined.as_ref()?.get(&mac.to_ascii_uppercase()).copied())
-        .is_some_and(|t| t.elapsed() < Duration::from_secs(10))
 }
 
 fn owns_audio(hub: &crate::hub::Hub, mac: &str) -> Option<bool> {
@@ -550,6 +528,7 @@ pub struct AirPodsInformation {
     pub le_keys: AirPodsLEKeys,
 }
 
+mod arbiter;
 mod controls;
 mod route;
 
@@ -593,28 +572,38 @@ mod tests {
     }
 
     #[test]
-    fn take_back_on_let_go_only_after_a_borrow_or_a_stop() {
+    fn moving_them_back_right_after_a_take_back_stops_automatic_switching() {
         let route = RouteWatch::default();
-        let settle = |route: &RouteWatch| {
-            route.lock().lost_at = Instant::now().checked_sub(HANDOVER_GAP * 2);
-        };
-        // The iPhone took the AirPods to play media: its hand-over gap and its media
-        // never count as letting go.
-        route.lost(false);
-        assert!(!route.may_reclaim());
-        settle(&route);
-        assert!(!route.may_reclaim());
-        // It stopped playing: letting go now means the PC may have them back.
-        route.lock().peer_stopped = true;
-        assert!(route.may_reclaim());
-        // A notification borrowed them: once the hand-over gap is over.
+        // Lost for its own reasons, with no take-back before: no back-off.
+        route.moved_back();
+        assert!(route.lock().backoff_until.is_none());
+        assert!(route.note_auto_take());
+        route.moved_back();
+        assert!(route.lock().backoff_until.is_some());
+    }
+
+    #[test]
+    fn too_many_take_backs_in_a_row_pause_automatic_switching() {
+        let route = RouteWatch::default();
+        for _ in 0..4 {
+            assert!(route.note_auto_take());
+        }
+        assert!(!route.note_auto_take());
+        assert!(route.lock().backoff_until.is_some());
+    }
+
+    #[test]
+    fn the_other_device_going_quiet_is_remembered_from_the_first_sign() {
+        let route = RouteWatch::default();
+        route.peer_quiet();
+        let first = route.lock().peer_quiet_since;
+        route.peer_quiet();
+        assert_eq!(route.lock().peer_quiet_since, first);
+        route.peer_playing();
+        assert!(route.lock().peer_quiet_since.is_none());
+        route.peer_quiet();
         route.lost(true);
-        assert!(!route.may_reclaim());
-        settle(&route);
-        assert!(route.may_reclaim());
-        // Never during a call.
-        route.lock().call = true;
-        assert!(!route.may_reclaim());
+        assert!(route.lock().peer_quiet_since.is_none());
     }
 
     #[test]

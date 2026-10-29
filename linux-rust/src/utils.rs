@@ -18,6 +18,12 @@ fn data_home() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from(home()).join(".local/share"))
 }
 
+pub(crate) fn state_home() -> PathBuf {
+    std::env::var("XDG_STATE_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from(home()).join(".local/state"))
+}
+
 fn config_home() -> PathBuf {
     std::env::var("XDG_CONFIG_HOME")
         .map(PathBuf::from)

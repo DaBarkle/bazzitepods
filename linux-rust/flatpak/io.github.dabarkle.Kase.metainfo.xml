@@ -97,6 +97,18 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.7.0" date="2026-10-29">
+      <description>
+        <p>Your PC is home: the AirPods come back to it by themselves, and reconnect after a day away.</p>
+        <ul>
+          <li>The AirPods return to the PC a few seconds after your iPhone stops playing (can be turned off in Settings)</li>
+          <li>A phone notification no longer keeps the AirPods while you game or sit in a Discord call</li>
+          <li>Reconnects after a day out with your iPhone, and as soon as you unlock the PC</li>
+          <li>A tidier, faster codebase, and settings that survive a power cut</li>
+          <li>A log file that explains every switching decision</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.6.0" date="2026-10-28">
       <description>
         <p>BazzitePods is now Kase: AirPods for KDE Plasma.</p>

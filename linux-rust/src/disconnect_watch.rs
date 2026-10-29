@@ -43,21 +43,17 @@ impl DropReason {
 pub enum ReconnectPlan {
     /// Disconnected here on purpose: stay disconnected.
     Never,
-    /// Let go of this PC to make room for an iPhone: try for a few minutes, until it lets go.
-    Briefly,
-    /// Walked off, went into the case, slept: come back when they do, however long that is,
-    /// as on a Mac.
+    /// Walked off, went into the case, slept, or left for an iPhone: come back when they
+    /// do, however long that is. The PC is home.
     UntilBack,
 }
 
-/// Decide from why the link dropped (if BlueZ said) and what the AirPods last reported.
-pub fn plan(reason: Option<DropReason>, in_case: bool, for_peer: bool) -> ReconnectPlan {
+/// Decide from why the link dropped, if BlueZ said. Only a disconnect pressed on this PC
+/// keeps them away. Dropping this PC for an iPhone used to be retried for 3 minutes only,
+/// so AirPods taken to work with the iPhone never came back in the evening (2026-10-28).
+pub fn plan(reason: Option<DropReason>) -> ReconnectPlan {
     match reason {
         Some(DropReason::Local) => ReconnectPlan::Never,
-        // A supervision timeout is distance, whatever else happened just before.
-        Some(DropReason::Timeout | DropReason::Suspend) => ReconnectPlan::UntilBack,
-        _ if in_case => ReconnectPlan::UntilBack,
-        _ if for_peer => ReconnectPlan::Briefly,
         _ => ReconnectPlan::UntilBack,
     }
 }
@@ -181,60 +177,22 @@ mod tests {
     }
 
     #[test]
-    fn walking_out_of_range_reconnects_until_back() {
-        // The bug: worn out of the house, they were only reconnected from adverts for 4 h.
-        assert_eq!(
-            plan(Some(DropReason::Timeout), false, false),
-            ReconnectPlan::UntilBack
-        );
-        // Older BlueZ without reasons: same.
-        assert_eq!(plan(None, false, false), ReconnectPlan::UntilBack);
-    }
-
-    #[test]
-    fn timeout_wins_over_a_peer_joining() {
-        assert_eq!(
-            plan(Some(DropReason::Timeout), false, true),
-            ReconnectPlan::UntilBack
-        );
+    fn every_drop_but_a_local_disconnect_reconnects_until_back() {
+        for reason in [
+            None,
+            Some(DropReason::Timeout),
+            Some(DropReason::Remote),
+            Some(DropReason::Suspend),
+            Some(DropReason::Authentication),
+            Some(DropReason::Unknown),
+        ] {
+            assert_eq!(plan(reason), ReconnectPlan::UntilBack, "{reason:?}");
+        }
     }
 
     #[test]
     fn disconnecting_here_stays_disconnected() {
-        assert_eq!(
-            plan(Some(DropReason::Local), false, false),
-            ReconnectPlan::Never
-        );
-        assert_eq!(
-            plan(Some(DropReason::Local), true, false),
-            ReconnectPlan::Never
-        );
-        assert_eq!(
-            plan(Some(DropReason::Local), false, true),
-            ReconnectPlan::Never
-        );
-    }
-
-    #[test]
-    fn case_and_peer_drops_keep_their_behaviour() {
-        assert_eq!(
-            plan(Some(DropReason::Remote), true, false),
-            ReconnectPlan::UntilBack
-        );
-        assert_eq!(plan(None, true, false), ReconnectPlan::UntilBack);
-        assert_eq!(
-            plan(Some(DropReason::Remote), false, true),
-            ReconnectPlan::Briefly
-        );
-        assert_eq!(plan(None, false, true), ReconnectPlan::Briefly);
-    }
-
-    #[test]
-    fn sleep_reconnects_until_back() {
-        assert_eq!(
-            plan(Some(DropReason::Suspend), false, true),
-            ReconnectPlan::UntilBack
-        );
+        assert_eq!(plan(Some(DropReason::Local)), ReconnectPlan::Never);
     }
 
     #[test]

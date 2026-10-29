@@ -55,6 +55,9 @@ pub struct Settings {
     /// Left stem hold swaps the desk mic and the AirPods mic; right hold changes noise
     /// control. Read by the device task.
     pub airpods_mic_switch: bool,
+    /// Bring the AirPods back to this PC when the iPhone stops playing. Read by the device
+    /// task (`return_to_pc`).
+    pub return_to_pc: bool,
     /// Keys we don't manage, preserved verbatim.
     pub extra: Map<String, Value>,
 }
@@ -72,12 +75,13 @@ impl Default for Settings {
             start_at_login: true,
             stem_control: false,
             airpods_mic_switch: false,
+            return_to_pc: true,
             extra: Map::new(),
         }
     }
 }
 
-const KEYS: [&str; 10] = [
+const KEYS: [&str; 11] = [
     "overlay_glass",
     "overlay_style",
     "overlay_size",
@@ -88,6 +92,7 @@ const KEYS: [&str; 10] = [
     "start_at_login",
     "stem_control",
     "airpods_mic_switch",
+    "return_to_pc",
 ];
 
 fn field<T: serde::de::DeserializeOwned>(map: &Map<String, Value>, key: &str, default: T) -> T {
@@ -136,6 +141,7 @@ impl Settings {
             start_at_login: field(&map, "start_at_login", d.start_at_login),
             stem_control: field(&map, "stem_control", d.stem_control),
             airpods_mic_switch: field(&map, "airpods_mic_switch", d.airpods_mic_switch),
+            return_to_pc: field(&map, "return_to_pc", d.return_to_pc),
             extra,
         }
     }
@@ -170,6 +176,7 @@ impl Settings {
         put("start_at_login", Value::from(self.start_at_login));
         put("stem_control", Value::from(self.stem_control));
         put("airpods_mic_switch", Value::from(self.airpods_mic_switch));
+        put("return_to_pc", Value::from(self.return_to_pc));
         serde_json::to_string_pretty(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
     }
 }
@@ -255,6 +262,7 @@ mod tests {
         assert_eq!(Settings::from_json("[1,2]"), Settings::default());
         let d = Settings::default();
         assert!(d.start_at_login);
+        assert!(d.return_to_pc);
         assert_eq!(d.overlay_mode, OverlayMode::Compact);
         assert_eq!(d.appearance, Appearance::System);
     }

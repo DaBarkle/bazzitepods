@@ -42,6 +42,14 @@ impl App {
             airpods.push(self.rename_row(d));
         }
         airpods.push(setting_row(
+            "Bring AirPods back to this PC",
+            Some("When your iPhone stops playing, the AirPods come back here by themselves"),
+            switch(
+                s.return_to_pc,
+                Some(Message::SetReturnToPc as fn(bool) -> Message),
+            ),
+        ));
+        airpods.push(setting_row(
             "Stem press track control",
             Some("Double-press for next track, triple-press for previous"),
             switch(

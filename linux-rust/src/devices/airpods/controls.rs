@@ -319,7 +319,8 @@ pub(super) async fn handle_event(
                 .filter(|n| n.mac != local && old_devices.iter().all(|o| o.mac != n.mac))
             {
                 info!("New device on AirPods: {}", device.mac);
-                note_peer_joined(&mac_s);
+                // Repeat whether this PC is playing on the next tick, for the newcomer.
+                route.lock().announced = None;
                 let aacp = aacp.clone();
                 let local = local.clone();
                 let peer = device.mac.clone();
@@ -352,28 +353,10 @@ pub(super) async fn handle_event(
             // never sends OwnsConnection = 0, so this is the reliable signal.
             let had = owns_audio(&ctx.hub, &mac_s);
             match route_owner(source, &ctx.local_mac) {
-                // Nobody is playing. If another device let go while something here is still
-                // playing, take the AirPods back now instead of waiting for them to drift
-                // back. Only after a notification borrowed them or the other device stopped
-                // its media: the gap during a hand-over to an iPhone that starts playing
-                // looks the same, and taking them back then makes the two fight.
-                None if had == Some(false) && route.may_reclaim() => {
-                    let worn = aacp
-                        .state
-                        .lock()
-                        .await
-                        .ear_detection_status
-                        .contains(&EarDetectionStatus::InEar);
-                    let playing = route.lock().local_playing
-                        || !MediaController::playing_players().await.is_empty();
-                    if worn && playing {
-                        info!(
-                            "The other device let go and media is playing here; taking the AirPods back"
-                        );
-                        let _ = command_tx
-                            .send((ControlCommandIdentifiers::OwnsConnection, vec![0x01]));
-                    }
-                }
+                // Nobody is playing: the other device went quiet. The route watcher takes the
+                // AirPods back after a few seconds (a hand-over to an iPhone that starts
+                // playing passes through "nobody" too, and then the iPhone reports again).
+                None if had == Some(false) => route.peer_quiet(),
                 None => {}
                 Some(true) => {
                     ctx.hub
@@ -390,6 +373,7 @@ pub(super) async fn handle_event(
                     );
                 }
                 Some(false) => {
+                    route.peer_playing();
                     let peer = aacp
                         .state
                         .lock()
@@ -410,13 +394,12 @@ pub(super) async fn handle_event(
                 && route_owner(source, &ctx.local_mac) == Some(false);
         }
         AACPEvent::PeerStreaming(streaming) => {
-            {
-                let mut state = route.lock();
-                state.peer_stopped = !streaming;
+            if *streaming {
+                route.peer_playing();
                 // Playing media is not a borrow, whatever the switch first looked like.
-                if *streaming {
-                    state.lost_to_borrow = false;
-                }
+                route.lock().lost_to_borrow = false;
+            } else {
+                route.peer_quiet();
             }
             if *streaming && owns_audio(&ctx.hub, &mac_s) == Some(false) {
                 info!("The other device started playing media; pausing local media");
@@ -431,6 +414,7 @@ pub(super) async fn handle_event(
         }
         AACPEvent::OwnershipToFalseRequest => {
             info!("AirPods asked us to release ownership; pausing local media");
+            route.moved_back();
             route.lost(false);
             if let Some(audio) = audio {
                 audio.route_away();
