@@ -15,6 +15,18 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
   account needs a password first (`passwd`); a missing password prompt (polkit agent) gets
   a clear message. The script no longer relies on GNU-only `sed`. ([#32])
 
+- **Audio on PulseAudio as well as PipeWire.** The audio guard understands PulseAudio's
+  profile names (`a2dp_sink`, `headset_head_unit`), and the log says which sound server is
+  running. ([#33])
+- **Fewer false "something is playing" readings.** JamesDSP, NoiseTorch, loopbacks, filter
+  chains and monitor streams no longer count as playback, and Zoom, TeamSpeak, Mumble,
+  Slack, Teams, Element, Signal, Telegram, Skype and Webex count as calls, like Discord.
+  Streams are recognised by their program and node names, not just the name they show.
+  ([#33])
+- **The AirPods mic on newer FFmpeg.** libavcodec 63 is accepted, an unknown version says
+  so clearly in the log, and a sound server that refuses Kase's mixer rights is logged as
+  such instead of a bare failure. ([#33])
+
 ### Added
 - **Diagnostics** in Settings: which Bluetooth adapter is in use and whether it's on or
   blocked, AAC or SBC-only (with why), whether battery-while-away uses the advertisement
@@ -358,3 +370,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#30]: https://github.com/DaBarkle/kase/pull/30
 [#31]: https://github.com/DaBarkle/kase/pull/31
 [#32]: https://github.com/DaBarkle/kase/pull/32
+[#33]: https://github.com/DaBarkle/kase/pull/33

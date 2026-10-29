@@ -122,6 +122,7 @@ impl World {
                     corked: false,
                     app: None,
                     role: None,
+                    hints: None,
                 });
             }
         } else if have {
@@ -511,6 +512,7 @@ async fn headset_with_active_recording_is_left_alone() {
         source: 30,
         corked: false,
         app: None,
+        hints: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -662,6 +664,7 @@ async fn default_sink_and_streams_restored_after_range_loss() {
         corked: true,
         app: None,
         role: None,
+        hints: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -734,6 +737,7 @@ async fn default_restored_by_a_new_guard_after_reconnect() {
         corked: true,
         app: None,
         role: None,
+        hints: None,
     });
     let (world, handle) = start(w, fast());
     handle.link_up();
@@ -847,6 +851,39 @@ fn candidates_prefer_aac_then_auto_then_sbc_xq_then_sbc() {
         vec!["a2dp-sink-aac"],
         "fallback when none available"
     );
+}
+
+#[test]
+fn pulseaudio_profile_names_work_like_pipewire_ones() {
+    let profiles = [
+        ("a2dp_sink_sbc", true, 9),
+        ("a2dp_sink_aac", true, 9),
+        ("headset_head_unit", true, 99),
+        ("off", true, 0),
+    ];
+    assert_eq!(
+        a2dp_candidates(&card_with(&profiles, None)),
+        vec!["a2dp_sink_aac", "a2dp_sink_sbc"]
+    );
+    let set = ProfileAction::Set(vec!["a2dp_sink_aac".into(), "a2dp_sink_sbc".into()]);
+    assert_eq!(
+        decide_profile(&card_with(&profiles, Some("off")), false),
+        set
+    );
+    assert_eq!(
+        decide_profile(&card_with(&profiles, Some("headset_head_unit")), false),
+        set
+    );
+    assert_eq!(
+        decide_profile(&card_with(&profiles, Some("headset_head_unit")), true),
+        ProfileAction::LeaveHeadset
+    );
+    assert_eq!(
+        decide_profile(&card_with(&profiles, Some("a2dp_sink")), false),
+        ProfileAction::Keep
+    );
+    assert_eq!(codec_for("a2dp_sink_aac", None).as_deref(), Some("aac"));
+    assert_eq!(codec_for("a2dp_sink", None), None);
 }
 
 #[test]

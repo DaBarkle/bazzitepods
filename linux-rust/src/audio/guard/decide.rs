@@ -32,6 +32,16 @@ pub(super) const PREFERRED_A2DP: [&str; 4] = [
     "a2dp-sink-sbc",
 ];
 
+/// PipeWire names profiles `a2dp-sink-aac`, PulseAudio `a2dp_sink` / `a2dp_sink_aac`;
+/// compare in PipeWire's spelling.
+fn pw_name(profile: &str) -> String {
+    profile.replace('_', "-")
+}
+
+fn is_a2dp_sink(profile: &str) -> bool {
+    pw_name(profile).starts_with("a2dp-sink")
+}
+
 pub fn is_a2dp(profile: &str) -> bool {
     profile.starts_with("a2dp")
 }
@@ -51,12 +61,12 @@ pub fn a2dp_candidates(card: &CardInfo) -> Vec<String> {
         let mut list: Vec<&crate::audio::pulse::ProfileInfo> = card
             .profiles
             .iter()
-            .filter(|p| p.name.starts_with("a2dp-sink") && (!avail_only || p.available))
+            .filter(|p| is_a2dp_sink(&p.name) && (!avail_only || p.available))
             .collect();
         list.sort_by_key(|p| {
             let pref = PREFERRED_A2DP
                 .iter()
-                .position(|n| *n == p.name)
+                .position(|n| pw_name(n) == pw_name(&p.name))
                 .unwrap_or(PREFERRED_A2DP.len());
             (pref, std::cmp::Reverse(p.priority))
         });
@@ -137,6 +147,7 @@ pub fn codec_for(profile: &str, sink: Option<&SinkInfo>) -> Option<String> {
     if let Some(c) = sink.and_then(|s| s.codec.clone()) {
         return Some(c);
     }
+    let profile = pw_name(profile);
     for prefix in ["a2dp-sink-", "headset-head-unit-"] {
         if let Some(c) = profile.strip_prefix(prefix) {
             return Some(c.to_string());

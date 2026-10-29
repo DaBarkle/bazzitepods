@@ -39,8 +39,11 @@ const FMT_FLT: c_int = 3;
 const FMT_S16P: c_int = 6;
 const FMT_FLTP: c_int = 8;
 
-/// libavcodec majors this was checked against: FFmpeg 4.x (58) to 8.x (62).
-const SONAMES: [&str; 6] = [
+/// libavcodec majors this was checked against: FFmpeg 4.x (58) to 8.x (62). 63 (FFmpeg 9)
+/// is accepted ahead of time: the few AVFrame/AVCodecParameters fields read here have kept
+/// their offsets since 58.
+const SONAMES: [&str; 7] = [
+    "libavcodec.so.63",
     "libavcodec.so.62",
     "libavcodec.so.61",
     "libavcodec.so.60",
@@ -48,7 +51,7 @@ const SONAMES: [&str; 6] = [
     "libavcodec.so.58",
     "libavcodec.so",
 ];
-const SUPPORTED_MAJORS: std::ops::RangeInclusive<c_uint> = 58..=62;
+const SUPPORTED_MAJORS: std::ops::RangeInclusive<c_uint> = 58..=63;
 
 type Ptr = *mut c_void;
 
@@ -128,11 +131,16 @@ fn open_lib() -> Result<Lib, String> {
     // SAFETY: avcodec_version takes no arguments and has no preconditions.
     let version = unsafe { version_fn() };
     if !SUPPORTED_MAJORS.contains(&(version >> 16)) {
-        return Err(format!(
-            "libavcodec {}.{} is newer than this build knows",
+        let msg = format!(
+            "libavcodec {}.{} is not supported by this build (it knows {} to {}); the AirPods \
+             mic is unavailable until Kase is updated",
             version >> 16,
-            (version >> 8) & 0xFF
-        ));
+            (version >> 8) & 0xFF,
+            SUPPORTED_MAJORS.start(),
+            SUPPORTED_MAJORS.end()
+        );
+        log::warn!("[mic] {msg}");
+        return Err(msg);
     }
     let set_log_level: unsafe extern "C" fn(c_int) = sym!("av_log_set_level");
     // SAFETY: plain setter. FFmpeg would otherwise print every damaged frame to stderr.

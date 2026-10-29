@@ -83,6 +83,18 @@ AirPods is one `route:` line in the log, with the reason.
 | Leave with the AirPods on the iPhone for hours; come home and open the case | Connected to the PC within a minute, sooner if you unlock the PC |
 | Press Disconnect on the PC | Stays disconnected |
 
+## 7. AirPods mic switch (after every runtime or WirePlumber update)
+
+The mic switch depends on the sound server letting Kase act as a mixer, a rule WirePlumber
+can change between versions, and on FFmpeg's libavcodec in the Flatpak runtime. Re-test it
+whenever the Freedesktop runtime or WirePlumber is updated:
+
+1. Settings → turn on **AirPods mic switch**, AirPods in.
+2. Hold the left stem: rising chime, the island shows **AirPods Mic**, and Discord (and
+   EasyEffects' mic) follow.
+3. Hold it again: falling chime, the desk mic is back.
+4. If it fails, look for `access denied` or `libavcodec` in the log.
+
 ## Logs
 
 Kase writes its log to `~/.var/app/io.github.dabarkle.Kase/.local/state/kase/kase.log`
