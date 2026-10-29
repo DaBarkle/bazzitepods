@@ -6,6 +6,8 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-30
+
 ### Added
 - **64-bit ARM builds.** Releases include `Kase-aarch64.flatpak` (Raspberry Pi 5, Asahi
   Linux, ARM laptops) next to `Kase-x86_64.flatpak`, and the installer picks the right
@@ -366,6 +368,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.8.1]: https://github.com/DaBarkle/kase/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/DaBarkle/kase/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/DaBarkle/kase/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/DaBarkle/kase/compare/v0.5.0...v0.6.0
