@@ -51,6 +51,10 @@ finish-args:
   # --- System integration --------------------------------------------------
   # logind PrepareForSleep signal: drop and re-establish the AACP link around suspend.
   - --system-talk-name=org.freedesktop.login1
+  # Screen saver ending (KDE and GNOME announce it here; KDE never sets logind's IdleHint):
+  # the moment to bring the AirPods back.
+  - --talk-name=org.freedesktop.ScreenSaver
+  - --talk-name=org.gnome.ScreenSaver
   # System tray (ksni): register our StatusNotifierItem with Plasma's watcher.
   - --talk-name=org.kde.StatusNotifierWatcher
   # Fullscreen detection for the overlay: loads a small KWin script that reports

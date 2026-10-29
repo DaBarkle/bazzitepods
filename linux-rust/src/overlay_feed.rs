@@ -71,6 +71,7 @@ async fn run(hub: Hub, settings: SettingsStore, client: Arc<OverlayClient>) {
         if client.unsupported() && config.mode != OverlayMode::Off {
             for (summary, body) in notifier.observe(snap.primary()) {
                 notify(summary, body);
+                info!("Overlay unsupported; sent notification instead");
             }
         }
         tokio::select! {
@@ -216,7 +217,7 @@ pub fn battery_line(d: &DeviceSnapshot) -> String {
     parts.join("  ·  ")
 }
 
-fn notify(summary: String, body: String) {
+pub(crate) fn notify(summary: String, body: String) {
     tokio::task::spawn_blocking(move || {
         let result = (|| -> Result<(), dbus::Error> {
             let conn = dbus::blocking::Connection::new_session()?;
@@ -246,7 +247,6 @@ fn notify(summary: String, body: String) {
             debug!("Notification failed: {e}");
         }
     });
-    info!("Overlay unsupported; sent notification instead");
 }
 
 #[cfg(test)]

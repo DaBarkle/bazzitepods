@@ -24,6 +24,7 @@ tokio-util = "0.7"
 dbus-tokio = "0.7.6"
 iced_layershell = { version = "0.19.1", default-features = false }
 wayland-client = "0.31"
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 libc = "0.2.184"
 
 [lib]

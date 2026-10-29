@@ -361,7 +361,7 @@ Only the controls your model supports are shown.
 | --- | :---: | :---: | :---: | :---: |
 | **KDE Plasma 6, Wayland** (the best experience) | ✅ with fullscreen transparency | ✅ | ✅ | ✅ |
 | KDE Plasma 5, Wayland | ✅ with fullscreen transparency | ✅ | ✅ | ✅ |
-| Hyprland, Sway and other wlr-layer-shell compositors | ✅ always solid | ✅ | needs a tray bar (e.g. Waybar) | ❌ without a helper: add `flatpak run io.github.dabarkle.Kase --start-minimized` to your compositor's startup |
+| Hyprland, Sway, niri and other wlr-layer-shell compositors | ✅ with fullscreen transparency | ✅ | needs a tray bar (e.g. Waybar) | add `flatpak run io.github.dabarkle.Kase --start-minimized` to your compositor's startup (Kase shows you the line) |
 | GNOME | Desktop notifications instead | ✅ | needs the AppIndicator extension (built into Ubuntu) | ✅ |
 | Any desktop on X11 | Desktop notifications instead | ✅ | ✅ | ✅ |
 | Steam Gaming Mode (gamescope) | ❌ | ✅ | ❌ | from desktop mode |
@@ -410,9 +410,10 @@ flowchart LR
    window, tray and island all draw from it, so they never disagree.
 3. **The island** is a separate small process on the compositor's overlay layer. It only
    sets up the GPU while it's visible, and redraws only while it moves.
-4. **Fullscreen detection.** A tiny KWin script tells Kase when the active window is
-   fullscreen, so the island can turn translucent. It's a question to the window manager,
-   not a look at the game.
+4. **Fullscreen detection.** A tiny KWin script (on Plasma 5 and 6), or the compositor's
+   window list on Sway, Hyprland and niri, tells Kase when the active window is fullscreen,
+   so the island can turn translucent. It's a question to the window manager, not a look
+   at the game.
 5. **Audio guard.** Kase watches the Bluetooth audio profile and your default output. If the
    AirPods come back connected but silent, it renegotiates the connection and restores your
    output.
@@ -439,7 +440,7 @@ the [Flatpak manifest](linux-rust/flatpak/io.github.dabarkle.Kase.yml):
 | Wayland (X11 as a fallback), GPU | the window and the island |
 | PulseAudio socket | audio profile repair and the mic switch |
 | Bluetooth, host network namespace | AACP runs on a raw Bluetooth socket, which only exists in the host's network namespace. Kase has no networking code and never talks to the internet. |
-| BlueZ, logind | device state, and reconnecting around suspend |
+| BlueZ, logind, screen saver | device state, and reconnecting around suspend and when you come back to the PC |
 | KWin, tray, notifications, MPRIS | fullscreen detection, the tray icon, alerts on GNOME, pausing media |
 | Flatpak host commands | Apple device mode's single fixed script, behind your password |
 

@@ -16,20 +16,23 @@ const PLUGIN: &str = "kase-fullscreen";
 /// The script's name before the app was renamed to Kase (0.5.0 and earlier).
 const OLD_PLUGIN: &str = "bazzitepods-fullscreen";
 
-/// KWin 6 script. A window counts as fullscreen when it is in fullscreen mode, or when
-/// it is borderless and covers its whole screen (many games do that).
+/// KWin script for Plasma 6 and Plasma 5 (which names windows "clients": clientList,
+/// activeClient, clientActivated, geometry). A window counts as fullscreen when it is in
+/// fullscreen mode, or when it is borderless and covers its whole screen (many games do that).
 const SCRIPT: &str = r#"
+var six = typeof workspace.windowList === "function";
 var last = null;
+function geometry(w) { return w.frameGeometry || w.geometry; }
 function isFull(w) {
     if (!w || w.desktopWindow || w.dock || w.specialWindow) return false;
     if (w.fullScreen) return true;
     var area = workspace.clientArea(KWin.FullScreenArea, w);
-    var g = w.frameGeometry;
+    var g = geometry(w);
     return w.noBorder && g.x <= area.x && g.y <= area.y
         && g.width >= area.width && g.height >= area.height;
 }
 function report() {
-    var full = isFull(workspace.activeWindow);
+    var full = isFull(six ? workspace.activeWindow : workspace.activeClient);
     if (full === last) return;
     last = full;
     callDBus("io.github.dabarkle.Kase", "/io/github/dabarkle/Kase",
@@ -37,12 +40,12 @@ function report() {
 }
 function hook(w) {
     w.fullScreenChanged.connect(report);
-    w.frameGeometryChanged.connect(report);
+    (w.frameGeometryChanged || w.geometryChanged).connect(report);
 }
-workspace.windowList().forEach(hook);
-workspace.windowAdded.connect(hook);
-workspace.windowActivated.connect(report);
-workspace.windowRemoved.connect(report);
+(six ? workspace.windowList() : workspace.clientList()).forEach(hook);
+(six ? workspace.windowAdded : workspace.clientAdded).connect(hook);
+(six ? workspace.windowActivated : workspace.clientActivated).connect(report);
+(six ? workspace.windowRemoved : workspace.clientRemoved).connect(report);
 report();
 "#;
 
