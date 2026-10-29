@@ -70,6 +70,9 @@ pub struct SinkInputInfo {
     pub app: Option<String>,
     /// `media.role`, e.g. "music", "event" (notification sounds), "phone".
     pub role: Option<String>,
+    /// Lower-case `application.process.binary` and `node.name`, which name a stream more
+    /// reliably than the app name it shows (EasyEffects, loopbacks, filter chains).
+    pub hints: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,13 +83,15 @@ pub struct SourceInfo {
     pub is_monitor: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SourceOutputInfo {
     pub index: u32,
     pub source: u32,
     pub corked: bool,
     /// `application.name` of the recording client, if published.
     pub app: Option<String>,
+    /// As [`SinkInputInfo::hints`].
+    pub hints: Option<String>,
 }
 
 /// Everything the audio guard needs to know, read in one round trip.
@@ -143,7 +148,7 @@ impl PulseSnapshot {
     pub fn playing_streams(&self) -> Vec<u32> {
         self.sink_inputs
             .iter()
-            .filter(|i| !i.corked && !i.app.as_deref().is_some_and(is_background_app))
+            .filter(|i| !i.corked && !is_background(i))
             // Notification and other system sounds never mean "the user pressed play".
             .filter(|i| {
                 !i.role
@@ -161,16 +166,13 @@ impl PulseSnapshot {
     pub fn voice_in_use(&self) -> bool {
         let recording = self.source_outputs.iter().any(|o| {
             !o.corked
-                && !o.app.as_deref().is_some_and(is_effects_app)
+                && !is_effects(o.app.as_deref(), o.hints.as_deref())
                 && self
                     .sources
                     .iter()
                     .any(|s| s.index == o.source && !s.is_monitor)
         });
-        let voice_chat = self
-            .sink_inputs
-            .iter()
-            .any(|i| !i.corked && i.app.as_deref().is_some_and(is_voice_app));
+        let voice_chat = self.sink_inputs.iter().any(|i| !i.corked && is_voice(i));
         recording || voice_chat
     }
 
@@ -267,24 +269,94 @@ impl PulseApi for LibPulse {
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-/// Streams that never mean "the user pressed play".
-fn is_background_app(app: &str) -> bool {
-    is_effects_app(app) || is_voice_app(app)
+/// A failed operation. "Access denied" means the sound server didn't let Kase act as a mixer
+/// (WirePlumber's rule for "Manager" clients changed or is missing), which breaks the mic
+/// switch, so it gets a clear warning of its own.
+fn failure(what: &'static str, err: &str) -> PulseError {
+    if err.eq_ignore_ascii_case("access denied") {
+        log::warn!(
+            "The sound server refused to {what} (access denied). Its policy no longer lets Kase \
+             change the default mic or move streams, so the AirPods mic switch can't work. \
+             This can follow a WirePlumber update; please report it."
+        );
+        return PulseError::Failed(format!("{what}: the sound server refused (access denied)"));
+    }
+    PulseError::Failed(what.to_string())
 }
 
-/// Apps that re-play or record everything all the time (audio effects).
-fn is_effects_app(app: &str) -> bool {
-    let app = app.to_ascii_lowercase();
-    ["easyeffects", "pulseeffects"]
+/// "PipeWire" or "PulseAudio", from the server name PipeWire's pulse server reports as
+/// "PulseAudio (on PipeWire 1.2.7)".
+pub fn server_kind(server_name: &str) -> &'static str {
+    if server_name.to_ascii_lowercase().contains("pipewire") {
+        "PipeWire"
+    } else {
+        "PulseAudio"
+    }
+}
+
+fn hints(props: &libpulse_binding::proplist::Proplist) -> Option<String> {
+    let parts: Vec<String> = ["application.process.binary", "node.name"]
         .iter()
-        .any(|a| app.contains(a))
+        .filter_map(|k| props.get_str(k))
+        .collect();
+    (!parts.is_empty()).then(|| parts.join(" ").to_ascii_lowercase())
+}
+
+/// Whether any word of the app name or hints is one of `names` (whole words, so a game
+/// called "Signalis" isn't Signal). Names with a dash match anywhere.
+fn matches_any(app: Option<&str>, hints: Option<&str>, names: &[&str]) -> bool {
+    let text = format!("{} {}", app.unwrap_or(""), hints.unwrap_or("")).to_ascii_lowercase();
+    names.iter().any(|n| {
+        if n.contains('-') {
+            text.contains(n)
+        } else {
+            text.split(|c: char| !c.is_ascii_alphanumeric())
+                .any(|w| w == *n)
+        }
+    })
+}
+
+/// Streams that never mean "the user pressed play".
+fn is_background(i: &SinkInputInfo) -> bool {
+    is_effects(i.app.as_deref(), i.hints.as_deref()) || is_voice(i)
+}
+
+/// Audio effects, noise suppression and plumbing that re-play or record everything all the
+/// time: EasyEffects, JamesDSP, NoiseTorch, loopbacks, filter chains and monitor streams.
+fn is_effects(app: Option<&str>, hints: Option<&str>) -> bool {
+    const EFFECTS: [&str; 7] = [
+        "easyeffects",
+        "pulseeffects",
+        "jamesdsp",
+        "noisetorch",
+        "loopback",
+        "filter-chain",
+        "monitor",
+    ];
+    matches_any(app, hints, &EFFECTS)
 }
 
 /// Voice chat: its streams stay open for a whole call, so they mean "in a call", not "the
-/// user pressed play".
-fn is_voice_app(app: &str) -> bool {
-    let app = app.to_ascii_lowercase();
-    ["webrtc", "discord"].iter().any(|a| app.contains(a))
+/// user pressed play". Streams tagged with the phone role count too.
+fn is_voice(i: &SinkInputInfo) -> bool {
+    const CALL_APPS: [&str; 14] = [
+        "webrtc",
+        "discord",
+        "zoom",
+        "teamspeak",
+        "mumble",
+        "slack",
+        "teams",
+        "element",
+        "signal",
+        "telegram",
+        "skype",
+        "skypeforlinux",
+        "webex",
+        "vesktop",
+    ];
+    matches!(i.role.as_deref(), Some("phone" | "communication"))
+        || matches_any(i.app.as_deref(), i.hints.as_deref(), &CALL_APPS)
 }
 
 /// Parses `AA:BB:CC:DD:EE:FF` / `aa_bb_cc_dd_ee_ff` (optionally embedded at the start
@@ -452,9 +524,12 @@ impl Conn {
         what: &'static str,
         result: &Rc<Cell<Option<bool>>>,
     ) -> Result<(), PulseError> {
-        self.run_until(what, |_| match result.get() {
+        self.run_until(what, |c| match result.get() {
             Some(true) => Some(Ok(())),
-            Some(false) => Some(Err(PulseError::Failed(what.to_string()))),
+            Some(false) => Some(Err(failure(
+                what,
+                &c.errno().to_string().unwrap_or_default(),
+            ))),
             None => None,
         })
     }
@@ -539,6 +614,7 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 corked: item.corked,
                 app: item.proplist.get_str("application.name"),
                 role: item.proplist.get_str("media.role"),
+                hints: hints(&item.proplist),
             });
         }
     });
@@ -560,12 +636,19 @@ pub fn snapshot_sync(timeout: Duration) -> Result<PulseSnapshot, PulseError> {
                 source: item.source,
                 corked: item.corked,
                 app: item.proplist.get_str("application.name"),
+                hints: hints(&item.proplist),
             });
         }
     });
     let d = default_sink.clone();
     let done = server_done.clone();
     let op_server = introspect.get_server_info(move |info| {
+        static LOGGED: std::sync::Once = std::sync::Once::new();
+        LOGGED.call_once(|| {
+            let name = info.server_name.as_deref().unwrap_or("");
+            let version = info.server_version.as_deref().unwrap_or("");
+            log::info!("Sound server: {} ({name} {version})", server_kind(name));
+        });
         *d.borrow_mut() = info.default_sink_name.as_deref().map(str::to_string);
         done.set(true);
     });
@@ -948,6 +1031,7 @@ mod tests {
             source,
             corked,
             app: Some(app.into()),
+            hints: None,
         };
         let mut snap = PulseSnapshot {
             sources: vec![mic, monitor],
@@ -970,6 +1054,7 @@ mod tests {
             corked: false,
             app: Some("WEBRTC VoiceEngine".into()),
             role: Some("phone".into()),
+            hints: None,
         }];
         assert!(snap.voice_in_use());
     }
@@ -982,6 +1067,7 @@ mod tests {
             corked,
             app: Some(app.into()),
             role: role.map(Into::into),
+            hints: None,
         };
         let snap = PulseSnapshot {
             sink_inputs: vec![
@@ -994,6 +1080,95 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(snap.playing_streams(), vec![1]);
+    }
+
+    #[test]
+    fn effects_and_call_apps_are_recognised_by_name_or_stream_properties() {
+        let input = |app: &str, hints: Option<&str>, role: Option<&str>| SinkInputInfo {
+            index: 1,
+            sink: 1,
+            corked: false,
+            app: Some(app.into()),
+            role: role.map(Into::into),
+            hints: hints.map(Into::into),
+        };
+        let playing = |i: SinkInputInfo| {
+            PulseSnapshot {
+                sink_inputs: vec![i],
+                ..Default::default()
+            }
+            .playing_streams()
+            .len()
+                == 1
+        };
+        // David's setup: Plex and Brave play; EasyEffects and Discord don't count.
+        assert!(playing(input("Plex", Some("plex plex"), Some("video"))));
+        assert!(playing(input("Brave", Some("brave brave"), None)));
+        assert!(!playing(input("easyeffects", None, None)));
+        assert!(!playing(input("WEBRTC VoiceEngine", None, Some("phone"))));
+        // Effects and plumbing, by name or by node.
+        assert!(!playing(input("JamesDSP", None, None)));
+        assert!(!playing(input(
+            "PipeWire",
+            Some("pipewire loopback-123-17"),
+            None
+        )));
+        assert!(!playing(input(
+            "PipeWire",
+            Some("pipewire filter-chain-1"),
+            None
+        )));
+        // Call apps, by name, binary or role.
+        assert!(!playing(input("ZOOM VoiceEngine", None, None)));
+        assert!(!playing(input("Teams", Some("teams-for-linux"), None)));
+        assert!(!playing(input("Chromium", None, Some("communication"))));
+        // Whole words only: a game called Signalis plays.
+        assert!(playing(input(
+            "SIGNALIS",
+            Some("signalis.exe"),
+            Some("game")
+        )));
+        assert!(playing(input("Steam", Some("steamwebhelper"), None)));
+    }
+
+    #[test]
+    fn access_denied_is_called_out() {
+        assert_eq!(
+            failure("set default source", "Access denied"),
+            PulseError::Failed(
+                "set default source: the sound server refused (access denied)".into()
+            )
+        );
+        assert_eq!(
+            failure("set default source", "No such entity"),
+            PulseError::Failed("set default source".into())
+        );
+    }
+
+    #[test]
+    fn server_kind_from_name() {
+        assert_eq!(server_kind("PulseAudio (on PipeWire 1.2.7)"), "PipeWire");
+        assert_eq!(server_kind("pulseaudio"), "PulseAudio");
+    }
+
+    #[test]
+    fn noise_suppression_recording_is_no_call() {
+        let snap = PulseSnapshot {
+            sources: vec![SourceInfo {
+                index: 1,
+                card: None,
+                is_monitor: false,
+            }],
+            source_outputs: vec![SourceOutputInfo {
+                index: 9,
+                source: 1,
+                corked: false,
+                app: Some("noisetorch".into()),
+                hints: None,
+            }],
+            ..Default::default()
+        };
+        assert!(!snap.voice_in_use());
     }
 
     #[test]
@@ -1051,6 +1226,7 @@ mod tests {
                 source: 1,
                 corked: false,
                 app: None,
+                hints: None,
             }],
             ..Default::default()
         };
@@ -1061,6 +1237,7 @@ mod tests {
             source: 2,
             corked: true,
             app: None,
+            hints: None,
         });
         assert!(!s2.is_recording_from_card(7));
         s2.source_outputs.push(SourceOutputInfo {
@@ -1068,6 +1245,7 @@ mod tests {
             source: 2,
             corked: false,
             app: None,
+            hints: None,
         });
         assert!(s2.is_recording_from_card(7));
         assert!(!s2.is_recording_from_card(8));
