@@ -10,7 +10,7 @@ afterwards.
 
 Needs mic-test.py in the same folder. Stops Kase while it runs and starts it
 again at the end. Refuses to run while a game is open. Results go to
-~/bazzitepods-mictest/abtest-*/.
+~/kase-mictest/abtest-*/.
 """
 
 import importlib.util
@@ -48,7 +48,7 @@ def main():
         mt.say("No connected AirPods found. Put them in your ears, connect them, and run again.")
         return 1
     mt.say(f"AirPods: {name} ({mac})")
-    was_running = mt.bazzitepods_running()
+    was_running = mt.kase_running()
     mt.snapshot("before")
 
     mt.wait_enter("Put both AirPods in your ears and start some music you know well "
@@ -113,7 +113,7 @@ def main():
             l for l in journal_since(since).splitlines()
             if any(k in l for k in ("bitpool", "AAC:", "bitrate", "fail flush", "transport"))))
         if was_running:
-            mt.restart_bazzitepods()
+            mt.restart_kase()
             mt.say("Kase started again.")
         archive = mt.OUT + ".tar.gz"
         import tarfile

@@ -17,7 +17,7 @@
 
 use super::packets::ELD_SAMPLE_RATE;
 use super::stream::{Liveness, fifo_path, make_fifo};
-use super::{MicRoute, SOURCE_NAME};
+use super::{MicRoute, OLD_SOURCE_NAME, SOURCE_NAME};
 use crate::audio::pulse::MicSnapshot;
 use log::{info, warn};
 use serde::{Deserialize, Serialize};
@@ -269,11 +269,11 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
         let Ok(snap) = self.host.snapshot().await else {
             return;
         };
-        for m in snap
-            .modules
-            .iter()
-            .filter(|m| m.argument.contains(SOURCE_NAME))
-        {
+        for m in snap.modules.iter().filter(|m| {
+            [SOURCE_NAME, OLD_SOURCE_NAME]
+                .iter()
+                .any(|n| m.argument.contains(&format!("source_name={n}")))
+        }) {
             info!("[mic] removing a virtual mic left over from an earlier run");
             let _ = self.host.unload(m.index).await;
         }
@@ -292,14 +292,16 @@ impl<H: MicHost, L: MicLink> Switch<H, L> {
         }
         let _ = std::fs::remove_file(&self.cfg.state_path);
         let _ = std::fs::remove_file(&self.cfg.fifo);
+        let _ = std::fs::remove_file(super::stream::old_fifo_path());
     }
 
     async fn use_airpods_mic(&mut self) -> Result<(), String> {
         let snap = self.host.snapshot().await?;
-        let desk = snap
-            .default_source
-            .clone()
-            .filter(|s| s != SOURCE_NAME && snap.source(s).is_some_and(|x| !x.is_monitor));
+        let desk = snap.default_source.clone().filter(|s| {
+            s != SOURCE_NAME
+                && s != OLD_SOURCE_NAME
+                && snap.source(s).is_some_and(|x| !x.is_monitor)
+        });
         let restore_ca = self.link.conversation_awareness().await == Some(true);
         save(
             &self.cfg.state_path,

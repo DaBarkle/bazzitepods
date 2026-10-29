@@ -34,7 +34,9 @@ use switch::{MicHost, MicLink};
 use tokio::sync::{broadcast, mpsc};
 
 /// Name of the virtual mic in PipeWire.
-pub const SOURCE_NAME: &str = "bazzitepods_airpods_mic";
+pub const SOURCE_NAME: &str = "kase_airpods_mic";
+/// Its name before 0.8.0: one left behind by an older build is removed like our own.
+pub const OLD_SOURCE_NAME: &str = "bazzitepods_airpods_mic";
 
 /// Which mic the PC is using.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -204,7 +206,7 @@ mod tests {
     fn pipe_source_arguments() {
         let [quoted, plain] = pipe_source_args(Path::new("/run/user/1000/app/x/airpods-mic.fifo"));
         assert!(quoted.starts_with(
-            "source_name=bazzitepods_airpods_mic file=/run/user/1000/app/x/airpods-mic.fifo format=s16le rate=64000 channels=1"
+            "source_name=kase_airpods_mic file=/run/user/1000/app/x/airpods-mic.fifo format=s16le rate=64000 channels=1"
         ));
         assert!(quoted.contains("device.description=\"AirPods mic\""));
         assert!(plain.contains("device.description=AirPods_mic node.driver=false"));

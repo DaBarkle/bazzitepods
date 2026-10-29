@@ -238,7 +238,7 @@ Bluetooth settings back. No terminal needed.
 <br>
 
 Kase adds `DeviceID = bluetooth:004C:0000:0000` under `[General]` in
-`/etc/bluetooth/main.conf` (keeping a one-time backup at `main.conf.bak-bazzitepods`) and
+`/etc/bluetooth/main.conf` (keeping a one-time backup at `main.conf.bak-kase`) and
 restarts Bluetooth. If you had set a `DeviceID` yourself, it's commented out and restored
 when you turn the mode off. The script is a constant built into the app
 ([`apple_mode.rs`](linux-rust/src/apple_mode.rs)) and runs through the standard system
@@ -248,7 +248,7 @@ are kept across system updates (Bazzite and other image-based systems included),
 To turn it on by hand:
 
 ```bash
-sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-bazzitepods
+sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-kase
 sudo sed -i '/^\[General\]/a DeviceID = bluetooth:004C:0000:0000' /etc/bluetooth/main.conf
 sudo systemctl restart bluetooth
 ```

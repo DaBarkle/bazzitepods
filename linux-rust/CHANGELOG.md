@@ -27,6 +27,10 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
   so clearly in the log, and a sound server that refuses Kase's mixer rights is logged as
   such instead of a bare failure. ([#33])
 
+- **The last "BazzitePods" names are gone.** The virtual mic is now `kase_airpods_mic`, and
+  Apple device mode keeps its backup at `main.conf.bak-kase`. Leftovers from older builds
+  (the old virtual mic, pipe and parked DeviceID line) are still found, cleaned up and
+  undone. ([#35])
 - **Coming back to a KDE desktop brings the AirPods back.** KDE never marks the session idle
   in logind, so Kase now also listens for the screen saver ending (KDE and GNOME). ([#34])
 - **Fullscreen transparency on Plasma 5.** The KWin script works with Plasma 5's window
@@ -386,3 +390,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#32]: https://github.com/DaBarkle/kase/pull/32
 [#33]: https://github.com/DaBarkle/kase/pull/33
 [#34]: https://github.com/DaBarkle/kase/pull/34
+[#35]: https://github.com/DaBarkle/kase/pull/35

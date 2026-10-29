@@ -27,8 +27,16 @@ pub fn fifo_path() -> PathBuf {
         .unwrap_or_else(std::env::temp_dir);
     match std::env::var("FLATPAK_ID") {
         Ok(id) if !id.is_empty() => runtime.join("app").join(id).join("airpods-mic.fifo"),
-        _ => runtime.join("bazzitepods-airpods-mic.fifo"),
+        _ => runtime.join("kase-airpods-mic.fifo"),
     }
+}
+
+/// The pipe's name outside Flatpak before 0.8.0, cleaned up if an old run left it.
+pub fn old_fifo_path() -> PathBuf {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("bazzitepods-airpods-mic.fifo")
 }
 
 /// Makes a fresh pipe at `path` (owner-only).
