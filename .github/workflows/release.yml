@@ -1,0 +1,111 @@
+# Publishes a Kase release by itself when a version bump reaches main, so a release never
+# needs a trip to the GitHub website.
+#
+# How a release happens:
+#   1. A pull request bumps `version` in linux-rust/Cargo.toml (for example to 0.7.0) and
+#      adds the release notes as linux-rust/release-notes/v0.7.0.md. The notes start with a
+#      "# Kase 0.7.0" title line, which becomes the release title.
+#   2. The pull request merges into main.
+#   3. This workflow sees a version with no tag yet, builds Kase.flatpak, then creates the
+#      v0.7.0 tag and the GitHub release with the notes and the bundle attached, all at once.
+#      The install command never sees a release without its bundle.
+#
+# Merges that don't change the version do nothing. A version bump without a notes file fails
+# with a clear message instead of publishing a release with no notes. If a run fails, fix
+# the cause and start it again with "Run workflow" (workflow_dispatch).
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'linux-rust/Cargo.toml'
+      - 'linux-rust/release-notes/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+# One release at a time, and never cancel one half way.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check for a new version
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.version.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Read the version and look for its tag and notes
+        id: version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          version="$(sed -n 's/^version *= *"\(.*\)"/\1/p' linux-rust/Cargo.toml | head -n1)"
+          if [ -z "$version" ]; then
+            echo "::error::Could not read the version from linux-rust/Cargo.toml."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if gh api "repos/$REPO/git/ref/tags/v$version" >/dev/null 2>&1; then
+            echo "v$version is already released. Nothing to do."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          notes="linux-rust/release-notes/v$version.md"
+          if [ ! -s "$notes" ]; then
+            echo "::error::Version $version has no release notes. Add $notes, then run this workflow again."
+            exit 1
+          fi
+          if ! head -n1 "$notes" | grep -q '^# '; then
+            echo "::error::$notes must start with a title line such as '# Kase $version'."
+            exit 1
+          fi
+          echo "Releasing v$version."
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: check
+    if: needs.check.outputs.release == 'true'
+    uses: ./.github/workflows/flatpak.yml
+    permissions:
+      contents: write
+
+  publish:
+    name: Publish the release
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the release
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download the bundle
+        uses: actions/download-artifact@v7
+        with:
+          name: Kase.flatpak
+
+      - name: Create the tag and the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          notes="linux-rust/release-notes/v$VERSION.md"
+          title="$(head -n1 "$notes" | sed 's/^# *//')"
+          # The title line becomes the release title, so leave it out of the body.
+          tail -n +2 "$notes" > body.md
+          # --generate-notes adds GitHub's "What's Changed" list under the notes, as before.
+          gh release create "v$VERSION" Kase.flatpak \
+            --target "$GITHUB_SHA" \
+            --title "$title" \
+            --notes-file body.md \
+            --generate-notes \
+            --latest

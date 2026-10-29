@@ -15,10 +15,14 @@ on:
   # and a check that never starts would leave the PR unmergeable.
   pull_request:
   workflow_dispatch:
+  # The Release workflow (release.yml) calls this to build the bundle it publishes.
+  workflow_call:
 
+# github.workflow keeps a release build in its own group, so a normal push build of the
+# same commit can't cancel it. Release builds are never cancelled half way.
 concurrency:
-  group: flatpak-${{ github.ref }}
-  cancel-in-progress: true
+  group: flatpak-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.workflow != 'Release' }}
 
 jobs:
   flatpak:
