@@ -10,7 +10,7 @@ use crate::hub::{AdapterState, Hub};
 use crate::ui::messages::BluetoothUIMessage;
 use crate::{
     QUIT, audio, autostart, battery_service, bluetooth, devices, disconnect_watch,
-    fullscreen_watch, overlay_feed, request_quit, sleep_monitor, ui, utils,
+    fullscreen_watch, overlay_feed, request_quit, sleep_monitor, toplevel_watch, ui, utils,
 };
 use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, DeviceProperty};
 use futures::StreamExt;
@@ -53,12 +53,22 @@ pub async fn run(
     let battery = BatteryService::spawn(hub.clone());
     overlay_feed::spawn(hub.clone(), settings);
     fullscreen_watch::spawn();
+    toplevel_watch::spawn();
 
     // Zero-config: register for login autostart unless the user switched it off.
     tokio::spawn(async {
         let enabled = utils::app_setting_bool("start_at_login").unwrap_or(true);
         if let Err(e) = autostart::ensure_autostart(enabled).await {
             info!("Autostart registration skipped: {e}");
+            // No Background portal (Sway, Hyprland, COSMIC...): say once how to do it by hand.
+            if enabled && autostart::running_in_flatpak() {
+                let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+                let hint = autostart::startup_hint(&desktop);
+                info!("To start Kase at login: {hint}");
+                if utils::first_time("autostart") {
+                    crate::overlay_feed::notify("Start Kase at login".into(), hint);
+                }
+            }
         }
     });
     if !no_tray {

@@ -63,6 +63,24 @@ pub async fn ensure_autostart(enable: bool) -> Result<(), String> {
     }
 }
 
+/// How to start Kase at login by hand, for desktops without a Background portal (Sway,
+/// Hyprland, niri, COSMIC...). `desktop` is `$XDG_CURRENT_DESKTOP`.
+pub fn startup_hint(desktop: &str) -> String {
+    const CMD: &str = "flatpak run io.github.dabarkle.Kase --start-minimized";
+    let d = desktop.to_ascii_lowercase();
+    if d.contains("hyprland") {
+        format!("Add this line to ~/.config/hypr/hyprland.conf: exec-once = {CMD}")
+    } else if d.contains("sway") {
+        format!("Add this line to ~/.config/sway/config: exec {CMD}")
+    } else if d.contains("niri") {
+        "Add this line to ~/.config/niri/config.kdl: spawn-at-startup \"flatpak\" \"run\" \
+         \"io.github.dabarkle.Kase\" \"--start-minimized\""
+            .into()
+    } else {
+        format!("Add this command to your desktop's startup applications: {CMD}")
+    }
+}
+
 /// True when running inside a Flatpak sandbox.
 pub fn running_in_flatpak() -> bool {
     Path::new("/.flatpak-info").exists()
@@ -292,6 +310,17 @@ fn quote_exec_arg(arg: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn startup_hint_names_the_right_config() {
+        assert!(
+            super::startup_hint("Hyprland")
+                .contains("exec-once = flatpak run io.github.dabarkle.Kase --start-minimized")
+        );
+        assert!(super::startup_hint("sway").contains("~/.config/sway/config: exec flatpak run"));
+        assert!(super::startup_hint("niri").contains("spawn-at-startup"));
+        assert!(super::startup_hint("COSMIC").contains("startup applications"));
+    }
+
     use super::*;
 
     /// A fresh directory under the system temp dir, used as XDG_CONFIG_HOME.

@@ -27,7 +27,21 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
   so clearly in the log, and a sound server that refuses Kase's mixer rights is logged as
   such instead of a bare failure. ([#33])
 
+- **Coming back to a KDE desktop brings the AirPods back.** KDE never marks the session idle
+  in logind, so Kase now also listens for the screen saver ending (KDE and GNOME). ([#34])
+- **Fullscreen transparency on Plasma 5.** The KWin script works with Plasma 5's window
+  API as well as Plasma 6's. ([#34])
+- **The island survives GPU trouble.** If it keeps crashing on start (NVIDIA without a
+  matching Flatpak driver, no Vulkan), it tries once more drawing in software before
+  falling back to notifications. ([#34])
+- **The tray appears as soon as the panel does**, instead of up to 30 seconds later, and
+  GNOME users are told once to turn on the AppIndicator extension. ([#34])
+
 ### Added
+- **Fullscreen transparency on Sway, Hyprland and niri**, from the compositor's window list
+  (wlr foreign-toplevel management). ([#34])
+- **Start at login on Sway, Hyprland, niri and COSMIC.** Where the desktop can't register
+  Kase itself, it tells you once, in a notification and the log, the exact line to add. ([#34])
 - **Diagnostics** in Settings: which Bluetooth adapter is in use and whether it's on or
   blocked, AAC or SBC-only (with why), whether battery-while-away uses the advertisement
   monitor or fallback scanning, and a warning for Bluetooth chips known to struggle with
@@ -371,3 +385,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#31]: https://github.com/DaBarkle/kase/pull/31
 [#32]: https://github.com/DaBarkle/kase/pull/32
 [#33]: https://github.com/DaBarkle/kase/pull/33
+[#34]: https://github.com/DaBarkle/kase/pull/34

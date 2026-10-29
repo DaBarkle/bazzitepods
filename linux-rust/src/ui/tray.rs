@@ -252,8 +252,9 @@ pub async fn run_tray(
 ) {
     let cache: IconCache = Arc::new(Mutex::new(HashMap::new()));
     let in_flatpak = crate::autostart::running_in_flatpak();
-    // No StatusNotifierWatcher (e.g. GNOME without the AppIndicator extension): retry quietly,
-    // the rest of the app works without a tray.
+    // No StatusNotifierWatcher (e.g. GNOME without the AppIndicator extension): try again as
+    // soon as one appears; the rest of the app works without a tray.
+    let mut hinted = false;
     let handle = loop {
         let tray = LibreTray {
             snap: hub.snapshot(),
@@ -266,7 +267,12 @@ pub async fn run_tray(
             Ok(h) => break h,
             Err(e) => {
                 debug!("Tray not available yet: {e}");
-                tokio::time::sleep(Duration::from_secs(30)).await;
+                if !hinted {
+                    hinted = true;
+                    gnome_hint();
+                }
+                let _ = tokio::task::spawn_blocking(|| wait_for_watcher(Duration::from_secs(300)))
+                    .await;
             }
         }
     };
@@ -284,6 +290,56 @@ pub async fn run_tray(
         if rx.changed().await.is_err() {
             return;
         }
+    }
+}
+
+const WATCHER: &str = "org.kde.StatusNotifierWatcher";
+
+/// Blocks until a StatusNotifierWatcher appears on the session bus, or `limit` passes.
+fn wait_for_watcher(limit: Duration) {
+    use dbus::message::MatchRule;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let Ok(conn) = dbus::blocking::Connection::new_session() else {
+        std::thread::sleep(limit);
+        return;
+    };
+    let appeared = Arc::new(AtomicBool::new(false));
+    let flag = appeared.clone();
+    let rule = MatchRule::new_signal("org.freedesktop.DBus", "NameOwnerChanged");
+    let added = conn.add_match(
+        rule,
+        move |(name, _, new): (String, String, String), _, _| {
+            if name == WATCHER && !new.is_empty() {
+                flag.store(true, Ordering::SeqCst);
+            }
+            true
+        },
+    );
+    if added.is_err() {
+        std::thread::sleep(limit);
+        return;
+    }
+    let end = std::time::Instant::now() + limit;
+    while !appeared.load(Ordering::SeqCst) && std::time::Instant::now() < end {
+        if conn.process(Duration::from_secs(1)).is_err() {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
+    // Give the watcher a moment to finish starting before registering with it.
+    std::thread::sleep(Duration::from_millis(500));
+}
+
+/// GNOME shows tray icons only with the AppIndicator extension: say so, once.
+fn gnome_hint() {
+    let desktop = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default();
+    if desktop.to_ascii_lowercase().contains("gnome") && crate::utils::first_time("tray-gnome") {
+        log::info!("No tray on this GNOME session: the AppIndicator extension is off");
+        crate::overlay_feed::notify(
+            "Show Kase in the top bar".into(),
+            "Turn on the AppIndicator extension (\"AppIndicator and KStatusNotifierItem \
+             Support\") in Extensions. Ubuntu has it built in."
+                .into(),
+        );
     }
 }
 

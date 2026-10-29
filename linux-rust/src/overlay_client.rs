@@ -65,6 +65,7 @@ impl OverlayClient {
             quick_exits: 0,
             gave_up: false,
             started_at: None,
+            software: false,
         };
         let thread = std::thread::Builder::new()
             .name("overlay-client".into())
@@ -181,6 +182,8 @@ struct Supervisor {
     /// No more starts: the overlay can't run here, so notifications stand in for it.
     gave_up: bool,
     started_at: Option<Instant>,
+    /// Drawing in software (tiny-skia) after the GPU path kept crashing.
+    software: bool,
 }
 
 const LATE_RETRIES: u8 = 2;
@@ -241,7 +244,11 @@ impl Supervisor {
             return;
         }
         self.starts.push_back(now);
-        let spawned = Command::new(binary)
+        let mut cmd = Command::new(binary);
+        if self.software {
+            cmd.env("ICED_BACKEND", "tiny-skia");
+        }
+        let spawned = cmd
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -328,6 +335,22 @@ impl Supervisor {
             self.quick_exits += 1;
         } else {
             self.quick_exits = 0;
+        }
+        // A GPU or driver problem: one more try drawing in software, unless the user already
+        // picked a backend. One quick exit from that ends it.
+        if self.quick_exits >= MAX_QUICK_EXITS
+            && !self.software
+            && std::env::var_os("ICED_BACKEND").is_none()
+        {
+            warn!(
+                "overlay: crashed {} times right after starting ({status}); retrying with software drawing",
+                self.quick_exits
+            );
+            self.software = true;
+            self.quick_exits = MAX_QUICK_EXITS - 1;
+            self.starts.clear();
+            self.next_start = Instant::now();
+            return;
         }
         if self.quick_exits >= MAX_QUICK_EXITS {
             warn!(
@@ -440,6 +463,7 @@ mod tests {
             quick_exits: 0,
             gave_up: false,
             started_at: None,
+            software: false,
         };
         // The first run plus LATE_RETRIES retries, then no more.
         for _ in 0..=LATE_RETRIES {
@@ -465,6 +489,19 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         assert!(c.unsupported());
+    }
+
+    #[test]
+    fn gpu_crash_loop_retries_once_in_software() {
+        // Dies at once unless told to draw in software, then keeps running.
+        let bin = script(
+            "gpucrash",
+            "[ \"$ICED_BACKEND\" = tiny-skia ] || exit 1; while read -r l; do :; done",
+        );
+        let c = OverlayClient::spawn_with_binary(OverlayConfig::default(), Some(bin));
+        std::thread::sleep(Duration::from_secs(8));
+        assert!(!c.unsupported());
+        c.shutdown();
     }
 
     #[test]

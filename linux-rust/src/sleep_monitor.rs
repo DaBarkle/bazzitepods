@@ -16,9 +16,42 @@ pub fn spawn(kick_tx: UnboundedSender<Kick>) {
     // rely on BlueZ disconnect events and the periodic sweep.
     tokio::spawn(crate::disconnect_watch::keep_watching(
         "Sleep monitor",
-        kick_tx,
+        kick_tx.clone(),
         run,
     ));
+    // KDE never sets logind's IdleHint; its screen saver (and GNOME's) say so on the
+    // session bus instead.
+    tokio::spawn(crate::disconnect_watch::keep_watching(
+        "Screen saver monitor",
+        kick_tx,
+        run_screensaver,
+    ));
+}
+
+/// Screen savers that announce `ActiveChanged(false)` when the screen wakes or unlocks.
+const SCREENSAVERS: [&str; 2] = ["org.freedesktop.ScreenSaver", "org.gnome.ScreenSaver"];
+
+async fn run_screensaver(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {
+    let (resource, conn) = dbus_tokio::connection::new_session_sync()?;
+    let lost = tokio::spawn(resource);
+    let mut matches = Vec::new();
+    for iface in SCREENSAVERS {
+        let tx = kick_tx.clone();
+        let m = conn
+            .add_match(MatchRule::new_signal(iface, "ActiveChanged"))
+            .await?
+            .cb(move |_, (active,): (bool,)| {
+                if !active {
+                    info!("Screen saver ended; checking the AirPods");
+                    let _ = tx.send(Kick::UserActive);
+                }
+                true
+            });
+        matches.push(m);
+    }
+    let err = lost.await;
+    debug!("session bus connection ended: {err:?}");
+    Ok(())
 }
 
 async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {

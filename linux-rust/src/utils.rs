@@ -97,6 +97,17 @@ pub fn ah(k: &[u8; 16], r: &[u8; 3]) -> [u8; 3] {
     hash
 }
 
+/// True the first time this is asked for `name`, for hints shown once per user.
+pub fn first_time(name: &str) -> bool {
+    let dir = state_home().join(DIR_NAME).join("hints");
+    std::fs::create_dir_all(&dir).is_ok()
+        && std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(name))
+            .is_ok()
+}
+
 /// Read a boolean from app_settings.json, if present.
 pub fn app_setting_bool(key: &str) -> Option<bool> {
     std::fs::read_to_string(get_app_settings_path())

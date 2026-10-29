@@ -77,7 +77,7 @@ const RETRY_MIN: std::time::Duration = if cfg!(test) {
 };
 const RETRY_MAX: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Runs a system-bus signal watcher for the life of the app: `run` returns when the bus
+/// Runs a D-Bus signal watcher for the life of the app: `run` returns when the bus
 /// connection is lost (bluetoothd or D-Bus restarted), and is started again with a backoff.
 pub(crate) async fn keep_watching<F, Fut>(what: &str, kick_tx: UnboundedSender<Kick>, run: F)
 where
@@ -88,7 +88,7 @@ where
     while !kick_tx.is_closed() {
         let started = std::time::Instant::now();
         match run(kick_tx.clone()).await {
-            Ok(()) => info!("{what}: system bus connection lost; reconnecting"),
+            Ok(()) => info!("{what}: bus connection lost; reconnecting"),
             Err(e) => info!("{what} unavailable: {e}"),
         }
         if started.elapsed() > RETRY_MAX {
