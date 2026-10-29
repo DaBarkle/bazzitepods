@@ -31,14 +31,15 @@ use tokio::process::Command;
 const SCRIPT: &str = r#"set -eu
 f=/etc/bluetooth/main.conf
 ours='DeviceID = bluetooth:004C:0000:0000'
-mark='#bazzitepods-disabled# '
+mark='#kase-disabled# '
+old_mark='#bazzitepods-disabled# '
 if [ ! -f "$f" ]; then
   mkdir -p /etc/bluetooth
   printf '[General]\n' > "$f"
 fi
 case "${1:-}" in
   on)
-    [ -e "$f.bak-bazzitepods" ] || cp -a "$f" "$f.bak-bazzitepods"
+    [ -e "$f.bak-kase" ] || [ -e "$f.bak-bazzitepods" ] || cp -a "$f" "$f.bak-kase"
     sed -i '/^[[:space:]]*DeviceID[[:space:]]*=[[:space:]]*bluetooth:004C:/d' "$f"
     sed -i "s|^\([[:space:]]*DeviceID[[:space:]]*=\)|$mark\1|" "$f"
     if grep -q '^[[:space:]]*\[General\]' "$f"; then
@@ -51,7 +52,7 @@ case "${1:-}" in
     ;;
   off)
     sed -i '/^[[:space:]]*DeviceID[[:space:]]*=[[:space:]]*bluetooth:004C:/d' "$f"
-    sed -i "s|^$mark||" "$f"
+    sed -i "s|^$mark||; s|^$old_mark||" "$f"
     ;;
   *)
     exit 2
@@ -130,7 +131,7 @@ pub fn manual_command(on: bool, host: Host) -> String {
     };
     if on {
         format!(
-            "sudo cp -a {CONF} {CONF}.bak-bazzitepods && \
+            "sudo cp -a {CONF} {CONF}.bak-kase && \
 sudo sed -i '/^\\[General\\]/a DeviceID = bluetooth:004C:0000:0000' {CONF} && \
 {restart}"
         )
@@ -232,13 +233,10 @@ pub async fn status() -> Option<bool> {
 pub async fn set(on: bool) -> Result<bool, Failure> {
     let arg = if on { "on" } else { "off" };
     info!("Apple device mode: asking pkexec to turn it {arg}");
-    let out = host_command(
-        "pkexec",
-        &["/bin/sh", "-c", SCRIPT, "bazzitepods-apple-mode", arg],
-    )
-    .output()
-    .await
-    .map_err(|e| Failure::Other(e.to_string()))?;
+    let out = host_command("pkexec", &["/bin/sh", "-c", SCRIPT, "kase-apple-mode", arg])
+        .output()
+        .await
+        .map_err(|e| Failure::Other(e.to_string()))?;
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -290,7 +288,7 @@ mod tests {
     /// Runs the root script's file edits against a temp copy (no systemctl, no /etc).
     fn run(conf: &str, arg: &str) -> String {
         let dir = std::env::temp_dir().join(format!(
-            "bazzitepods-apple-{}-{}",
+            "kase-apple-{}-{}",
             std::process::id(),
             rand_suffix()
         ));
@@ -381,9 +379,18 @@ mod tests {
         let on = run(conf, "on");
         assert_eq!(
             on,
-            "[General]\nDeviceID = bluetooth:004C:0000:0000\n#bazzitepods-disabled# DeviceID = bluetooth:1d6b:0246:0540\n"
+            "[General]\nDeviceID = bluetooth:004C:0000:0000\n#kase-disabled# DeviceID = bluetooth:1d6b:0246:0540\n"
         );
         assert_eq!(run(&on, "off"), conf);
+    }
+
+    #[test]
+    fn a_device_id_parked_by_an_older_build_is_restored() {
+        let conf = "[General]\nDeviceID = bluetooth:004C:0000:0000\n#bazzitepods-disabled# DeviceID = bluetooth:1d6b:0246:0540\n";
+        assert_eq!(
+            run(conf, "off"),
+            "[General]\nDeviceID = bluetooth:1d6b:0246:0540\n"
+        );
     }
 
     #[test]

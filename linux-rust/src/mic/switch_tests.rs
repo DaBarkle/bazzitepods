@@ -260,10 +260,10 @@ async fn left_hold_switches_to_the_airpods_mic_and_back() {
             "load",
             "decoder",
             "start",
-            "default:bazzitepods_airpods_mic",
+            "default:kase_airpods_mic",
             "ca:false",
             "chime:AirPods",
-            "move:41->bazzitepods_airpods_mic",
+            "move:41->kase_airpods_mic",
         ]
     );
     assert_eq!(
@@ -398,6 +398,12 @@ async fn recovers_from_a_crash_on_the_airpods_mic() {
         name: "module-null-sink".into(),
         argument: "sink_name=other".into(),
     });
+    // One left by a build from before the rename goes too.
+    world.snap.modules.push(ModuleEntry {
+        index: 14,
+        name: "module-pipe-source".into(),
+        argument: format!("source_name={} file=/y", super::super::OLD_SOURCE_NAME),
+    });
     let rig = rig_with(world, Duration::from_secs(60), |cfg| {
         save(
             &cfg.state_path,
@@ -408,7 +414,10 @@ async fn recovers_from_a_crash_on_the_airpods_mic() {
         );
     });
     settle(100).await;
-    assert_eq!(log(&rig), ["unload:12", "default:yeti", "ca:true"]);
+    assert_eq!(
+        log(&rig),
+        ["unload:12", "unload:14", "default:yeti", "ca:true"]
+    );
     assert!(!rig.dir.join("mic_switch.json").exists());
 }
 
@@ -433,7 +442,7 @@ async fn an_app_that_opens_the_desk_mic_later_is_moved_too() {
         .recordings
         .push(recording(50, 3, "Discord"));
     settle(250).await;
-    assert!(log(&rig).contains(&"move:50->bazzitepods_airpods_mic".to_string()));
+    assert!(log(&rig).contains(&"move:50->kase_airpods_mic".to_string()));
     {
         let w = lock(&rig.world);
         assert_eq!(
@@ -473,7 +482,7 @@ async fn apps_on_the_easyeffects_mic_move_to_the_airpods_mic_and_back() {
     settle(250).await;
     let l = log(&rig);
     assert!(
-        l.contains(&"move:86->bazzitepods_airpods_mic".to_string()),
+        l.contains(&"move:86->kase_airpods_mic".to_string()),
         "{l:?}"
     );
 

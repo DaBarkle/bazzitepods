@@ -110,7 +110,7 @@ back from another device, and whenever they report a different claim (at most ev
   `dlopen` and decodes with its native `aac` decoder; the stream is 64 kHz mono, 480-sample
   frames. The decoder context needs a sample rate set (48 kHz, as the ASC states) or FFmpeg
   rejects every ELD frame. Gain control (`agc.rs`), then s16 into a FIFO (`stream.rs`).
-* **Virtual mic:** pipewire-pulse `module-pipe-source` named `bazzitepods_airpods_mic`
+* **Virtual mic:** pipewire-pulse `module-pipe-source` named `kase_airpods_mic` (`bazzitepods_airpods_mic` before 0.8.0)
   ("AirPods mic"), reading that FIFO from the app's runtime directory.
 * **Switching (`switch.rs`):** the desk mic is remembered on disk (`mic_switch.json`, for
   crash recovery), and the virtual mic becomes the default. After 1.5 s, and every 2 s

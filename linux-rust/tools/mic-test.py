@@ -11,7 +11,7 @@ Checks, on real hardware, what the planned "roam mic" feature depends on:
 
 It stops Kase while it runs and starts it again at the end, and puts the
 stem settings back as they were. It never touches games: it refuses to run while
-one is open. Results go to ~/bazzitepods-mictest/. Python standard library only.
+one is open. Results go to ~/kase-mictest/. Python standard library only.
 """
 
 import datetime
@@ -41,7 +41,7 @@ MIC_START = bytes([0x04, 0x00, 0x04, 0x00, 0x58, 0x00, 0x00, 0x00, 0x09, 0x00,
 MIC_STOP = bytes([0x04, 0x00, 0x04, 0x00, 0x58, 0x00, 0x00, 0x00, 0x02, 0x00, 0x03, 0x01])
 STEM_CONFIG = 0x39  # raw gestures bitmask: single 1, double 2, triple 4, long 8
 
-OUT = os.path.expanduser("~/bazzitepods-mictest/run-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
+OUT = os.path.expanduser("~/kase-mictest/run-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S"))
 T0 = time.monotonic()
 # Totals across reconnects.
 STATS = {"mic_sdus": 0, "mic_bytes": 0, "stem_events": []}
@@ -276,12 +276,12 @@ def stem_control_setting():
     return False, None
 
 
-def bazzitepods_running():
+def kase_running():
     return APP_ID in run(["flatpak", "ps", "--columns=application"])
 
 
-def restart_bazzitepods():
-    if bazzitepods_running():
+def restart_kase():
+    if kase_running():
         return
     subprocess.Popen(["flatpak", "run", APP_ID, "--start-minimized"], stdout=subprocess.DEVNULL,
                      stderr=subprocess.DEVNULL, start_new_session=True)
@@ -315,8 +315,8 @@ def main():
     say(f"AirPods: {name} ({mac})")
     stem_on, settings_path = stem_control_setting()
     note(f"stem_control={stem_on} settings={settings_path}")
-    was_running = bazzitepods_running()
-    note(f"bazzitepods_running={was_running}")
+    was_running = kase_running()
+    note(f"kase_running={was_running}")
 
     snapshot("before")
     save("easyeffects.txt", "\n".join([
@@ -407,7 +407,7 @@ def main():
         with open(os.path.join(OUT, "summary.json"), "w") as f:
             json.dump({"airpods": name, "mac": mac, "stem_control": stem_on, **STATS}, f, indent=1)
         if was_running:
-            restart_bazzitepods()
+            restart_kase()
             say("Kase started again.")
         archive = OUT + ".tar.gz"
         with tarfile.open(archive, "w:gz") as tar:
