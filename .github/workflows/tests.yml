@@ -78,6 +78,10 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
 
+      # shellcheck is preinstalled on GitHub's Ubuntu runners.
+      - name: Check installer scripts
+        run: shellcheck packaging/*.sh
+
       - name: Lint
         run: cargo clippy --all-targets --locked -- -D warnings
 

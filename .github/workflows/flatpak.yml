@@ -53,7 +53,7 @@ jobs:
           bundle: Kase.flatpak
           # cargo-sources.json lists only third-party crates, so unlike Cargo.lock it does
           # not change with every version bump of the app itself.
-          cache-key: flatpak-builder-${{ hashFiles('linux-rust/flatpak/cargo-sources.json') }}
+          cache-key: flatpak-builder-x86_64-${{ hashFiles('linux-rust/flatpak/cargo-sources.json') }}
           upload-artifact: false
 
       - name: Upload bundle artifact
@@ -70,5 +70,45 @@ jobs:
           tag_name: ${{ github.ref_name }}
           files: Kase.flatpak
           generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # The same bundle for 64-bit ARM (Raspberry Pi 5, Asahi Linux, ARM laptops), built natively
+  # on GitHub's ARM runner. Not a required check, and a failure here never blocks a release:
+  # the release then ships x86_64 only.
+  flatpak-aarch64:
+    name: Build Flatpak bundle (aarch64)
+    runs-on: ubuntu-24.04-arm
+    continue-on-error: true
+    permissions:
+      contents: write
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-26.08
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          manifest-path: linux-rust/flatpak/io.github.dabarkle.Kase.yml
+          bundle: Kase-aarch64.flatpak
+          arch: aarch64
+          cache-key: flatpak-builder-aarch64-${{ hashFiles('linux-rust/flatpak/cargo-sources.json') }}
+          upload-artifact: false
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: Kase-aarch64.flatpak
+          path: Kase-aarch64.flatpak
+          if-no-files-found: error
+
+      - name: Attach bundle to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          files: Kase-aarch64.flatpak
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

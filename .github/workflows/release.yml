@@ -6,9 +6,10 @@
 #      adds the release notes as linux-rust/release-notes/v0.7.0.md. The notes start with a
 #      "# Kase 0.7.0" title line, which becomes the release title.
 #   2. The pull request merges into main.
-#   3. This workflow sees a version with no tag yet, builds Kase.flatpak, then creates the
-#      v0.7.0 tag and the GitHub release with the notes and the bundle attached, all at once.
-#      The install command never sees a release without its bundle.
+#   3. This workflow sees a version with no tag yet, builds the bundles, then creates the
+#      v0.7.0 tag and the GitHub release with the notes and the bundles attached, all at once:
+#      Kase-x86_64.flatpak and Kase-aarch64.flatpak, plus Kase.flatpak (x86_64) for
+#      installers from before 0.8.0. The install command never sees a release without them.
 #
 # Merges that don't change the version do nothing. A version bump without a notes file fails
 # with a clear message instead of publishing a release with no notes. If a run fails, fix
@@ -88,10 +89,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Download the bundle
+      - name: Download the bundles
         uses: actions/download-artifact@v7
         with:
-          name: Kase.flatpak
+          pattern: Kase*.flatpak
+          merge-multiple: true
 
       - name: Create the tag and the release
         env:
@@ -102,8 +104,16 @@ jobs:
           title="$(head -n1 "$notes" | sed 's/^# *//')"
           # The title line becomes the release title, so leave it out of the body.
           tail -n +2 "$notes" > body.md
+          cp Kase.flatpak Kase-x86_64.flatpak
+          bundles=(Kase.flatpak Kase-x86_64.flatpak)
+          # The ARM build may have failed; ship x86_64 alone rather than no release.
+          if [ -f Kase-aarch64.flatpak ]; then
+            bundles+=(Kase-aarch64.flatpak)
+          else
+            echo "::warning::No aarch64 bundle; releasing x86_64 only."
+          fi
           # --generate-notes adds GitHub's "What's Changed" list under the notes, as before.
-          gh release create "v$VERSION" Kase.flatpak \
+          gh release create "v$VERSION" "${bundles[@]}" \
             --target "$GITHUB_SHA" \
             --title "$title" \
             --notes-file body.md \
