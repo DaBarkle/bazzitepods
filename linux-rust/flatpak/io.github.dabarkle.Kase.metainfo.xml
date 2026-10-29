@@ -97,6 +97,15 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.8.1" date="2026-10-30">
+      <description>
+        <p>Kase now runs on 64-bit ARM.</p>
+        <ul>
+          <li>ARM64 bundles for the Raspberry Pi 5, Asahi Linux and ARM laptops</li>
+          <li>The installer picks the right bundle for your PC by itself</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.0" date="2026-10-29">
       <description>
         <p>AirPods for Linux: Kase now feels at home on every major distribution and desktop.</p>
