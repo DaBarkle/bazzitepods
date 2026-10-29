@@ -6,6 +6,8 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-10-30
+
 ### Added
 - **Faster battery while away** switch in Settings → Diagnostics (off by default). It turns
   on Bluetooth's experimental features (`Experimental = true` in
@@ -377,6 +379,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.8.2]: https://github.com/DaBarkle/kase/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/DaBarkle/kase/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/DaBarkle/kase/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/DaBarkle/kase/compare/v0.6.0...v0.7.0

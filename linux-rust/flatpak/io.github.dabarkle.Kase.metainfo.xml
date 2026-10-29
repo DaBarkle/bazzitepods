@@ -97,6 +97,15 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.8.2" date="2026-10-30">
+      <description>
+        <p>Faster battery while away, one switch away.</p>
+        <ul>
+          <li>A new switch in Settings, Diagnostics turns on Bluetooth's experimental features so case and pod levels update sooner while the AirPods aren't connected</li>
+          <li>Works across distributions like Apple device mode, and the two switches stay independent</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.8.1" date="2026-10-30">
       <description>
         <p>Kase now runs on 64-bit ARM.</p>
