@@ -3,6 +3,58 @@
 use super::*;
 use iced::widget::{column, row};
 
+/// One Diagnostics line: a name, its value and an optional explanation underneath.
+fn diag_row<'a>(name: &'a str, value: String, note: Option<String>) -> Element<'a, Message> {
+    let mut col = column![kv(name, value)].spacing(2);
+    if let Some(n) = note {
+        col = col.push(text(n).size(12).style(dim_text));
+    }
+    col.into()
+}
+
+fn diagnostics<'a>(
+    diag: &crate::diagnostics::Diagnostics,
+    device: Option<&DeviceSnapshot>,
+) -> Element<'a, Message> {
+    use crate::diagnostics::{codec_note, le_note};
+    let adapter = match &diag.adapter {
+        Some((name, true)) => format!("{name}, on"),
+        Some((name, false)) => format!("{name}, off"),
+        None => "None found".into(),
+    };
+    let mut rows = vec![diag_row(
+        "Bluetooth adapter",
+        adapter,
+        diag.chip_warning.map(str::to_string),
+    )];
+    if let Some(blocked) = diag.blocked {
+        rows.push(diag_row(
+            "Blocked (rfkill)",
+            if blocked { "Yes" } else { "No" }.into(),
+            blocked.then(|| "Airplane mode or a hardware switch has Bluetooth turned off.".into()),
+        ));
+    }
+    let codec = codec_note(
+        device
+            .filter(|d| d.is_connected())
+            .and_then(|d| d.audio.as_deref()),
+    );
+    let (value, note) = match codec.split_once(". ") {
+        Some((v, n)) => (v.to_string(), Some(n.to_string())),
+        None => (codec, None),
+    };
+    rows.push(diag_row("Audio codec", value, note));
+    if let Some(le) = diag.le {
+        let text = le_note(le);
+        let (value, note) = match text.split_once(": ") {
+            Some((v, n)) => (v.to_string(), Some(n.to_string())),
+            None => (text.to_string(), None),
+        };
+        rows.push(diag_row("Battery while away", value, note));
+    }
+    group(rows)
+}
+
 impl App {
     pub(super) fn settings_tab(&self) -> Element<'_, Message> {
         let s = &self.settings;
@@ -111,6 +163,11 @@ impl App {
             section_label("This PC"),
             group(vec![self.apple_mode_row()]),
         ];
+        if let Some(diag) = &self.diagnostics {
+            page = page
+                .push(section_label("Diagnostics"))
+                .push(diagnostics(diag, device));
+        }
 
         if let Some(d) = device {
             page = page.push(section_label("About")).push(self.about(d));
@@ -237,7 +294,7 @@ impl App {
         const CAPTION: &str = "Lets your AirPods switch between this PC and your iPhone or iPad \
                                the way they do with a Mac, by having this PC introduce itself \
                                as an Apple device.";
-        let can_change = self.apple_can_change != Some(false);
+        let can_change = self.apple_host.is_none_or(|h| h.can_change);
         let working = matches!(self.apple_flow, AppleFlow::Working(_));
         let shown_on = match self.apple_flow {
             AppleFlow::Confirm(on) | AppleFlow::Working(on) => on,
@@ -291,10 +348,20 @@ impl App {
             action
         };
         row![
-            text("This build can't ask for your password, so it needs one terminal command.")
-                .size(12)
-                .style(dim_text)
-                .width(Fill),
+            text(
+                if self
+                    .apple_host
+                    .is_some_and(|h| h.os == crate::apple_mode::HostOs::NixOs)
+                {
+                    "On NixOS this is set in configuration.nix. Add this line, then run sudo \
+                     nixos-rebuild switch."
+                } else {
+                    "This build can't ask for your password, so it needs one terminal command."
+                },
+            )
+            .size(12)
+            .style(dim_text)
+            .width(Fill),
             button(text(label).size(12).font(style::INTER_MEDIUM))
                 .padding(Padding {
                     top: 6.0,

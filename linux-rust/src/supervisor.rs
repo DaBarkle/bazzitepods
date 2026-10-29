@@ -2,6 +2,7 @@
 //! session per connected AirPods, reconnecting them when they come back in range.
 
 use crate::battery_service::BatteryService;
+use crate::bluetooth::adapter::{AIRPODS_UUID, airpods_adapter};
 use crate::bluetooth::managers::DeviceManagers;
 use crate::devices::airpods::DeviceContext;
 use crate::disconnect_watch::{DropReason, ReconnectPlan};
@@ -21,9 +22,6 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::{Duration, Instant, sleep};
 use tokio_util::sync::CancellationToken;
-
-/// BlueZ service UUID advertised by AirPods (and Beats) for the AACP control channel.
-const AIRPODS_UUID: uuid::Uuid = uuid::uuid!("74ec2172-0bad-4d01-8f77-997b2be0722a");
 
 pub async fn run(
     ui_tx: UnboundedSender<BluetoothUIMessage>,
@@ -297,8 +295,8 @@ async fn supervise(mut ctx: SupervisorCtx) {
 
 async fn acquire_adapter() -> bluer::Result<Adapter> {
     let session = bluer::Session::new().await?;
-    let adapter = session.default_adapter().await?;
-    // Make sure the adapter object is really there (default_adapter doesn't round-trip).
+    let adapter = airpods_adapter(&session).await?;
+    // Make sure the adapter object is really there (adapter() doesn't round-trip).
     adapter.is_powered().await?;
     Ok(adapter)
 }
@@ -354,6 +352,12 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
             }
         }
     }
+
+    // A second adapter plugged in may be where the AirPods are paired: switch to it.
+    let mut session_events = match bluer::Session::new().await {
+        Ok(s) => s.events().await.ok().map(|ev| (s, Box::pin(ev))),
+        Err(_) => None,
+    };
 
     let mut sweep = tokio::time::interval(Duration::from_secs(10));
     loop {
@@ -429,6 +433,21 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                     for addr in away {
                         maybe_reconnect(adapter, addr, &mut st).await;
                     }
+                }
+            }
+            Some(bluer::SessionEvent::AdapterAdded(name)) = async {
+                match session_events.as_mut() {
+                    Some((_, ev)) => ev.next().await,
+                    None => std::future::pending().await,
+                }
+            } => {
+                let better = match session_events.as_ref() {
+                    Some((s, _)) => airpods_adapter(s).await.ok(),
+                    None => None,
+                };
+                if better.is_some_and(|b| b.name() != adapter.name()) {
+                    info!("Adapter {name} appeared and has the AirPods; switching to it");
+                    break;
                 }
             }
             _ = sweep.tick() => {

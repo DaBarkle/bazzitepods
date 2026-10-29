@@ -6,6 +6,21 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+### Fixed
+- **PCs with two Bluetooth adapters.** Kase now uses the adapter your AirPods are paired
+  on, not just the default one, and switches when that adapter is plugged in later. ([#32])
+- **Apple device mode beyond Fedora.** On NixOS, Settings gives you the
+  `hardware.bluetooth.settings` line to add instead of editing a generated file; systems
+  without systemd restart Bluetooth through OpenRC or runit; SteamOS explains that the
+  account needs a password first (`passwd`); a missing password prompt (polkit agent) gets
+  a clear message. The script no longer relies on GNU-only `sed`. ([#32])
+
+### Added
+- **Diagnostics** in Settings: which Bluetooth adapter is in use and whether it's on or
+  blocked, AAC or SBC-only (with why), whether battery-while-away uses the advertisement
+  monitor or fallback scanning, and a warning for Bluetooth chips known to struggle with
+  AirPods (Realtek RTL8761B). ([#32])
+
 ### Changed
 - **One installer for every distribution.** `install.sh` replaces `install-bazzite.sh`
   (the old link still works). If Flatpak is missing it prints the exact command for your
@@ -342,3 +357,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#27]: https://github.com/DaBarkle/kase/pull/27
 [#30]: https://github.com/DaBarkle/kase/pull/30
 [#31]: https://github.com/DaBarkle/kase/pull/31
+[#32]: https://github.com/DaBarkle/kase/pull/32
