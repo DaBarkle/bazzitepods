@@ -49,10 +49,12 @@ pub fn codec_note(audio: Option<&str>) -> String {
 
 pub fn le_note(mode: LeMode) -> &'static str {
     match mode {
-        LeMode::Monitor => "Advertisement monitor (battery while away)",
+        // Advertisement monitor (BlueZ experimental features on).
+        LeMode::Monitor => "Quick updates",
+        // Fallback discovery, only while the AirPods are away.
         LeMode::Discovery => {
-            "Fallback scanning: bluetoothd's experimental features are off, so battery while \
-             away updates less often"
+            "Standard (updates less often): Turn on quicker battery updates below to see \
+             changes sooner"
         }
         LeMode::NotRunning => "Not running",
     }

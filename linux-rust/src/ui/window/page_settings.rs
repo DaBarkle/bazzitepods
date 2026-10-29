@@ -52,7 +52,7 @@ fn diagnostics<'a>(
             Some((v, n)) => (v.to_string(), Some(n.to_string())),
             None => (text.to_string(), None),
         };
-        rows.push(diag_row("Battery while away", value, note));
+        rows.push(diag_row("Battery when not connected", value, note));
     }
     rows.push(experimental);
     group(rows)
@@ -412,14 +412,14 @@ impl SettingTexts {
                            back.",
             },
             Setting::Experimental => SettingTexts {
-                title: "Faster battery while away",
-                caption: "Turns on Bluetooth's experimental features so the case and pod \
-                          levels update sooner while the AirPods aren't connected. Bluetooth \
-                          restarts, so devices drop for a few seconds.",
-                done_on: "Experimental Bluetooth is on. Battery while away switches to the \
-                          advertisement monitor within a minute.",
-                done_off: "Experimental Bluetooth is off. Battery while away goes back to \
-                           fallback scanning.",
+                title: "Quicker battery updates when not connected",
+                caption: "Shows your AirPods and case battery sooner when they aren't \
+                          connected to this PC, for example while you're using them with your \
+                          iPhone, or when you open the case nearby. Uses a newer Linux \
+                          Bluetooth feature that's still labelled experimental. Bluetooth \
+                          restarts for a few seconds when you change this.",
+                done_on: "Quicker battery updates are on. They start within a minute.",
+                done_off: "Quicker battery updates are off. Battery updates as before.",
             },
         }
     }

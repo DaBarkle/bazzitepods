@@ -468,6 +468,11 @@ That's how AirPods work: the case reports its level only while at least one pod 
 it with the lid open, the same as on an iPhone. Kase keeps the last reading and shows how
 long ago it was seen. Open the lid near the PC to update it.
 
+If levels are slow to update while the AirPods aren't connected to the PC, turn on
+**Quicker battery updates when not connected** in **Settings → Diagnostics**. It switches
+on a newer Linux Bluetooth feature that's still labelled experimental, and Bluetooth
+restarts for a few seconds when you change it.
+
 </details>
 
 <details>

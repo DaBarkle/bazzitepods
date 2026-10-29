@@ -189,7 +189,7 @@ pub enum Message {
     Diagnostics(crate::diagnostics::Diagnostics),
     /// The Apple device mode switch was flipped: show the confirm step.
     AppleToggle(bool),
-    /// The "Faster battery while away" switch was flipped: show the confirm step.
+    /// The "Quicker battery updates when not connected" switch was flipped: show the confirm step.
     ExperimentalToggle(bool),
     AppleCancel,
     /// "Restart Bluetooth" in the confirm step: password prompt, then restart.
@@ -777,7 +777,7 @@ impl App {
                     Err(e) => AppleFlow::Failed(e.message()),
                 };
                 // The LE monitor re-probes on its own after Bluetooth restarts; look again
-                // once it has, so "Battery while away" shows the new mode.
+                // once it has, so "Battery when not connected" shows the new mode.
                 let later = Task::perform(
                     async {
                         tokio::time::sleep(Duration::from_secs(8)).await;
