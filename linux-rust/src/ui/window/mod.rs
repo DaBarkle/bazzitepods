@@ -183,7 +183,8 @@ pub enum Message {
     SavedDevices(HashMap<String, DeviceData>),
     AppleMode(Option<bool>),
     /// Whether the app can ask for admin rights itself (pkexec on the host).
-    AppleCanChange(bool),
+    AppleHost(crate::apple_mode::Host),
+    Diagnostics(crate::diagnostics::Diagnostics),
     /// The Apple device mode switch was flipped: show the confirm step.
     AppleToggle(bool),
     AppleCancel,
@@ -285,7 +286,8 @@ pub struct App {
     apple_mode: Option<bool>,
     apple_flow: AppleFlow,
     /// None until probed; false shows the copy-a-command fallback.
-    apple_can_change: Option<bool>,
+    apple_host: Option<crate::apple_mode::Host>,
+    diagnostics: Option<crate::diagnostics::Diagnostics>,
     apple_copied: bool,
     rename_status: Option<String>,
     /// devices.json (serials, firmware), loaded off the UI thread.
@@ -345,7 +347,11 @@ impl App {
             } else {
                 AppleFlow::Idle
             },
-            apple_can_change: demo.then_some(true),
+            diagnostics: None,
+            apple_host: demo.then_some(crate::apple_mode::Host {
+                can_change: true,
+                ..Default::default()
+            }),
             apple_copied: false,
             rename_status: None,
             saved: HashMap::new(),
@@ -366,7 +372,7 @@ impl App {
         } else {
             Task::batch([
                 load_apple_mode(),
-                Task::perform(crate::apple_mode::can_change(), Message::AppleCanChange),
+                Task::perform(crate::apple_mode::probe_host(), Message::AppleHost),
             ])
         };
         (app, Task::batch([theme, open, saved, apple]))
@@ -689,7 +695,10 @@ impl App {
                     self.apple_flow = AppleFlow::Idle;
                 }
                 if tab == Tab::Settings && !self.demo {
-                    load_apple_mode()
+                    Task::batch([
+                        load_apple_mode(),
+                        Task::perform(crate::diagnostics::collect(), Message::Diagnostics),
+                    ])
                 } else {
                     Task::none()
                 }
@@ -698,8 +707,12 @@ impl App {
                 self.apple_mode = on;
                 Task::none()
             }
-            Message::AppleCanChange(can) => {
-                self.apple_can_change = Some(can);
+            Message::Diagnostics(d) => {
+                self.diagnostics = Some(d);
+                Task::none()
+            }
+            Message::AppleHost(host) => {
+                self.apple_host = Some(host);
                 Task::none()
             }
             Message::AppleToggle(on) => {
@@ -739,12 +752,11 @@ impl App {
             }
             Message::CopyAppleCommand => {
                 self.apple_copied = true;
-                let cmd = if self.apple_mode == Some(true) {
-                    crate::apple_mode::MANUAL_OFF
-                } else {
-                    crate::apple_mode::MANUAL_ON
-                };
-                iced::clipboard::write(cmd.to_string())
+                let cmd = crate::apple_mode::manual_command(
+                    self.apple_mode != Some(true),
+                    self.apple_host.unwrap_or_default(),
+                );
+                iced::clipboard::write(cmd)
             }
             Message::RenameInput(s) => {
                 self.rename = s.chars().take(32).collect();

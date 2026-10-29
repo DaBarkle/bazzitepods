@@ -26,7 +26,8 @@ use tokio::process::Command;
 ///   under `[General]`.
 /// * off: removes our line and restores anything `on` commented out.
 ///
-/// Then bluetoothd is restarted so the change applies (connected devices drop briefly).
+/// Then bluetoothd is restarted so the change applies (connected devices drop briefly),
+/// through systemd, OpenRC or runit. Only POSIX sed and awk: no GNU-only addresses.
 const SCRIPT: &str = r#"set -eu
 f=/etc/bluetooth/main.conf
 ours='DeviceID = bluetooth:004C:0000:0000'
@@ -41,8 +42,9 @@ case "${1:-}" in
     sed -i '/^[[:space:]]*DeviceID[[:space:]]*=[[:space:]]*bluetooth:004C:/d' "$f"
     sed -i "s|^\([[:space:]]*DeviceID[[:space:]]*=\)|$mark\1|" "$f"
     if grep -q '^[[:space:]]*\[General\]' "$f"; then
-      sed -i "0,/^[[:space:]]*\[General\]/{//a $ours
-}" "$f"
+      awk -v l="$ours" '{ print } !d && /^[[:space:]]*\[General\]/ { print l; d = 1 }' "$f" > "$f.kase-tmp"
+      cat "$f.kase-tmp" > "$f"
+      rm -f "$f.kase-tmp"
     else
       printf '\n[General]\n%s\n' "$ours" >> "$f"
     fi
@@ -56,15 +58,95 @@ case "${1:-}" in
     ;;
 esac
 command -v restorecon >/dev/null 2>&1 && restorecon "$f" || true
-systemctl restart bluetooth.service
+if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  systemctl restart bluetooth.service
+elif command -v rc-service >/dev/null 2>&1; then
+  rc-service bluetooth restart
+elif command -v sv >/dev/null 2>&1; then
+  sv restart bluetoothd
+else
+  echo "edited $f; restart Bluetooth (or your PC) to apply it" >&2
+  exit 3
+fi
 "#;
 
-/// Shown in Settings when the app can't ask for admin rights itself (see [`can_change`]).
-pub const MANUAL_ON: &str = "sudo cp -a /etc/bluetooth/main.conf /etc/bluetooth/main.conf.bak-bazzitepods && \
-sudo sed -i '/^\\[General\\]/a DeviceID = bluetooth:004C:0000:0000' /etc/bluetooth/main.conf && \
-sudo systemctl restart bluetooth";
-pub const MANUAL_OFF: &str = "sudo sed -i '/^DeviceID = bluetooth:004C:/d' /etc/bluetooth/main.conf && \
-sudo systemctl restart bluetooth";
+/// The host system, as far as Apple device mode cares.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HostOs {
+    /// /etc is generated from configuration.nix, so main.conf can't be edited.
+    NixOs,
+    /// The default `deck` account has no password, so pkexec can't succeed until it has one.
+    SteamOs,
+    #[default]
+    Other,
+}
+
+/// What the app found out about the host when Settings opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Host {
+    pub os: HostOs,
+    pub systemd: bool,
+    /// pkexec exists and (inside Flatpak) host commands are allowed, and the OS lets us edit
+    /// main.conf. When false, Settings offers a command to copy instead.
+    pub can_change: bool,
+}
+
+/// Reads `ID` and `ID_LIKE` from an os-release file.
+pub fn parse_os(os_release: &str) -> HostOs {
+    let mut ids = String::new();
+    for line in os_release.lines() {
+        if let Some(v) = line
+            .strip_prefix("ID=")
+            .or_else(|| line.strip_prefix("ID_LIKE="))
+        {
+            ids.push(' ');
+            ids.push_str(v.trim_matches(|c| c == '"' || c == '\''));
+        }
+    }
+    let has = |id: &str| ids.split_whitespace().any(|w| w == id);
+    if has("nixos") {
+        HostOs::NixOs
+    } else if has("steamos") {
+        HostOs::SteamOs
+    } else {
+        HostOs::Other
+    }
+}
+
+/// The command Settings copies when the app can't make the change itself.
+pub fn manual_command(on: bool, host: Host) -> String {
+    const CONF: &str = "/etc/bluetooth/main.conf";
+    if host.os == HostOs::NixOs {
+        return if on {
+            "hardware.bluetooth.settings.General.DeviceID = \"bluetooth:004C:0000:0000\";".into()
+        } else {
+            "# remove hardware.bluetooth.settings.General.DeviceID from configuration.nix, then: sudo nixos-rebuild switch".into()
+        };
+    }
+    let restart = if host.systemd {
+        "sudo systemctl restart bluetooth"
+    } else {
+        "sudo rc-service bluetooth restart  # or: sudo sv restart bluetoothd"
+    };
+    if on {
+        format!(
+            "sudo cp -a {CONF} {CONF}.bak-bazzitepods && \
+sudo sed -i '/^\\[General\\]/a DeviceID = bluetooth:004C:0000:0000' {CONF} && \
+{restart}"
+        )
+    } else {
+        format!("sudo sed -i '/^DeviceID = bluetooth:004C:/d' {CONF} && {restart}")
+    }
+}
+
+/// Inside Flatpak the host's os-release is at /run/host; /etc is the runtime's.
+fn host_os() -> HostOs {
+    ["/run/host/os-release", "/etc/os-release"]
+        .iter()
+        .find_map(|p| std::fs::read_to_string(p).ok())
+        .map(|s| parse_os(&s))
+        .unwrap_or_default()
+}
 
 /// Why a change didn't happen. Each maps to one plain sentence in Settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -115,20 +197,32 @@ fn host_command(program: &str, args: &[&str]) -> Command {
     cmd
 }
 
-/// Whether the app can ask for admin rights on its own: pkexec exists on the host and,
-/// inside Flatpak, we're allowed to start host commands.
-pub async fn can_change() -> bool {
-    let probe = host_command("sh", &["-c", "command -v pkexec >/dev/null"]).status();
+async fn host_has(check: &str) -> bool {
+    let probe = host_command("sh", &["-c", check]).status();
     match tokio::time::timeout(Duration::from_secs(5), probe).await {
         Ok(Ok(status)) => status.success(),
         _ => false,
     }
 }
 
+/// Probes the host: its OS, whether it runs systemd, and whether the app can ask for admin
+/// rights on its own (pkexec exists on the host and, inside Flatpak, we're allowed to start
+/// host commands).
+pub async fn probe_host() -> Host {
+    let os = host_os();
+    Host {
+        os,
+        systemd: host_has("[ -d /run/systemd/system ]").await,
+        can_change: os != HostOs::NixOs && host_has("command -v pkexec >/dev/null").await,
+    }
+}
+
 /// True when the running bluetoothd reports Apple's vendor id; None if there's no adapter.
 pub async fn status() -> Option<bool> {
     let session = bluer::Session::new().await.ok()?;
-    let adapter = session.default_adapter().await.ok()?;
+    let adapter = crate::bluetooth::adapter::airpods_adapter(&session)
+        .await
+        .ok()?;
     let m = adapter.modalias().await.ok()??;
     Some(m.vendor == 0x004C)
 }
@@ -155,10 +249,23 @@ pub async fn set(on: bool) -> Result<bool, Failure> {
         return Err(match out.status.code() {
             // pkexec: 126 = dialog dismissed, 127 = not authorized (or couldn't authenticate).
             Some(126) => Failure::Cancelled,
-            Some(127) if stderr.contains("authentication agent") => {
-                Failure::Other("no password prompt is available on this desktop".into())
+            Some(127) if stderr.contains("authentication agent") || stderr.contains("polkit") => {
+                Failure::Other(
+                    "no password prompt (polkit agent) is running on this desktop. Start one, \
+                     or run the change in a terminal with sudo"
+                        .into(),
+                )
             }
+            Some(127) if host_os() == HostOs::SteamOs => Failure::Other(
+                "SteamOS needs a password for system changes. Set one with passwd in Konsole, \
+                 then try again"
+                    .into(),
+            ),
             Some(127) => Failure::NotAuthorized,
+            Some(3) => Failure::Other(
+                "the setting was saved, but Bluetooth couldn't be restarted. Restart your PC to apply it"
+                    .into(),
+            ),
             _ if stderr.is_empty() => Failure::Other("the helper failed".into()),
             _ => Failure::Other(stderr.lines().last().unwrap_or_default().to_string()),
         });
@@ -193,6 +300,10 @@ mod tests {
         let script = SCRIPT
             .replace("f=/etc/bluetooth/main.conf", &format!("f={}", f.display()))
             .replace("mkdir -p /etc/bluetooth", "true")
+            .replace(
+                "command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]",
+                "true",
+            )
             .replace("systemctl restart bluetooth.service", "true")
             .replace("restorecon \"$f\"", "true");
         let ok = Command::new("sh")
@@ -211,6 +322,38 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos()
+    }
+
+    use super::{Host, HostOs, manual_command, parse_os};
+
+    #[test]
+    fn os_release_is_recognised() {
+        assert_eq!(parse_os("NAME=NixOS\nID=nixos\n"), HostOs::NixOs);
+        assert_eq!(parse_os("ID=steamos\nID_LIKE=arch\n"), HostOs::SteamOs);
+        assert_eq!(
+            parse_os("ID=\"bazzite\"\nID_LIKE=\"fedora\"\n"),
+            HostOs::Other
+        );
+        assert_eq!(parse_os(""), HostOs::Other);
+    }
+
+    #[test]
+    fn manual_command_fits_the_host() {
+        let nix = Host {
+            os: HostOs::NixOs,
+            ..Default::default()
+        };
+        assert_eq!(
+            manual_command(true, nix),
+            "hardware.bluetooth.settings.General.DeviceID = \"bluetooth:004C:0000:0000\";"
+        );
+        let systemd = Host {
+            systemd: true,
+            ..Default::default()
+        };
+        assert!(manual_command(true, systemd).ends_with("sudo systemctl restart bluetooth"));
+        assert!(manual_command(false, systemd).starts_with("sudo sed -i '/^DeviceID"));
+        assert!(manual_command(false, Host::default()).contains("rc-service bluetooth restart"));
     }
 
     const FEDORA: &str = "[General]\n#Name = BlueZ\n#DeviceID = bluetooth:1234:5678:abcd\n\n[Policy]\nAutoEnable=true\n";

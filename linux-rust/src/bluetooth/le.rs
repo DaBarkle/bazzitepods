@@ -34,6 +34,7 @@ use futures::StreamExt;
 use log::{debug, info, warn};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio::sync::mpsc::UnboundedSender;
@@ -404,6 +405,7 @@ pub async fn start_le_monitor(tx: BleReadingSender) -> bluer::Result<()> {
                 if started.elapsed() > BACKOFF_MAX {
                     backoff = BACKOFF_MIN;
                 }
+                MODE.store(LeMode::NotRunning as u8, Ordering::Relaxed);
                 warn!("LE monitor unavailable ({}); retrying in {:?}", e, backoff);
             }
         }
@@ -412,9 +414,29 @@ pub async fn start_le_monitor(tx: BleReadingSender) -> bluer::Result<()> {
     }
 }
 
+/// How battery adverts are being read, for the Diagnostics section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeMode {
+    NotRunning = 0,
+    /// bluetoothd's advertisement monitor (needs its experimental features).
+    Monitor = 1,
+    /// Plain discovery, only while the AirPods are away.
+    Discovery = 2,
+}
+
+static MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+
+pub fn mode() -> LeMode {
+    match MODE.load(Ordering::Relaxed) {
+        1 => LeMode::Monitor,
+        2 => LeMode::Discovery,
+        _ => LeMode::NotRunning,
+    }
+}
+
 async fn run_monitor(tx: &BleReadingSender, keys: &mut KeyStore) -> bluer::Result<()> {
     let session = Session::new().await?;
-    let adapter = session.default_adapter().await?;
+    let adapter = crate::bluetooth::adapter::airpods_adapter(&session).await?;
     if !adapter.is_powered().await? {
         return Err(bluer::Error {
             kind: bluer::ErrorKind::NotReady,
@@ -444,6 +466,7 @@ async fn run_monitor(tx: &BleReadingSender, keys: &mut KeyStore) -> bluer::Resul
         Err(e) => return Err(e),
     };
     debug!("Started LE monitor on {}", adapter.name());
+    MODE.store(LeMode::Monitor as u8, Ordering::Relaxed);
 
     let mut tasks: JoinSet<()> = JoinSet::new();
     let mut watching: HashMap<Address, AbortHandle> = HashMap::new();
@@ -548,6 +571,7 @@ async fn run_discovery(
     keys: &mut KeyStore,
 ) -> bluer::Result<()> {
     info!("bluetoothd has no LE advertisement monitor; scanning only while AirPods are away");
+    MODE.store(LeMode::Discovery as u8, Ordering::Relaxed);
     type Scan = std::pin::Pin<Box<dyn futures::Stream<Item = bluer::AdapterEvent> + Send>>;
     let mut scan: Option<Scan> = None;
     let mut tasks: JoinSet<()> = JoinSet::new();

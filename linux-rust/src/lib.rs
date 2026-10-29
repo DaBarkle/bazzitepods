@@ -9,6 +9,7 @@ mod battery_service;
 pub mod bluetooth;
 mod core;
 pub mod devices;
+mod diagnostics;
 mod disconnect_watch;
 mod fullscreen_watch;
 pub mod hub;
