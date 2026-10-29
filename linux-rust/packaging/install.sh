@@ -20,7 +20,7 @@ readonly ONE_LINER="curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/m
 readonly FLATHUB_URL="https://dl.flathub.org/repo/flathub.flatpakrepo"
 readonly ASSET_NAME="Kase.flatpak"
 # Release builds exist for these CPU architectures (uname -m names).
-readonly SUPPORTED_ARCHES=("x86_64")
+readonly SUPPORTED_ARCHES=("x86_64" "aarch64")
 readonly AUTOSTART_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
 readonly AUTOSTART_FILE="${AUTOSTART_DIR}/${APP_ID}.desktop"
 # Earlier ids of this app, newest first: BazzitePods (until 0.5.0), then LibrePods.
@@ -90,13 +90,12 @@ require_flatpak() {
 
 # Prints the release asset for this CPU (uname -m), or stops if there is no build for it.
 asset_for_arch() {
-    local arch=$1 a
-    for a in "${SUPPORTED_ARCHES[@]}"; do
-        if [[ "$a" == "$arch" ]]; then
-            printf '%s\n' "$ASSET_NAME"
-            return
-        fi
-    done
+    local arch=$1
+    case "$arch" in
+        # Kase.flatpak is the x86_64 bundle in every release, old ones included.
+        x86_64) printf '%s\n' "$ASSET_NAME"; return ;;
+        aarch64|arm64) printf 'Kase-aarch64.flatpak\n'; return ;;
+    esac
     die "there is no Kase build for this CPU (${arch}) yet; builds exist for: ${SUPPORTED_ARCHES[*]}."
 }
 
@@ -112,14 +111,14 @@ download_latest() {
     asset=$(asset_for_arch "$(uname -m)")
     step "Looking up the latest release of ${REPO}" >&2
     if ! json=$(curl -fsSL -H "Accept: application/vnd.github+json" "$API_URL"); then
-        die "could not reach the GitHub API. Download ${ASSET_NAME} manually from https://github.com/${REPO}/releases and run: ${ONE_LINER} /path/to/${ASSET_NAME}"
+        die "could not reach the GitHub API. Download ${asset} manually from https://github.com/${REPO}/releases and run: ${ONE_LINER} /path/to/${asset}"
     fi
     # Pick the browser_download_url of this CPU's asset (no jq on a stock system).
     url=$(printf '%s\n' "$json" \
         | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*/'"${asset}"'"' \
         | head -n1 \
         | sed -E 's/.*"(https:[^"]*)"$/\1/') || true
-    [[ -n "$url" ]] || die "the latest release has no ${asset} asset."
+    [[ -n "$url" ]] || die "the latest release has no ${asset} (no build for this CPU in it)."
     local tag
     tag=$(printf '%s\n' "$json" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' \
         | head -n1 | sed -E 's/.*"([^"]*)"$/\1/') || true

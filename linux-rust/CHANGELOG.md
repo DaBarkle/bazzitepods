@@ -6,6 +6,14 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+### Added
+- **64-bit ARM builds.** Releases include `Kase-aarch64.flatpak` (Raspberry Pi 5, Asahi
+  Linux, ARM laptops) next to `Kase-x86_64.flatpak`, and the installer picks the right
+  one. `Kase.flatpak` stays the x86_64 bundle, so older install commands keep working. ([#37])
+
+### Changed
+- The installer scripts are shellchecked in CI on every pull request. ([#37])
+
 ## [0.8.0] - 2026-10-29
 
 ### Fixed
@@ -392,3 +400,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#33]: https://github.com/DaBarkle/kase/pull/33
 [#34]: https://github.com/DaBarkle/kase/pull/34
 [#35]: https://github.com/DaBarkle/kase/pull/35
+[#37]: https://github.com/DaBarkle/kase/pull/37

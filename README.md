@@ -67,7 +67,7 @@ user only (no `sudo`, nothing layered into the system image), and starts Kase in
 tray. From then on it starts by itself at every login. Pair your AirPods in your
 desktop's Bluetooth settings as usual, and their battery shows up within a few seconds.
 
-**Requirements:** a 64-bit PC (x86_64) running Linux with Flatpak and Bluetooth. KDE
+**Requirements:** a 64-bit PC (x86_64 or ARM64) running Linux with Flatpak and Bluetooth. KDE
 Plasma 6 on Wayland gets every feature; see [Compatibility](#compatibility) for the rest.
 If Flatpak is missing, the installer tells you the command for your distribution. It adds
 the Flathub remote if it's missing, because the app runs on the Freedesktop runtime from
