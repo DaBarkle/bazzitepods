@@ -1,6 +1,6 @@
-# Testing on real hardware (Bazzite)
+# Testing on real hardware
 
-Everything below runs as your normal user. Nothing needs sudo or rpm-ostree.
+Everything below runs as your normal user. Nothing needs sudo (or rpm-ostree on image-based systems such as Bazzite).
 
 ## 1. Install
 
@@ -8,7 +8,7 @@ Download `Kase.flatpak` from the latest successful **Flatpak (Kase)** run on `ma
 (Actions tab → run → Artifacts), unzip it, then:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh \
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install.sh \
   | bash -s -- ~/Downloads/Kase.flatpak
 ```
 

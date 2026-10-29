@@ -1,4 +1,4 @@
-//! Kase: AirPods for KDE Plasma. The app's library: everything except argument parsing,
+//! Kase: AirPods for Linux. The app's library: everything except argument parsing,
 //! logging setup and choosing between the window and headless mode (`main.rs`). The
 //! overlay binary uses it for the wire protocol it shares with the app.
 

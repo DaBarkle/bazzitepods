@@ -4,7 +4,7 @@
 
 # Kase
 
-**AirPods for KDE Plasma.**<br>
+**AirPods for Linux.** Best on KDE Plasma.<br>
 Accurate battery for each pod and the case, a Dynamic Island over your games,<br>
 and AirPods that switch between your iPhone and your PC the way they do with a Mac.
 
@@ -56,19 +56,20 @@ feels like part of the desktop:
 
 ## Install
 
-Open a terminal (Konsole on Bazzite) and run:
+Open a terminal and run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install-bazzite.sh | bash
+curl -fsSL https://raw.githubusercontent.com/DaBarkle/kase/main/linux-rust/packaging/install.sh | bash
 ```
 
 That's it. The command downloads the latest release, installs it as a Flatpak for your
 user only (no `sudo`, nothing layered into the system image), and starts Kase in the system
-tray. From then on it starts by itself at every login. Pair your AirPods in
-**System Settings → Bluetooth** as usual, and their battery shows up within a few seconds.
+tray. From then on it starts by itself at every login. Pair your AirPods in your
+desktop's Bluetooth settings as usual, and their battery shows up within a few seconds.
 
-**Requirements:** a Linux desktop with Flatpak and Bluetooth. KDE Plasma 6 on Wayland
-gets every feature; see [Compatibility](#compatibility) for the rest. The installer adds
+**Requirements:** a 64-bit PC (x86_64) running Linux with Flatpak and Bluetooth. KDE
+Plasma 6 on Wayland gets every feature; see [Compatibility](#compatibility) for the rest.
+If Flatpak is missing, the installer tells you the command for your distribution. It adds
 the Flathub remote if it's missing, because the app runs on the Freedesktop runtime from
 Flathub.
 
@@ -79,8 +80,8 @@ Flathub.
 | **Uninstall** (app, its data and autostart) | `... \| bash -s -- --uninstall` |
 
 Here `...` stands for the `curl` part of the install command. The installer is a single
-readable script, [`install-bazzite.sh`](linux-rust/packaging/install-bazzite.sh), and you
-can read it before you run it.
+readable script, [`install.sh`](linux-rust/packaging/install.sh), and you
+can read it before you run it. The old `install-bazzite.sh` link still works.
 
 ### Coming from BazzitePods
 
@@ -242,7 +243,7 @@ restarts Bluetooth. If you had set a `DeviceID` yourself, it's commented out and
 when you turn the mode off. The script is a constant built into the app
 ([`apple_mode.rs`](linux-rust/src/apple_mode.rs)) and runs through the standard system
 password prompt (`pkexec`), so it can never run without your password. Changes in `/etc`
-are kept across Bazzite updates, and your other Bluetooth devices are not affected.
+are kept across system updates (Bazzite and other image-based systems included), and your other Bluetooth devices are not affected.
 
 To turn it on by hand:
 
@@ -284,7 +285,8 @@ starts, both AirPods leave your ears, or the AirPods stop sending mic audio.
 
 <br>
 
-- Music stays on high-quality AAC because the AirPods send their mic over a separate
+- Music stays on high-quality AAC (where your distribution provides it: Fedora, Bazzite,
+  Arch, SteamOS; otherwise SBC) because the AirPods send their mic over a separate
   stream, the way they do for an iPhone or a Mac, instead of switching to the headset
   profile.
 - While the AirPods mic is in use, the AirPods themselves lower the music quality slightly.
@@ -332,7 +334,8 @@ Only the controls your model supports are shown.
 **Audio that keeps working**
 - Fixes "walked away, came back, connected but silent"
 - Never leaves the audio card switched off, and repairs a stalled connection by itself
-- Returns to AAC after a fallback codec
+- Returns to AAC after a fallback codec (AAC where your distribution provides it: Fedora,
+  Bazzite, Arch, SteamOS; otherwise SBC)
 - Reconnects when the AirPods come back, however long they were away, including after a
   day out with your iPhone
 - Disconnecting on purpose keeps them disconnected
@@ -354,12 +357,14 @@ Only the controls your model supports are shown.
 
 ### Desktops
 
-| Desktop | Island overlay | Battery, controls and tray |
-| --- | :---: | :---: |
-| **KDE Plasma 6, Wayland** (Bazzite's default desktop) | ✅ with fullscreen transparency | ✅ |
-| Other wlr-layer-shell compositors (Hyprland, Sway, …) | ✅ always solid | ✅ |
-| GNOME | Desktop notifications instead | ✅ |
-| Steam Gaming Mode (gamescope) | ❌ | ✅ |
+| Desktop | Island overlay | Battery and controls | Tray | Starts at login |
+| --- | :---: | :---: | :---: | :---: |
+| **KDE Plasma 6, Wayland** (the best experience) | ✅ with fullscreen transparency | ✅ | ✅ | ✅ |
+| KDE Plasma 5, Wayland | ✅ with fullscreen transparency | ✅ | ✅ | ✅ |
+| Hyprland, Sway and other wlr-layer-shell compositors | ✅ always solid | ✅ | needs a tray bar (e.g. Waybar) | ❌ without a helper: add `flatpak run io.github.dabarkle.Kase --start-minimized` to your compositor's startup |
+| GNOME | Desktop notifications instead | ✅ | needs the AppIndicator extension (built into Ubuntu) | ✅ |
+| Any desktop on X11 | Desktop notifications instead | ✅ | ✅ | ✅ |
+| Steam Gaming Mode (gamescope) | ❌ | ✅ | ❌ | from desktop mode |
 
 ### AirPods
 
@@ -397,7 +402,7 @@ flowchart LR
 ```
 
 1. **Talking to the AirPods.** Kase opens Apple's private control channel (AACP) to the
-   AirPods through BlueZ, the same way an iPhone does. That gives exact battery levels for
+   AirPods through BlueZ (the standard Linux Bluetooth system), the same way an iPhone does. That gives exact battery levels for
    each pod and the case, ear detection, noise control, device switching and the mic stream.
    While the AirPods are away, it decrypts their Bluetooth LE adverts instead, so you still
    see levels when you open the case nearby.
@@ -447,7 +452,7 @@ No file system access, no full session or system bus.
 
 <br>
 
-Make sure the AirPods are paired and connected in **System Settings → Bluetooth**, and that
+Make sure the AirPods are paired and connected in your desktop's Bluetooth settings, and that
 Kase is running (look for its icon in the tray, or open it from the app menu). Kase finds
 paired AirPods by itself; there is nothing to set up in the app.
 
@@ -494,6 +499,29 @@ flatpak run io.github.dabarkle.Kase --debug 2>&1 | tee ~/kase-debug.log
 </details>
 
 <details>
+<summary><b>The window or island is blank, flickers or won't open (NVIDIA, older GPUs)</b></summary>
+
+<br>
+
+Kase draws with Vulkan by default. If your GPU or driver has trouble with that, switch it
+to OpenGL, or to software drawing, then restart Kase:
+
+```bash
+flatpak override --user --env=WGPU_BACKEND=gl io.github.dabarkle.Kase       # OpenGL
+flatpak override --user --env=ICED_BACKEND=tiny-skia io.github.dabarkle.Kase  # software, no GPU needed
+```
+
+On NVIDIA, also check that the Flatpak GL extension matches your driver: `flatpak list |
+grep nvidia` should show the same version as `nvidia-smi`. If not, run `flatpak update`.
+
+On a laptop with two GPUs, pick which one Kase uses with
+`flatpak override --user --env=WGPU_POWER_PREF=low io.github.dabarkle.Kase` (the
+power-saving one) or `=high` (the fast one). Undo any of these with
+`flatpak override --user --reset io.github.dabarkle.Kase`.
+
+</details>
+
+<details>
 <summary><b>Does it work in Steam Gaming Mode?</b></summary>
 
 <br>
@@ -526,8 +554,14 @@ cargo test              # no Bluetooth, AirPods, sound server or display needed 
 just flatpak            # builds and installs the Flatpak
 ```
 
-Building needs `pkg-config` and the development files for D-Bus, PulseAudio, xkbcommon and
-Wayland (on Ubuntu: `libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev`).
+Building needs Rust, `pkg-config` and the development files for D-Bus, PulseAudio,
+xkbcommon, Wayland and libavcodec:
+
+| Distribution | Packages |
+| --- | --- |
+| Fedora | `sudo dnf install gcc pkgconf-pkg-config dbus-devel pulseaudio-libs-devel libxkbcommon-devel wayland-devel ffmpeg-free-devel` |
+| Arch | `sudo pacman -S base-devel pkgconf dbus libpulse libxkbcommon wayland ffmpeg` |
+| Ubuntu / Debian | `sudo apt install build-essential pkg-config libdbus-1-dev libpulse-dev libxkbcommon-dev libwayland-dev libavcodec-dev` |
 
 <details>
 <summary><b>Project layout</b></summary>
@@ -594,7 +628,7 @@ The interface uses the [Inter](https://rsms.me/inter/) typeface (SIL Open Font L
 
 ## Licence
 
-Kase: AirPods for KDE Plasma<br>
+Kase: AirPods for Linux<br>
 Copyright © 2025 LibrePods contributors<br>
 Copyright © 2026 Kase contributors
 

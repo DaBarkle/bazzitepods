@@ -38,4 +38,4 @@ flatpak-bundle:
 lint-packaging:
     desktop-file-validate {{DESKTOP_FILE}}
     appstreamcli validate --no-net flatpak/{{APP_ID}}.metainfo.xml
-    shellcheck packaging/install-bazzite.sh
+    shellcheck packaging/*.sh

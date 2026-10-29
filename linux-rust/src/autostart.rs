@@ -256,7 +256,7 @@ fn desktop_entry(exe: &Path) -> String {
         "[Desktop Entry]\n\
          Type=Application\n\
          Name=Kase\n\
-         Comment=AirPods battery, controls and island overlay for KDE Plasma\n\
+         Comment=AirPods battery, controls and island overlay for Linux\n\
          Exec={} {START_MINIMIZED_FLAG}\n\
          Icon={APP_ID}\n\
          Terminal=false\n\
