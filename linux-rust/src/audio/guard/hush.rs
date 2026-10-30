@@ -3,16 +3,6 @@
 use super::*;
 
 impl<P: PulseApi, B: BluezApi> Guard<P, B> {
-    pub(super) fn remember_default(&mut self, value: bool) {
-        self.we_were_default = value;
-        let mac = self.mac_str.clone();
-        with_default_memory(|m| {
-            if let Ok(mut m) = m.lock() {
-                m.insert(mac, value);
-            }
-        });
-    }
-
     /// Streams currently playing to this device's sink (to bring back after a profile toggle).
     pub(super) async fn our_streams(&self) -> Vec<u32> {
         let Ok(snap) = self.pulse.snapshot().await else {
@@ -131,7 +121,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             }
             sleep(self.cfg.poll).await;
         };
-        if self.we_were_default
+        if !self.user_chose_other
             && snap.default_sink.as_deref() != Some(sink.name.as_str())
             && let Err(e) = self.pulse.set_default_sink(&sink.name).await
         {
