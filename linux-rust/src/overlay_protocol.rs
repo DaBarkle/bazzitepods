@@ -107,6 +107,8 @@ pub struct OverlayConfig {
     pub glass: f32,
     pub style: OverlayStyle,
     pub size: OverlaySize,
+    /// Pop the card for a few seconds when the AirPods connect from an open case.
+    pub case_card: bool,
 }
 
 impl Default for OverlayConfig {
@@ -120,6 +122,7 @@ impl Default for OverlayConfig {
             glass: 0.7,
             style: OverlayStyle::Purist,
             size: OverlaySize::Medium,
+            case_card: true,
         }
     }
 }
@@ -217,6 +220,9 @@ pub struct OverlayState {
     /// Counts failed or interrupted AirPods mic attempts; each new one pops an alert.
     #[serde(skip_serializing_if = "is_zero")]
     pub mic_failures: u32,
+    /// Connected with both pods put away in the case (the lid is open).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub in_case: bool,
 }
 
 fn is_zero(n: &u32) -> bool {

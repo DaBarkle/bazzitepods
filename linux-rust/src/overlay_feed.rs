@@ -31,9 +31,17 @@ pub fn preview_opacity() {
     }
 }
 
+static FULLSCREEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// A fullscreen window (a game, a video) is in front, as last reported by the compositor.
+pub fn fullscreen_in_front() -> bool {
+    FULLSCREEN.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// The compositor says a fullscreen window is (or isn't) in front.
 pub fn set_fullscreen(active: bool) {
     debug!("fullscreen window in front: {active}");
+    FULLSCREEN.store(active, std::sync::atomic::Ordering::Relaxed);
     if let Some(client) = CLIENT.get() {
         client.set_fullscreen(active);
     }
@@ -145,6 +153,7 @@ pub fn to_overlay_state(snap: &AppSnapshot) -> Option<OverlayState> {
             MicRoute::AirPods => MicChoice::AirPods,
         }),
         mic_failures: d.mic_failures,
+        in_case: d.is_connected() && d.in_case,
     })
 }
 

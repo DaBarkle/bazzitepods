@@ -97,6 +97,11 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.9.0" date="2026-10-31">
+      <description>
+        <p>A card with both AirPods and the case battery when you open the case, faster reconnecting from the case, an option to keep this PC connected alongside your iPhone, and a fix for the Bluetooth advertisement monitor stopping right after it started.</p>
+      </description>
+    </release>
     <release version="0.8.3" date="2026-10-30">
       <description>
         <p>Clearer wording for the battery setting: it is now called Quicker battery updates when not connected, with a plain explanation of what it does.</p>

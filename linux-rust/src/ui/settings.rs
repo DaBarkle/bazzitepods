@@ -58,6 +58,11 @@ pub struct Settings {
     /// Bring the AirPods back to this PC when the iPhone stops playing. Read by the device
     /// task (`return_to_pc`).
     pub return_to_pc: bool,
+    /// Pop the island with both pods' and the case's battery when the lid opens.
+    pub case_card: bool,
+    /// Keep this PC in the AirPods' list next to an iPhone, so they don't drop it. Read by
+    /// the device task (`stay_alongside`).
+    pub stay_alongside: bool,
     /// Keys we don't manage, preserved verbatim.
     pub extra: Map<String, Value>,
 }
@@ -76,12 +81,14 @@ impl Default for Settings {
             stem_control: false,
             airpods_mic_switch: false,
             return_to_pc: true,
+            case_card: true,
+            stay_alongside: true,
             extra: Map::new(),
         }
     }
 }
 
-const KEYS: [&str; 11] = [
+const KEYS: [&str; 13] = [
     "overlay_glass",
     "overlay_style",
     "overlay_size",
@@ -93,6 +100,8 @@ const KEYS: [&str; 11] = [
     "stem_control",
     "airpods_mic_switch",
     "return_to_pc",
+    "case_card",
+    "stay_alongside",
 ];
 
 fn field<T: serde::de::DeserializeOwned>(map: &Map<String, Value>, key: &str, default: T) -> T {
@@ -116,6 +125,7 @@ impl Settings {
             glass: self.overlay_glass,
             style: self.overlay_style,
             size: self.overlay_size,
+            case_card: self.case_card,
             ..Default::default()
         }
     }
@@ -142,6 +152,8 @@ impl Settings {
             stem_control: field(&map, "stem_control", d.stem_control),
             airpods_mic_switch: field(&map, "airpods_mic_switch", d.airpods_mic_switch),
             return_to_pc: field(&map, "return_to_pc", d.return_to_pc),
+            case_card: field(&map, "case_card", d.case_card),
+            stay_alongside: field(&map, "stay_alongside", d.stay_alongside),
             extra,
         }
     }
@@ -177,6 +189,8 @@ impl Settings {
         put("stem_control", Value::from(self.stem_control));
         put("airpods_mic_switch", Value::from(self.airpods_mic_switch));
         put("return_to_pc", Value::from(self.return_to_pc));
+        put("case_card", Value::from(self.case_card));
+        put("stay_alongside", Value::from(self.stay_alongside));
         serde_json::to_string_pretty(&Value::Object(map)).unwrap_or_else(|_| "{}".to_string())
     }
 }

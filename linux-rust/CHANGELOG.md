@@ -6,6 +6,33 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-31
+
+### Added
+- **A card when you open the case.** When the AirPods connect from the open case, the island
+  shows both pods' and the case's battery for about 6 seconds, and folds away 2 seconds
+  after you take a pod out. Closing the lid no longer pops a "Disconnected" alert, and
+  charging news from pods sitting in the case stays quiet. Never shown over a fullscreen
+  game or video. Switch: **Show a card when I open the case** in the Island tab (on by
+  default). ([#43])
+- **Stay connected alongside my iPhone.** While an iPhone shares the AirPods, Kase asks them
+  to keep this PC on their host list (the device that is playing first), so they don't drop
+  it. Rate-limited (at most once every 2 seconds for an unchanged list, 8 per connection)
+  and logged. Switch in Settings → AirPods (on by default); works with Apple device mode.
+  Idea and packet from [EarPort](https://github.com/Anoryth/earport) by Anoryth (GPL-3.0),
+  reimplemented here. ([#43])
+
+### Changed
+- **Faster pickup from the case.** After the AirPods go into the case, Kase tries to
+  reconnect every 8 seconds for 15 minutes while you are at the PC (screen unlocked, not
+  idle, nothing fullscreen), so opening the lid connects them within seconds. Otherwise the
+  usual schedule (every 20 seconds for 3 minutes, then every minute) applies. ([#43])
+
+### Fixed
+- **The advertisement monitor stopped a few milliseconds after it started**, every minute,
+  so Kase never saw the AirPods' Bluetooth adverts with quicker battery updates on. It now
+  stays registered. ([#43])
+
 ## [0.8.3] - 2026-10-30
 
 ### Changed
@@ -387,6 +414,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.9.0]: https://github.com/DaBarkle/kase/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/DaBarkle/kase/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/DaBarkle/kase/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/DaBarkle/kase/compare/v0.8.0...v0.8.1
@@ -427,3 +455,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#37]: https://github.com/DaBarkle/kase/pull/37
 [#39]: https://github.com/DaBarkle/kase/pull/39
 [#41]: https://github.com/DaBarkle/kase/pull/41
+[#43]: https://github.com/DaBarkle/kase/pull/43

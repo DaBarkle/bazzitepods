@@ -91,7 +91,9 @@ pub async fn run(mac: Address, name: String, ctx: DeviceContext, cancel: Cancell
     ctx.hub.update_device(&mac_s, &name, |d| {
         d.name = name.clone();
         d.link = LinkState::Connecting;
-        d.in_case = false;
+        // Connecting right after going into the case means the lid just opened: they are
+        // still in it until their first ear report says otherwise.
+        d.in_case = dropped_in_case(&mac_s);
         d.last_seen = Some(std::time::SystemTime::now());
     });
 
@@ -420,9 +422,13 @@ async fn session(
 /// Whether each AirPods' last ear report had them put away: in the case, none in an ear.
 static PUT_AWAY: std::sync::Mutex<Option<HashMap<String, bool>>> = std::sync::Mutex::new(None);
 
+/// In the case, none in an ear.
+pub(super) fn put_away(status: &[EarDetectionStatus]) -> bool {
+    status.contains(&EarDetectionStatus::InCase) && !status.contains(&EarDetectionStatus::InEar)
+}
+
 fn note_ear_status(mac: &str, status: &[EarDetectionStatus]) {
-    let away = status.contains(&EarDetectionStatus::InCase)
-        && !status.contains(&EarDetectionStatus::InEar);
+    let away = put_away(status);
     if let Ok(mut put_away) = PUT_AWAY.lock() {
         put_away
             .get_or_insert_with(HashMap::new)
@@ -528,6 +534,7 @@ pub struct AirPodsInformation {
     pub le_keys: AirPodsLEKeys,
 }
 
+mod alongside;
 mod arbiter;
 mod controls;
 mod route;

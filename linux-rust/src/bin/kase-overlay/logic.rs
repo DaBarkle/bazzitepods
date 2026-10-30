@@ -109,6 +109,11 @@ fn placeholder() -> OverlayState {
     }
 }
 
+/// How long the card stays up when the AirPods connect from the open case.
+const CASE_CARD: Duration = Duration::from_secs(6);
+/// How long it stays after a pod comes out of the case.
+const CASE_CARD_AFTER_POD_OUT: Duration = Duration::from_secs(2);
+
 /// What the iced side has to do with the layer surface after a tick.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceAction {
@@ -216,9 +221,27 @@ impl Controller {
                 }
             }
             OverlayCommand::State { state } => {
-                let ev = event(self.state.as_ref(), &state);
+                let mut ev = event(self.state.as_ref(), &state);
                 let just_connected =
                     state.connected && !self.state.as_ref().is_some_and(|p| p.connected);
+                let was_in_case = self
+                    .state
+                    .as_ref()
+                    .is_some_and(|p| p.connected && p.in_case);
+                // Pods sitting in the open case: the case card or nothing. Their routine news
+                // (charging, the case level arriving) and the lid closing aren't worth a pop.
+                if state.in_case || (was_in_case && !state.connected) {
+                    ev = None;
+                }
+                if was_in_case && state.connected && !state.in_case {
+                    // A pod came out: the case card has done its job.
+                    if let Some((Content::Expanded, until)) = &mut self.pop {
+                        *until = (*until).min(now + CASE_CARD_AFTER_POD_OUT);
+                    }
+                }
+                if just_connected && state.in_case && self.config.case_card && !self.fullscreen {
+                    ev = Some(Content::Expanded);
+                }
                 if self.motion.update_levels(&state, self.mapped) {
                     self.moving = true;
                 }
@@ -235,9 +258,13 @@ impl Controller {
                     }
                     Some(c) => {
                         self.farewell_until = None;
+                        let case_card = state.in_case;
                         self.state = Some(state);
                         self.announce(&c, just_connected, now);
                         self.pop_up(c, now);
+                        if case_card && let Some((_, until)) = &mut self.pop {
+                            *until = now + CASE_CARD;
+                        }
                         return;
                     }
                     None if state.connected => self.farewell_until = None,
@@ -323,6 +350,9 @@ impl Controller {
         };
         if let Some(Content::Alert(a)) = self.popped(now) {
             return a.title(&state);
+        }
+        if state.in_case {
+            return "Case open".into();
         }
         if state.elsewhere {
             return elsewhere_label(state.elsewhere_name.as_deref());

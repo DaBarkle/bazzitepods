@@ -739,3 +739,71 @@ fn surface_room_follows_the_size_setting() {
     }
     assert!(at(OverlaySize::Small).0 < m.0 && at(OverlaySize::ExtraLarge).0 > m.0);
 }
+
+#[test]
+fn opening_the_case_pops_a_short_card_and_closing_it_is_quiet() {
+    let t0 = Instant::now();
+    let in_case = || OverlayState {
+        in_case: true,
+        ..buds(80, 75, 40)
+    };
+    let mut c = Controller::default();
+    state(&mut c, in_case(), t0);
+    assert_eq!(c.target(t0), Some(Content::Expanded));
+    assert_eq!(c.headline(t0), "Case open");
+    assert_eq!(
+        c.target(t0 + Duration::from_millis(5900)),
+        Some(Content::Expanded)
+    );
+    assert_eq!(c.target(t0 + Duration::from_millis(6100)), None);
+    // Routine news from the case (the pods start charging) doesn't pop it again.
+    let mut charging = in_case();
+    charging.left = comp(80, true, true);
+    let t1 = t0 + Duration::from_secs(7);
+    state(&mut c, charging.clone(), t1);
+    assert_eq!(c.target(t1), None);
+    // The lid closes: no "Disconnected" goodbye.
+    charging.connected = false;
+    state(&mut c, charging, t1);
+    assert_eq!(c.target(t1), None);
+}
+
+#[test]
+fn case_card_folds_soon_after_a_pod_comes_out() {
+    let t0 = Instant::now();
+    let mut c = Controller::default();
+    state(
+        &mut c,
+        OverlayState {
+            in_case: true,
+            ..buds(80, 75, 40)
+        },
+        t0,
+    );
+    let t1 = t0 + Duration::from_secs(1);
+    state(&mut c, buds(80, 75, 40), t1);
+    assert_eq!(
+        c.target(t1 + Duration::from_millis(1900)),
+        Some(Content::Expanded)
+    );
+    assert_eq!(c.target(t1 + Duration::from_millis(2100)), None);
+}
+
+#[test]
+fn no_case_card_when_switched_off_or_over_a_game() {
+    let t0 = Instant::now();
+    let in_case = OverlayState {
+        in_case: true,
+        ..buds(80, 75, 40)
+    };
+    let mut off = Controller::new(OverlayConfig {
+        case_card: false,
+        ..Default::default()
+    });
+    state(&mut off, in_case.clone(), t0);
+    assert_eq!(off.target(t0), None);
+    let mut game = Controller::default();
+    game.apply(OverlayCommand::Fullscreen { active: true }, t0);
+    state(&mut game, in_case, t0);
+    assert_eq!(game.target(t0), None);
+}

@@ -255,6 +255,16 @@ impl AACPManager {
         self.send_data_packet(&packet).await
     }
 
+    /// Asks the AirPods to keep these hosts, first one first. The packet EarPort's
+    /// `aap_build_priority_list` builds (github.com/Anoryth/earport, GPL-3.0).
+    pub async fn send_priority_list(&self, hosts: &[String]) -> Result<()> {
+        let mut packet = vec![opcodes::PRIORITY_LIST, 0x00, hosts.len() as u8];
+        for host in hosts {
+            packet.extend_from_slice(&mac_to_reversed_bytes(host)?);
+        }
+        self.send_data_packet(&packet).await
+    }
+
     pub async fn send_some_packet(&self) -> Result<()> {
         self.send_data_packet(&[0x29, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF])
             .await
