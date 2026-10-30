@@ -37,7 +37,8 @@ pub mod opcodes {
     pub const AUDIO_SOURCE: u8 = 0x0E;
     pub const SMART_ROUTING: u8 = 0x10;
     pub const SMART_ROUTING_RESP: u8 = 0x11;
-    pub const SEND_CONNECTED_MAC: u8 = 0x14;
+    /// Host priority list: which hosts the AirPods keep, first one first.
+    pub const PRIORITY_LIST: u8 = 0x14;
     pub const HEADTRACKING: u8 = 0x17;
     pub const TIPI_3: u8 = 0x0C;
 }

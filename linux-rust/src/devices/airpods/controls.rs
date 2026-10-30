@@ -277,8 +277,10 @@ pub(super) async fn handle_event(
             let in_ear = |i: usize| new.get(i).map(|s| *s == EarDetectionStatus::InEar);
             // AACP reports primary/secondary; the UI only needs "is anything in an ear", and
             // left/right placement is refined by BLE. Store as (primary, secondary).
-            ctx.hub
-                .update_device(&mac_s, name, |d| d.in_ear = (in_ear(0), in_ear(1)));
+            ctx.hub.update_device(&mac_s, name, |d| {
+                d.in_ear = (in_ear(0), in_ear(1));
+                d.in_case = put_away(new);
+            });
             if let Some(audio) = audio {
                 audio.wearing_changed(new.contains(&EarDetectionStatus::InEar));
             }
@@ -314,6 +316,24 @@ pub(super) async fn handle_event(
                 .count();
             ctx.hub
                 .update_device(&mac_s, name, |d| d.other_devices = others);
+            let hosts = crate::utils::app_setting_bool(super::route::ALONGSIDE_SETTING)
+                .unwrap_or(true)
+                .then(|| {
+                    route
+                        .lock()
+                        .alongside
+                        .next(new_devices, &local, std::time::Instant::now())
+                })
+                .flatten();
+            if let Some(hosts) = hosts {
+                info!("Stay alongside: sending priority list {hosts:?} (first one first)");
+                let aacp = aacp.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = aacp.send_priority_list(&hosts).await {
+                        warn!("Sending the priority list failed: {e}");
+                    }
+                });
+            }
             for device in new_devices
                 .iter()
                 .filter(|n| n.mac != local && old_devices.iter().all(|o| o.mac != n.mac))

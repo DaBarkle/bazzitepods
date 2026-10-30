@@ -44,23 +44,33 @@ impl App {
             }),
         ];
 
-        let behaviour = group(vec![setting_block(
-            "In games",
-            Some(match s.overlay_mode {
-                OverlayMode::Auto => "Opens on changes, then hides",
-                OverlayMode::Always => "Full island always on screen",
-                OverlayMode::Compact => "Slim island, opens on changes",
-                OverlayMode::Off => "Never shown",
-            }),
-            slide_control(
-                &OVERLAY_MODES,
-                s.overlay_mode,
-                Some(mode_pos),
-                true,
-                Message::SetOverlayMode,
-                Shape::WIDE,
+        let behaviour = group(vec![
+            setting_block(
+                "In games",
+                Some(match s.overlay_mode {
+                    OverlayMode::Auto => "Opens on changes, then hides",
+                    OverlayMode::Always => "Full island always on screen",
+                    OverlayMode::Compact => "Slim island, opens on changes",
+                    OverlayMode::Off => "Never shown",
+                }),
+                slide_control(
+                    &OVERLAY_MODES,
+                    s.overlay_mode,
+                    Some(mode_pos),
+                    true,
+                    Message::SetOverlayMode,
+                    Shape::WIDE,
+                ),
             ),
-        )]);
+            setting_row(
+                "Show a card when I open the case",
+                Some("Both AirPods and the case, for a few seconds. Never over games."),
+                switch(
+                    s.case_card,
+                    overlay_on.then_some(Message::SetCaseCard as fn(bool) -> Message),
+                ),
+            ),
+        ]);
 
         let mut look = vec![
             setting_row(

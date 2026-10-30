@@ -16,6 +16,8 @@ fn every_setting_survives_a_save_and_load() {
         stem_control: true,
         airpods_mic_switch: true,
         return_to_pc: false,
+        case_card: false,
+        stay_alongside: false,
         extra: Map::new(),
     };
     let back = Settings::from_json(&s.to_json());

@@ -9,7 +9,16 @@ use crate::Kick;
 use dbus::arg::{PropMap, prop_cast};
 use dbus::message::MatchRule;
 use log::{debug, info};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc::UnboundedSender;
+
+/// The screen is locked, idle or blanked. Starts false: unknown counts as at the PC.
+static AWAY: AtomicBool = AtomicBool::new(false);
+
+/// Someone is at the PC: the screen isn't locked, idle or blanked (as far as we're told).
+pub fn user_present() -> bool {
+    !AWAY.load(Ordering::Relaxed)
+}
 
 pub fn spawn(kick_tx: UnboundedSender<Kick>) {
     // Not fatal while it's down: without logind (or without the Flatpak permission) we
@@ -41,6 +50,7 @@ async fn run_screensaver(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Err
             .add_match(MatchRule::new_signal(iface, "ActiveChanged"))
             .await?
             .cb(move |_, (active,): (bool,)| {
+                AWAY.store(active, Ordering::Relaxed);
                 if !active {
                     info!("Screen saver ended; checking the AirPods");
                     let _ = tx.send(Kick::UserActive);
@@ -82,6 +92,9 @@ async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {
     let tx = kick_tx.clone();
     let _session_match = conn.add_match(rule).await?.cb(
         move |_, (interface, changed, _): (String, PropMap, Vec<String>)| {
+            if let Some(away) = user_away(&interface, &changed) {
+                AWAY.store(away, Ordering::Relaxed);
+            }
             if user_came_back(&interface, &changed) {
                 info!("You are back at the PC; checking the AirPods");
                 let _ = tx.send(Kick::UserActive);
@@ -92,6 +105,19 @@ async fn run(kick_tx: UnboundedSender<Kick>) -> Result<(), dbus::Error> {
     let err = lost.await;
     debug!("logind connection ended: {err:?}");
     Ok(())
+}
+
+/// Whether a logind session property change says the screen got locked or idle (true) or
+/// came back (false).
+fn user_away(interface: &str, changed: &PropMap) -> Option<bool> {
+    if interface != "org.freedesktop.login1.Session" {
+        return None;
+    }
+    let hints: Vec<bool> = ["LockedHint", "IdleHint"]
+        .iter()
+        .filter_map(|key| prop_cast::<bool>(changed, key).copied())
+        .collect();
+    (!hints.is_empty()).then(|| hints.contains(&true))
 }
 
 /// A logind session property change that means the user is at the PC again.
@@ -121,6 +147,16 @@ mod tests {
         assert!(user_came_back(session, &props(&[("IdleHint", false)])));
         assert!(!user_came_back(session, &props(&[("LockedHint", true)])));
         assert!(!user_came_back(session, &props(&[("IdleHint", true)])));
+        assert_eq!(
+            user_away(session, &props(&[("LockedHint", true)])),
+            Some(true)
+        );
+        assert_eq!(
+            user_away(session, &props(&[("IdleHint", false)])),
+            Some(false)
+        );
+        assert_eq!(user_away(session, &props(&[])), None);
+        assert_eq!(user_away("other", &props(&[("LockedHint", true)])), None);
         assert!(!user_came_back(session, &props(&[("Active", false)])));
         assert!(!user_came_back(
             "org.freedesktop.login1.User",

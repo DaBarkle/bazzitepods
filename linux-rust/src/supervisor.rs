@@ -228,13 +228,17 @@ impl AdapterState_ {
 
     /// AirPods due another background connect attempt.
     fn due(&self) -> Vec<Address> {
+        // Paging competes with game traffic for the radio, so no quick retries behind a
+        // fullscreen window or while nobody is at the PC.
+        let at_pc = sleep_monitor::user_present() && !overlay_feed::fullscreen_in_front();
         self.away
             .iter()
             .filter(|(addr, away)| {
+                let quick = at_pc && devices::airpods::dropped_in_case(&addr.to_string());
                 !self.running.contains_key(addr)
                     && away
                         .last_try
-                        .is_none_or(|t| t.elapsed() >= retry_interval(away.since.elapsed()))
+                        .is_none_or(|t| t.elapsed() >= retry_interval(away.since.elapsed(), quick))
             })
             .map(|(addr, _)| *addr)
             .collect()
@@ -245,14 +249,21 @@ impl AdapterState_ {
 /// then every minute for as long as it takes. A failed attempt costs nothing and connecting
 /// never takes the audio from an iPhone that is playing, so there is no reason to give up
 /// or slow down further: the AirPods come back within a minute whenever they are back.
-fn retry_interval(away_for: Duration) -> Duration {
-    if away_for < FAST_RECONNECT_PERIOD {
+/// `quick` (they went into the case and the user is at the PC, nothing fullscreen): page
+/// back to back for the first 15 minutes, so opening the lid connects them within seconds.
+fn retry_interval(away_for: Duration, quick: bool) -> Duration {
+    if quick && away_for < QUICK_RECONNECT_PERIOD {
+        QUICK_RECONNECT_INTERVAL
+    } else if away_for < FAST_RECONNECT_PERIOD {
         RECONNECT_INTERVAL
     } else {
         SLOW_RECONNECT_INTERVAL
     }
 }
 
+/// About one page timeout, so the next attempt starts as the previous one gives up.
+const QUICK_RECONNECT_INTERVAL: Duration = Duration::from_secs(8);
+const QUICK_RECONNECT_PERIOD: Duration = Duration::from_secs(15 * 60);
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(20);
 const FAST_RECONNECT_PERIOD: Duration = Duration::from_secs(3 * 60);
 const SLOW_RECONNECT_INTERVAL: Duration = Duration::from_secs(60);
@@ -369,7 +380,8 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         Err(_) => None,
     };
 
-    let mut sweep = tokio::time::interval(Duration::from_secs(10));
+    // 4 s so the 8 s quick retries land on time; attempts happen on ticks, so they stay aligned.
+    let mut sweep = tokio::time::interval(Duration::from_secs(4));
     loop {
         if tokio::time::timeout(
             RECONCILE_LIMIT,
@@ -646,5 +658,24 @@ async fn reconcile(
         };
         let handle = tokio::spawn(devices::airpods::run(addr, name, dctx, cancel.clone()));
         st.running.insert(addr, RunningDevice { cancel, handle });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retry_interval_schedule() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        assert_eq!(retry_interval(Duration::ZERO, false), RECONNECT_INTERVAL);
+        assert_eq!(retry_interval(min(5), false), SLOW_RECONNECT_INTERVAL);
+        assert_eq!(
+            retry_interval(Duration::ZERO, true),
+            QUICK_RECONNECT_INTERVAL
+        );
+        assert_eq!(retry_interval(min(14), true), QUICK_RECONNECT_INTERVAL);
+        assert_eq!(retry_interval(min(15), true), SLOW_RECONNECT_INTERVAL);
+        assert!(QUICK_RECONNECT_INTERVAL >= MIN_RECONNECT_GAP);
     }
 }

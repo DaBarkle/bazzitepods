@@ -173,6 +173,8 @@ pub(super) struct RouteState {
     pub(super) backoff_until: Option<Instant>,
     /// The last decision logged, so the log shows each change once.
     pub(super) last_verdict: Option<Verdict>,
+    /// Keeps this PC on the AirPods' host list next to an iPhone.
+    pub(super) alongside: super::alongside::Alongside,
 }
 
 /// Follows playing audio streams between ticks. A stream counts once it has played for
@@ -449,6 +451,9 @@ pub(super) async fn watch_route(
 
 /// The settings key for "Bring my AirPods back to this PC" (on unless switched off).
 pub(super) const RETURN_HOME_SETTING: &str = "return_to_pc";
+
+/// The settings key for "Stay connected alongside my iPhone" (on unless switched off).
+pub(super) const ALONGSIDE_SETTING: &str = "stay_alongside";
 
 /// How long a device may borrow the AirPods without media (a notification) before local
 /// playback is paused.

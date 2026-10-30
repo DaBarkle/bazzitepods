@@ -105,6 +105,14 @@ impl App {
             ),
         ));
         airpods.push(setting_row(
+            "Stay connected alongside my iPhone",
+            Some("Keeps this PC on the AirPods' list next to your iPhone, so they don't drop it"),
+            switch(
+                s.stay_alongside,
+                Some(Message::SetStayAlongside as fn(bool) -> Message),
+            ),
+        ));
+        airpods.push(setting_row(
             "Stem press track control",
             Some("Double-press for next track, triple-press for previous"),
             switch(

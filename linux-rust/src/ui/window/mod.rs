@@ -169,6 +169,8 @@ pub enum Message {
     SetStemControl(bool),
     SetMicSwitch(bool),
     SetReturnToPc(bool),
+    SetCaseCard(bool),
+    SetStayAlongside(bool),
     /// The "Use AirPods mic" switch: it always toggles, whatever the switch shows.
     ToggleAirPodsMic,
     SetAppearance(Appearance),
@@ -679,6 +681,8 @@ impl App {
             Message::SetStemControl(on) => self.save_settings(|s| s.stem_control = on),
             Message::SetMicSwitch(on) => self.save_settings(|s| s.airpods_mic_switch = on),
             Message::SetReturnToPc(on) => self.save_settings(|s| s.return_to_pc = on),
+            Message::SetCaseCard(on) => self.save_settings(|s| s.case_card = on),
+            Message::SetStayAlongside(on) => self.save_settings(|s| s.stay_alongside = on),
             Message::ToggleAirPodsMic => {
                 crate::mic::request_toggle();
                 Task::none()

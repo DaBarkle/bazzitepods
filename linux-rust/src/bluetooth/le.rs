@@ -449,17 +449,20 @@ async fn run_monitor(tx: &BleReadingSender, keys: &mut KeyStore) -> bluer::Resul
         start_position: 0,
         content: vec![0x4C, 0x00], // Apple company ID, little-endian
     };
-    let registered = match adapter.monitor().await {
-        Ok(mm) => {
-            mm.register(Monitor {
-                monitor_type: bluer::monitor::Type::OrPatterns,
-                patterns: Some(vec![pattern]),
-                ..Default::default()
-            })
-            .await
-        }
-        Err(e) => Err(e),
+    // Kept until this function returns: dropping the manager unregisters its monitors, which
+    // used to end the monitor a few milliseconds after it started.
+    let manager = match adapter.monitor().await {
+        Ok(mm) => mm,
+        Err(e) if monitor_unsupported(&e) => return run_discovery(&adapter, tx, keys).await,
+        Err(e) => return Err(e),
     };
+    let registered = manager
+        .register(Monitor {
+            monitor_type: bluer::monitor::Type::OrPatterns,
+            patterns: Some(vec![pattern]),
+            ..Default::default()
+        })
+        .await;
     let mut monitor_handle = match registered {
         Ok(h) => h,
         Err(e) if monitor_unsupported(&e) => return run_discovery(&adapter, tx, keys).await,
