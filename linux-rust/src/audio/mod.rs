@@ -100,6 +100,12 @@ impl AudioGuardHandle {
         self.send(Cmd::Wearing(any_in_ear));
     }
 
+    /// Both pods went into (true) or came out of the case. Taking one out gives the AirPods
+    /// the default output.
+    pub fn in_case_changed(&self, in_case: bool) {
+        self.send(Cmd::InCase(in_case));
+    }
+
     /// Anything that may have broken audio: resume from sleep, or the audio route coming
     /// back from another device. Re-runs the full setup after the usual debounce.
     // Unused for now: after sleep the device task restarts, which builds a new guard.

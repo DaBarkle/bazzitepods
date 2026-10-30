@@ -6,6 +6,20 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-31
+
+### Fixed
+- **The sound now always goes to the AirPods when they connect.** Kase used to take the
+  default output only if the AirPods had been the default the last time, and it kept that
+  in memory only, so after a restart (or a moment with another output selected) the sound
+  could stay on the speakers or HDMI while the AirPods were in your ears. Now every new
+  connection makes the AirPods the default and moves playing streams to them. Kase holds
+  back only when you pick another output while they are connected (until they next
+  connect), when both pods are in the case (it takes over as soon as one comes out), when
+  another device is playing on them, or when the default is a virtual output such as
+  EasyEffects that already forwards to them. Every decision is logged with its reason.
+  ([#44])
+
 ## [0.9.0] - 2026-10-31
 
 ### Added
@@ -414,6 +428,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.9.1]: https://github.com/DaBarkle/kase/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/DaBarkle/kase/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/DaBarkle/kase/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/DaBarkle/kase/compare/v0.8.1...v0.8.2
@@ -456,3 +471,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#39]: https://github.com/DaBarkle/kase/pull/39
 [#41]: https://github.com/DaBarkle/kase/pull/41
 [#43]: https://github.com/DaBarkle/kase/pull/43
+[#44]: https://github.com/DaBarkle/kase/pull/44

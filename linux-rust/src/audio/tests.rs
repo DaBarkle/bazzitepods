@@ -766,16 +766,74 @@ async fn default_restored_by_a_new_guard_after_reconnect() {
 }
 
 #[tokio::test]
-async fn user_chosen_default_is_respected() {
-    // We were never the default: do not steal it.
+async fn connecting_takes_the_default_from_the_speakers() {
+    // Never the default before (a fresh start, or someone picked the speakers while they
+    // were away): connecting still brings the sound to the AirPods.
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    w.snap.sink_inputs.push(SinkInputInfo {
+        index: 100,
+        sink: SPEAKERS,
+        corked: false,
+        app: None,
+        role: None,
+        hints: None,
+    });
+    let (world, handle) = start(w, fast());
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    let w = lock(&world);
+    assert_eq!(
+        w.snap.default_sink.as_deref(),
+        Some(bt_sink_name().as_str())
+    );
+    assert_eq!(w.snap.sink_inputs[0].sink, BT_SINK);
+}
+
+#[tokio::test]
+async fn an_output_picked_while_connected_is_respected_until_the_next_connect() {
     let mut w = World::new();
     w.add_card("a2dp-sink-aac");
     let (world, handle) = start(w, fast());
     handle.link_up();
     wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
-    let w = lock(&world);
-    assert_eq!(w.snap.default_sink.as_deref(), Some(SPEAKERS_NAME));
-    assert!(!w.log.iter().any(|l| l.starts_with("default:")));
+    settle(60).await;
+    lock(&world).snap.default_sink = Some(SPEAKERS_NAME.into());
+    settle(150).await;
+    assert_eq!(
+        lock(&world).snap.default_sink.as_deref(),
+        Some(SPEAKERS_NAME)
+    );
+
+    handle.link_down();
+    wait_health(&handle, "disconnected", |h| *h == AudioHealth::Disconnected).await;
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    assert_eq!(
+        lock(&world).snap.default_sink.as_deref(),
+        Some(bt_sink_name().as_str())
+    );
+}
+
+#[tokio::test]
+async fn pods_in_the_case_leave_the_default_until_one_comes_out() {
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    let (world, handle) = start(w, fast());
+    handle.in_case_changed(true);
+    handle.link_up();
+    wait_health(&handle, "ready", |h| ready_with(h, "a2dp-sink-aac")).await;
+    settle(60).await;
+    assert_eq!(
+        lock(&world).snap.default_sink.as_deref(),
+        Some(SPEAKERS_NAME)
+    );
+    handle.in_case_changed(false);
+    settle(100).await;
+    assert_eq!(
+        lock(&world).snap.default_sink.as_deref(),
+        Some(bt_sink_name().as_str())
+    );
 }
 
 #[tokio::test]
@@ -798,6 +856,39 @@ async fn link_down_and_shutdown() {
 }
 
 // --- pure helpers ----------------------------------------------------------
+
+#[test]
+fn decide_sink_reasons() {
+    let mut w = World::new();
+    w.add_card("a2dp-sink-aac");
+    let ours = w
+        .snap
+        .sinks
+        .iter()
+        .find(|s| s.index == BT_SINK)
+        .unwrap()
+        .clone();
+    let why = |snap: &PulseSnapshot, chose: bool, case: bool, away: bool| {
+        decide_sink(snap, &ours, chose, case, away).1
+    };
+    assert_eq!(why(&w.snap, false, false, false), DefaultWhy::Take);
+    assert_eq!(why(&w.snap, true, false, false), DefaultWhy::UserChoseOther);
+    assert_eq!(why(&w.snap, false, true, false), DefaultWhy::InCase);
+    assert_eq!(why(&w.snap, false, false, true), DefaultWhy::Elsewhere);
+    w.snap.sinks.push(SinkInfo {
+        index: 30,
+        name: "easyeffects_sink".into(),
+        card: None,
+        mac: None,
+        state: SinkState::Running,
+        codec: None,
+        muted: false,
+    });
+    w.snap.default_sink = Some("easyeffects_sink".into());
+    assert_eq!(why(&w.snap, false, false, false), DefaultWhy::Virtual);
+    w.snap.default_sink = Some(bt_sink_name());
+    assert_eq!(why(&w.snap, true, true, true), DefaultWhy::AlreadyDefault);
+}
 
 fn card_with(profiles: &[(&str, bool, u32)], active: Option<&str>) -> CardInfo {
     CardInfo {

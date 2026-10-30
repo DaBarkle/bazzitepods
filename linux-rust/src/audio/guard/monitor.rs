@@ -54,7 +54,7 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             self.stall_since = None;
             return;
         };
-        self.remember_default(snap.default_sink.as_deref() == Some(sink.name.as_str()));
+        self.claim_default(&snap, &sink, true).await;
         // Healthy (also clears an earlier stall failure once audio flows again).
         let healthy = AudioHealth::Ready {
             codec: codec_for(&active, Some(&sink)),

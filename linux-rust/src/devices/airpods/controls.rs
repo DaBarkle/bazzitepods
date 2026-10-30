@@ -283,6 +283,7 @@ pub(super) async fn handle_event(
             });
             if let Some(audio) = audio {
                 audio.wearing_changed(new.contains(&EarDetectionStatus::InEar));
+                audio.in_case_changed(put_away(new));
             }
             // The AirPods repeat their status; only a change means something moved.
             if old != new {

@@ -117,29 +117,66 @@ pub enum SinkAction {
     },
 }
 
-/// Restore our sink as default only when it was the default before the link
-/// dropped (so the current default is just WirePlumber's fallback); never
-/// override a default the user picked while we were away... or one we never had.
-pub fn decide_sink(snap: &PulseSnapshot, ours: &SinkInfo, we_were_default: bool) -> SinkAction {
-    if snap.default_sink.as_deref() == Some(ours.name.as_str()) || !we_were_default {
-        return SinkAction::Nothing;
-    }
-    let fallback = snap
+/// Why the AirPods' output does or doesn't become the default, for the log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultWhy {
+    /// They connected (or their output came back): the sound goes to them.
+    Take,
+    AlreadyDefault,
+    /// Both pods are in the case: nobody is listening on them yet.
+    InCase,
+    /// Another device is playing on the AirPods.
+    Elsewhere,
+    /// The user picked another output while the AirPods were connected.
+    UserChoseOther,
+    /// The default is a virtual output (EasyEffects, a filter): it forwards to the default
+    /// device by itself, and replacing it would bypass the user's effects.
+    Virtual,
+}
+
+/// Our sink becomes the default whenever the AirPods are connected and in use, so
+/// connecting them always brings the sound to them. Only a choice the user made during this
+/// connection, pods in the case, or another device playing on them leave the default alone.
+pub fn decide_sink(
+    snap: &PulseSnapshot,
+    ours: &SinkInfo,
+    user_chose_other: bool,
+    in_case: bool,
+    elsewhere: bool,
+) -> (SinkAction, DefaultWhy) {
+    let current = snap
         .default_sink
         .as_deref()
-        .and_then(|n| snap.sink_by_name(n))
-        .map(|s| s.index);
+        .and_then(|n| snap.sink_by_name(n));
+    let why = if snap.default_sink.as_deref() == Some(ours.name.as_str()) {
+        DefaultWhy::AlreadyDefault
+    } else if current.is_some_and(|s| s.card.is_none()) {
+        DefaultWhy::Virtual
+    } else if user_chose_other {
+        DefaultWhy::UserChoseOther
+    } else if in_case {
+        DefaultWhy::InCase
+    } else if elsewhere {
+        DefaultWhy::Elsewhere
+    } else {
+        DefaultWhy::Take
+    };
+    if why != DefaultWhy::Take {
+        return (SinkAction::Nothing, why);
+    }
+    let fallback = current.map(|s| s.index);
     let move_inputs = snap
         .sink_inputs
         .iter()
         .filter(|i| Some(i.sink) == fallback)
         .map(|i| i.index)
         .collect();
-    SinkAction::MakeDefault {
+    let action = SinkAction::MakeDefault {
         sink_name: ours.name.clone(),
         sink_index: ours.index,
         move_inputs,
-    }
+    };
+    (action, why)
 }
 
 /// Codec for display: PipeWire's `api.bluez5.codec`, else derived from the profile.

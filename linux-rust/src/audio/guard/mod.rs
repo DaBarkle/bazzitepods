@@ -112,6 +112,7 @@ pub(crate) enum Cmd {
     LinkUp,
     LinkDown,
     Wearing(bool),
+    InCase(bool),
     Resume,
     RouteBack,
     /// The audio came back from a device that streamed while it had the route: the
@@ -144,31 +145,6 @@ pub use decide::*;
 // State machine
 // ---------------------------------------------------------------------------
 
-/// "Was this device the default output?" survives the guard itself: every reconnect creates a
-/// new guard, and the answer from before the link dropped is exactly what we need afterwards.
-type DefaultMemory = std::sync::Mutex<std::collections::HashMap<String, bool>>;
-
-#[cfg(not(test))]
-fn with_default_memory<R>(f: impl FnOnce(&DefaultMemory) -> R) -> R {
-    static MEMORY: std::sync::LazyLock<DefaultMemory> = std::sync::LazyLock::new(Default::default);
-    f(&MEMORY)
-}
-
-// Tests run in parallel with the same fake MAC; keep their memories apart.
-#[cfg(test)]
-fn with_default_memory<R>(f: impl FnOnce(&DefaultMemory) -> R) -> R {
-    thread_local!(static MEMORY: DefaultMemory = Default::default());
-    MEMORY.with(f)
-}
-
-fn was_default(mac: &str) -> bool {
-    with_default_memory(|m| {
-        m.lock()
-            .map(|m| m.get(mac).copied().unwrap_or(false))
-            .unwrap_or(false)
-    })
-}
-
 #[derive(Debug)]
 enum Abort {
     /// Link went down or shutdown was requested while working.
@@ -200,7 +176,15 @@ pub(crate) struct Guard<P: PulseApi, B: BluezApi> {
     stall_since: Option<Instant>,
     last_ladder: Option<Instant>,
     ladders_this_link: u8,
-    we_were_default: bool,
+    /// The user picked another output while the AirPods were connected: leave it.
+    user_chose_other: bool,
+    /// Our sink's index while it was the default, to tell the user's choice from
+    /// WirePlumber's fallback when the sink is recreated.
+    had_default: Option<u32>,
+    /// Both pods are in the case.
+    in_case: bool,
+    /// The last default-output decision logged, so each change is logged once.
+    default_why: Option<DefaultWhy>,
     wearing: bool,
     /// Until then, a stall is acted on almost at once: the audio route just came back
     /// from another device, and its transport was probably broken while it was away.
@@ -253,7 +237,10 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             stall_since: None,
             last_ladder: None,
             ladders_this_link: 0,
-            we_were_default: was_default(&mac.to_string().to_uppercase()),
+            user_chose_other: false,
+            had_default: None,
+            in_case: false,
+            default_why: None,
             wearing: false,
             fast_until: None,
             hush_pending: false,
@@ -316,6 +303,10 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         debug!("[audio {}] command {:?}", self.mac_str, cmd);
         match cmd {
             Cmd::LinkUp => {
+                // A new connection: the sound goes to the AirPods again.
+                self.user_chose_other = false;
+                self.had_default = None;
+                self.default_why = None;
                 self.away = false;
                 self.linked_at = Some(now);
                 self.linked = true;
@@ -347,6 +338,13 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                         self.ensure_attempts = 0;
                         self.ensure_at = Some(now + self.cfg.poll);
                     }
+                }
+            }
+            Cmd::InCase(in_case) => {
+                self.in_case = in_case;
+                // Taken out of the case: give them the sound now, not at the next pass.
+                if !in_case && self.linked && self.ready && !self.busy {
+                    self.next_monitor = Some(now);
                 }
             }
             Cmd::Resume => {
@@ -695,8 +693,64 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
             }
             self.pause(self.cfg.poll).await?;
         };
-        let action = decide_sink(&snap, &sink, self.we_were_default);
-        self.remember_default(snap.default_sink.as_deref() == Some(sink.name.as_str()));
+        self.claim_default(&snap, &sink, false).await;
+        Ok(AudioHealth::Ready {
+            profile: profile.to_string(),
+            codec: codec_for(profile, Some(&sink)),
+        })
+    }
+}
+
+impl<P: PulseApi, B: BluezApi> Guard<P, B> {
+    /// Makes our output the default and moves the streams over, unless [`decide_sink`] says
+    /// not to. Logs each decision when it changes. `settled`: the output has been up since the
+    /// last pass, so a new default is the user's choice; right after setup it is only
+    /// WirePlumber's fallback.
+    pub(super) async fn claim_default(
+        &mut self,
+        snap: &PulseSnapshot,
+        sink: &SinkInfo,
+        settled: bool,
+    ) {
+        let ours = snap.default_sink.as_deref() == Some(sink.name.as_str());
+        if ours {
+            self.had_default = Some(sink.index);
+            self.user_chose_other = false;
+        } else if settled && self.had_default == Some(sink.index) {
+            // Same sink, someone else now default: the user chose it (a recreated sink would
+            // have a new index and only means WirePlumber fell back).
+            self.user_chose_other = true;
+            self.had_default = None;
+        }
+        let (action, why) = decide_sink(snap, sink, self.user_chose_other, self.in_case, self.away);
+        if self.default_why.replace(why) != Some(why) || why == DefaultWhy::Take {
+            let current = snap.default_sink.as_deref().unwrap_or("none");
+            match why {
+                DefaultWhy::Take => {}
+                DefaultWhy::AlreadyDefault => {
+                    info!(
+                        "[audio {}] the AirPods are the default output",
+                        self.mac_str
+                    )
+                }
+                DefaultWhy::InCase => info!(
+                    "[audio {}] not taking the default output ({current}): both AirPods are in the case",
+                    self.mac_str
+                ),
+                DefaultWhy::Elsewhere => info!(
+                    "[audio {}] not taking the default output ({current}): another device is playing on the AirPods",
+                    self.mac_str
+                ),
+                DefaultWhy::Virtual => info!(
+                    "[audio {}] not taking the default output: {current} is a virtual output that forwards to it",
+                    self.mac_str
+                ),
+                DefaultWhy::UserChoseOther => info!(
+                    "[audio {}] not taking the default output: you picked {current} while the AirPods were connected",
+                    self.mac_str
+                ),
+            }
+        }
         if let SinkAction::MakeDefault {
             sink_name,
             sink_index,
@@ -704,14 +758,13 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
         } = action
         {
             info!(
-                "[audio {}] restoring {} as default output (was {:?}), moving {} stream(s)",
+                "[audio {}] making the AirPods the default output (was {:?}), moving {} stream(s)",
                 self.mac_str,
-                sink_name,
                 snap.default_sink,
                 move_inputs.len()
             );
             match self.pulse.set_default_sink(&sink_name).await {
-                Ok(()) => self.remember_default(true),
+                Ok(()) => self.had_default = Some(sink_index),
                 Err(e) => warn!("[audio {}] set default sink failed: {}", self.mac_str, e),
             }
             for input in move_inputs {
@@ -723,9 +776,5 @@ impl<P: PulseApi, B: BluezApi> Guard<P, B> {
                 }
             }
         }
-        Ok(AudioHealth::Ready {
-            profile: profile.to_string(),
-            codec: codec_for(profile, Some(&sink)),
-        })
     }
 }
