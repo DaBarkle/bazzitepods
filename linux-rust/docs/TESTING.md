@@ -95,6 +95,33 @@ whenever the Freedesktop runtime or WirePlumber is updated:
 3. Hold it again: falling chime, the desk mic is back.
 4. If it fails, look for `access denied` or `libavcodec` in the log.
 
+## 8. Case and reconnect scenarios
+
+What Kase does in each situation, and where. `sup` is `src/supervisor.rs`, `guard` is
+`src/audio/guard/`. Each decision is one line in the log.
+
+| Scenario | Expected | Handled by |
+| --- | --- | --- |
+| Pods into the case, lid closed, reopened within 5 s | Reconnects within a few seconds. The case card shows both pods and the case | Advert on the lid-open edge knocks at once (`sup` `ble_kick_due`); the 8 s retry covers a missed advert (`quick_retry`) |
+| Same, reopened after a minute or more | Reconnects within about 8 s of opening, for 15 minutes after the drop; then within a minute | `quick_retry` + `retry_interval` (8 s for 15 min, then 20 s / 60 s) |
+| Lid opened right after using the iPhone, iPhone grabs them first | The PC's connect may be reset by the AirPods; it keeps knocking every 8 s and connects once the iPhone lets go | Short session counts as bounced (`RunningDevice::bounced`, `quick_retry`, 3 min) |
+| One pod in the case, one in an ear | Stays connected; if it drops, it counts as in use (normal schedule), and the sound goes to the AirPods | `put_away` (in the case and none in an ear) |
+| Case closed after an iPhone hand-back, no ear reports reached the PC | Still counts as into the case, from the AirPods' adverts | `devices::airpods::note_put_away` fed by adverts (`battery_service.rs`) |
+| Adverts present (Quicker battery updates on, advertisement monitor) | Lid-open knock, case battery while away | `bluetooth/le.rs` `run_monitor` |
+| Adverts absent (switch off: discovery only while away; or none reach the adapter) | Falls back to timed knocks; nothing else changes | `run_discovery`, `quick_retry` (ear reports only) |
+| Screen locked or idle | No 8 s knocks; the normal schedule, plus a knock the moment you come back | `sleep_monitor::user_present`, `Kick::UserActive` |
+| Fullscreen game in front | No 8 s knocks (radio time stays with the game) | `overlay_feed::fullscreen_in_front` |
+| Suspend and resume | Sessions restart and the AirPods are wanted back | `Kick::Resumed`, `want_back` |
+| 15 minutes in the case | The 8 s knocks stop; 60 s from then on | `QUICK_RECONNECT_PERIOD` |
+| Disconnect pressed on the PC | Stays disconnected (adverts and knocks ignore it) | `disconnect_watch::plan` (`Local` → `Never`) |
+| Out of range | Normal schedule (20 s for 3 min, then 60 s); a knock as soon as an advert is heard again | `retry_interval`, `ble_kick_due` |
+| Stay alongside after a case reconnect | Priority list sent once the iPhone shows up, the player first; at most 8 per connection | `devices/airpods/alongside.rs` |
+| Reconnect from an iPhone hand-back with pods in the ears | No case card | Overlay only pops the card when the pods are in the case (`kase-overlay` `logic.rs`) |
+| AirPods connect with pods out | The sound goes to the AirPods, unless you picked another output during this connection, another device is playing on them, or the default is a virtual output | `guard` `decide_sink` / `claim_default` |
+
+Known gap: a Disconnect pressed on the PC is forgotten if Kase restarts before the AirPods
+come back; after the restart they are reconnected like any other away AirPods.
+
 ## Logs
 
 Kase writes its log to `~/.var/app/io.github.dabarkle.Kase/.local/state/kase/kase.log`

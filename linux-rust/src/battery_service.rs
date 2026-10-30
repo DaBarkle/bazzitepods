@@ -102,6 +102,14 @@ async fn run(hub: Hub, mut rx: mpsc::UnboundedReceiver<BatteryInput>, cache_path
                         let product = reading.product_id;
                         let in_case = reading.left_in_case && reading.right_in_case;
                         let mac_s = mac.to_string();
+                        // Same rule as the ear reports: in the case, none in an ear.
+                        crate::devices::airpods::note_put_away(
+                            &mac_s,
+                            (reading.left_in_case || reading.right_in_case)
+                                && reading.left_in_ear != Some(true)
+                                && reading.right_in_ear != Some(true),
+                            "adverts",
+                        );
                         hub.update_device(&mac_s, &known_name(&hub, &mac_s), |d| {
                             if d.link == LinkState::Disconnected {
                                 d.in_case = in_case;

@@ -428,11 +428,26 @@ pub(super) fn put_away(status: &[EarDetectionStatus]) -> bool {
 }
 
 fn note_ear_status(mac: &str, status: &[EarDetectionStatus]) {
-    let away = put_away(status);
-    if let Ok(mut put_away) = PUT_AWAY.lock() {
-        put_away
-            .get_or_insert_with(HashMap::new)
-            .insert(mac.to_ascii_uppercase(), away);
+    note_put_away(mac, put_away(status), "ear report");
+}
+
+/// Records whether these AirPods are put away. The newest word wins, from their ear reports
+/// or from their adverts: after an iPhone hand-back they may send this PC no ear reports at
+/// all, while their adverts still say the pods went into the case.
+pub fn note_put_away(mac: &str, away: bool, source: &str) {
+    let Ok(mut put_away) = PUT_AWAY.lock() else {
+        return;
+    };
+    let was = put_away
+        .get_or_insert_with(HashMap::new)
+        .insert(mac.to_ascii_uppercase(), away);
+    if was != Some(away) {
+        let where_ = if away {
+            "in the case"
+        } else {
+            "out of the case"
+        };
+        info!("AirPods {mac} are {where_} (from {source})");
     }
 }
 

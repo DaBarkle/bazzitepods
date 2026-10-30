@@ -94,17 +94,21 @@ pub async fn run(
     tokio::spawn(async move {
         // Adverts arrive about once a second; only nudge the supervisor occasionally.
         let mut last_kick: HashMap<Address, Instant> = HashMap::new();
+        let mut lid_open: HashMap<Address, (bool, Instant)> = HashMap::new();
         while let Some((mac, reading)) = ble_rx.recv().await {
             let in_use = reading.left_in_ear == Some(true)
                 || reading.right_in_ear == Some(true)
                 || reading.lid_open == Some(true)
                 || (reading.left.is_some() && !reading.left_in_case)
                 || (reading.right.is_some() && !reading.right_in_case);
-            if in_use
-                && last_kick
-                    .get(&mac)
-                    .is_none_or(|t| t.elapsed() >= Duration::from_secs(10))
-            {
+            let lid_opened = reading.lid_open.is_some_and(|open| {
+                let prev = lid_open.insert(mac, (open, Instant::now()));
+                lid_just_opened(prev.map(|(was, at)| (was, at.elapsed())), open)
+            });
+            if ble_kick_due(in_use, lid_opened, last_kick.get(&mac).map(|t| t.elapsed())) {
+                if lid_opened {
+                    info!("AirPods {mac}: case lid opened; trying to connect now");
+                }
                 last_kick.insert(mac, Instant::now());
                 let _ = ble_kick.send(Kick::BleSeen(mac, in_use));
             }
@@ -122,6 +126,19 @@ pub async fn run(
         kick_rx,
     })
     .await;
+}
+
+/// Whether an advert should nudge a reconnect: when the AirPods are in use, at most every
+/// 10 s, but at once when the case lid just opened. The reconnect itself still keeps
+/// [`MIN_RECONNECT_GAP`] between attempts, so this can't storm.
+fn ble_kick_due(in_use: bool, lid_opened: bool, since_last: Option<Duration>) -> bool {
+    in_use && (lid_opened || since_last.is_none_or(|t| t >= Duration::from_secs(10)))
+}
+
+/// The lid opened since the last advert: it was shut, or the AirPods went quiet for a while
+/// (a closed case stops advertising, often without saying it shut).
+fn lid_just_opened(prev: Option<(bool, Duration)>, open: bool) -> bool {
+    open && prev.is_none_or(|(was_open, ago)| !was_open || ago > Duration::from_secs(5))
 }
 
 /// Reasons to re-check BlueZ state right away instead of waiting for the periodic sweep.
@@ -150,6 +167,15 @@ struct SupervisorCtx {
 struct RunningDevice {
     cancel: CancellationToken,
     handle: JoinHandle<()>,
+    started: Instant,
+}
+
+impl RunningDevice {
+    /// The AirPods dropped this PC right after connecting: another device (an iPhone) took
+    /// them while the PC was setting up, and they may well come back in a few seconds.
+    fn bounced(&self) -> bool {
+        self.started.elapsed() < BOUNCE_LIMIT
+    }
 }
 
 /// Per-adapter bookkeeping that outlives individual device tasks.
@@ -170,14 +196,17 @@ struct AdapterState_ {
 struct Away {
     since: Instant,
     last_try: Option<Instant>,
+    /// Lost right after connecting (see [`RunningDevice::bounced`]).
+    bounced: bool,
 }
 
 impl AdapterState_ {
-    fn note_lost(&mut self, addr: Address) {
+    fn note_lost(&mut self, addr: Address, bounced: bool) {
         let new = !self.away.contains_key(&addr);
         self.away.entry(addr).or_insert(Away {
             since: Instant::now(),
             last_try: None,
+            bounced,
         });
         self.plan_reconnect(addr, new);
     }
@@ -190,6 +219,7 @@ impl AdapterState_ {
             Away {
                 since: Instant::now(),
                 last_try: None,
+                bounced: false,
             },
         );
     }
@@ -210,7 +240,12 @@ impl AdapterState_ {
                 self.away.remove(&addr);
             }
             ReconnectPlan::UntilBack if log_it => {
-                if devices::airpods::dropped_in_case(&addr.to_string()) {
+                if self.away.get(&addr).is_some_and(|a| a.bounced) {
+                    info!(
+                        "AirPods {} dropped this PC while connecting (another device took them); trying again every {:?}",
+                        addr, QUICK_RECONNECT_INTERVAL
+                    );
+                } else if devices::airpods::dropped_in_case(&addr.to_string()) {
                     info!(
                         "AirPods {} went into the case; reconnecting when they come out",
                         addr
@@ -234,7 +269,12 @@ impl AdapterState_ {
         self.away
             .iter()
             .filter(|(addr, away)| {
-                let quick = at_pc && devices::airpods::dropped_in_case(&addr.to_string());
+                let quick = quick_retry(
+                    at_pc,
+                    devices::airpods::dropped_in_case(&addr.to_string()),
+                    away.bounced,
+                    away.since.elapsed(),
+                );
                 !self.running.contains_key(addr)
                     && away
                         .last_try
@@ -243,6 +283,13 @@ impl AdapterState_ {
             .map(|(addr, _)| *addr)
             .collect()
     }
+}
+
+/// Whether away AirPods get the quick (back-to-back) retries: only while someone is at the
+/// PC with nothing fullscreen, and only when they went into the case or were taken by
+/// another device mid-connect (for the first few minutes of that).
+fn quick_retry(at_pc: bool, in_case: bool, bounced: bool, away_for: Duration) -> bool {
+    at_pc && (in_case || (bounced && away_for < FAST_RECONNECT_PERIOD))
 }
 
 /// Background connect attempts while AirPods are away: every 20 s for the first 3 minutes,
@@ -261,6 +308,8 @@ fn retry_interval(away_for: Duration, quick: bool) -> Duration {
     }
 }
 
+/// A session shorter than this that ends on its own counts as bounced.
+const BOUNCE_LIMIT: Duration = Duration::from_secs(10);
 /// About one page timeout, so the next attempt starts as the previous one gives up.
 const QUICK_RECONNECT_INTERVAL: Duration = Duration::from_secs(8);
 const QUICK_RECONNECT_PERIOD: Duration = Duration::from_secs(15 * 60);
@@ -590,13 +639,13 @@ async fn reconcile(
     st.running.retain(|addr, d| {
         let done = d.handle.is_finished();
         if done {
-            ended.push(*addr);
+            ended.push((*addr, d.bounced()));
         }
         !done
     });
     if powered {
-        for addr in ended {
-            st.note_lost(addr);
+        for (addr, bounced) in ended {
+            st.note_lost(addr, bounced);
         }
     }
     st.stopping.retain(|_, h| !h.is_finished());
@@ -622,7 +671,7 @@ async fn reconcile(
             if let Some(dev) = st.running.remove(&addr) {
                 info!("{} disconnected", addr);
                 if powered {
-                    st.note_lost(addr);
+                    st.note_lost(addr, dev.bounced());
                 }
                 dev.cancel.cancel();
                 // The task publishes its own Disconnected state when it exits.
@@ -657,7 +706,14 @@ async fn reconcile(
             local_mac: local_mac.to_string(),
         };
         let handle = tokio::spawn(devices::airpods::run(addr, name, dctx, cancel.clone()));
-        st.running.insert(addr, RunningDevice { cancel, handle });
+        st.running.insert(
+            addr,
+            RunningDevice {
+                cancel,
+                handle,
+                started: Instant::now(),
+            },
+        );
     }
 }
 
@@ -677,5 +733,41 @@ mod tests {
         assert_eq!(retry_interval(min(14), true), QUICK_RECONNECT_INTERVAL);
         assert_eq!(retry_interval(min(15), true), SLOW_RECONNECT_INTERVAL);
         assert!(QUICK_RECONNECT_INTERVAL >= MIN_RECONNECT_GAP);
+    }
+
+    #[test]
+    fn quick_retries_only_at_the_pc_after_the_case_or_a_bounce() {
+        let min = |m: u64| Duration::from_secs(m * 60);
+        // Into the case while at the PC; not while locked, idle or behind a fullscreen game.
+        assert!(quick_retry(true, true, false, min(1)));
+        assert!(!quick_retry(false, true, false, min(1)));
+        // Taken mid-connect by the iPhone: quick for the first 3 minutes only.
+        assert!(quick_retry(true, false, true, min(2)));
+        assert!(!quick_retry(true, false, true, min(4)));
+        assert!(!quick_retry(false, false, true, min(1)));
+        // Simply walked off (out of range): the normal schedule.
+        assert!(!quick_retry(true, false, false, min(1)));
+    }
+
+    #[test]
+    fn lid_opening_is_seen_even_when_the_closed_case_said_nothing() {
+        let s = Duration::from_secs;
+        assert!(lid_just_opened(None, true));
+        assert!(lid_just_opened(Some((false, s(1))), true));
+        // Still open, adverts a second apart: not a new opening.
+        assert!(!lid_just_opened(Some((true, s(1))), true));
+        // Open, then silence (closed case), then open again.
+        assert!(lid_just_opened(Some((true, s(30))), true));
+        assert!(!lid_just_opened(Some((false, s(1))), false));
+    }
+
+    #[test]
+    fn lid_opening_nudges_at_once_otherwise_every_ten_seconds() {
+        let s = Duration::from_secs;
+        assert!(ble_kick_due(true, false, None));
+        assert!(!ble_kick_due(true, false, Some(s(3))));
+        assert!(ble_kick_due(true, false, Some(s(10))));
+        assert!(ble_kick_due(true, true, Some(s(1))));
+        assert!(!ble_kick_due(false, true, None));
     }
 }
