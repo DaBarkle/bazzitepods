@@ -6,6 +6,25 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-31
+
+### Fixed
+- **Quick case reopens after using the iPhone reconnect quickly.** Kase only knew the pods
+  were in the case from their ear reports, which the AirPods sometimes don't send to the PC
+  after an iPhone hand-back, so a real "into the case" counted as "left" and got the slow
+  schedule. The AirPods' own adverts now count too; the newest word wins. ([#45])
+- **Opening the lid knocks at once.** A matched advert showing the lid opening triggers a
+  reconnect straight away instead of waiting up to 10 seconds behind the advert throttle.
+  Attempts still stay at least 5 seconds apart. ([#45])
+- **An iPhone that grabs the AirPods mid-connect no longer slows things down.** When the
+  AirPods drop the PC within 10 seconds of connecting, Kase keeps trying every 8 seconds for
+  3 minutes (while you are at the PC and nothing is fullscreen) instead of falling back to
+  every 20 seconds. ([#45])
+
+### Added
+- A case and reconnect scenario table in `docs/TESTING.md`: what Kase does in each
+  situation, and which code handles it. ([#45])
+
 ## [0.9.1] - 2026-10-31
 
 ### Fixed
@@ -428,6 +447,7 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 ### Fixed
 - Audio no longer stays silent after the AirPods reconnect ("walked away and came back").
 
+[0.9.2]: https://github.com/DaBarkle/kase/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/DaBarkle/kase/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/DaBarkle/kase/compare/v0.8.3...v0.9.0
 [0.8.3]: https://github.com/DaBarkle/kase/compare/v0.8.2...v0.8.3
@@ -472,3 +492,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#41]: https://github.com/DaBarkle/kase/pull/41
 [#43]: https://github.com/DaBarkle/kase/pull/43
 [#44]: https://github.com/DaBarkle/kase/pull/44
+[#45]: https://github.com/DaBarkle/kase/pull/45
