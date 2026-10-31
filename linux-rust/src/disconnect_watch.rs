@@ -7,7 +7,9 @@
 use crate::Kick;
 use bluer::Address;
 use dbus::message::MatchRule;
-use log::{debug, info};
+use log::{debug, info, warn};
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// Why a link dropped, as BlueZ reports it.
@@ -55,6 +57,31 @@ pub fn plan(reason: Option<DropReason>) -> ReconnectPlan {
     match reason {
         Some(DropReason::Local) => ReconnectPlan::Never,
         _ => ReconnectPlan::UntilBack,
+    }
+}
+
+/// AirPods disconnected on this PC, kept across restarts and reboots so Kase leaves them be.
+pub fn kept_away_path() -> PathBuf {
+    crate::utils::get_devices_path().with_file_name("kept_disconnected.json")
+}
+
+/// The remembered Disconnects. A missing or unreadable file means none: reconnecting is
+/// the safe default.
+pub fn load_kept_away(path: &Path) -> HashSet<Address> {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|a| a.parse().ok())
+        .collect()
+}
+
+pub fn save_kept_away(path: &Path, kept: &HashSet<Address>) {
+    let mut list: Vec<String> = kept.iter().map(|a| a.to_string()).collect();
+    list.sort();
+    if let Err(e) = crate::store::write_atomic(path, &serde_json::json!(list).to_string()) {
+        warn!("Could not save {}: {e}", path.display());
     }
 }
 
@@ -193,6 +220,21 @@ mod tests {
     #[test]
     fn disconnecting_here_stays_disconnected() {
         assert_eq!(plan(Some(DropReason::Local)), ReconnectPlan::Never);
+    }
+
+    #[test]
+    fn kept_disconnects_survive_a_restart_and_a_bad_file_means_none() {
+        let dir = std::env::temp_dir().join(format!("kase-kept-{}", std::process::id()));
+        let path = dir.join("kept_disconnected.json");
+        assert!(load_kept_away(&path).is_empty(), "missing file");
+        let a: Address = "CC:22:FE:24:0C:70".parse().unwrap();
+        save_kept_away(&path, &HashSet::from([a]));
+        assert_eq!(load_kept_away(&path), HashSet::from([a]));
+        std::fs::write(&path, "{not json").unwrap();
+        assert!(load_kept_away(&path).is_empty(), "corrupt file");
+        std::fs::write(&path, r#"["nonsense", "CC:22:FE:24:0C:70"]"#).unwrap();
+        assert_eq!(load_kept_away(&path), HashSet::from([a]));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

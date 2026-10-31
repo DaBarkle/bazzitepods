@@ -81,7 +81,8 @@ AirPods is one `route:` line in the log, with the reason.
 | Same with **Bring AirPods back to this PC** off | Stays on the iPhone until you press play on the PC |
 | Take a phone call while gaming | Stays on the phone for the whole call, then comes back |
 | Leave with the AirPods on the iPhone for hours; come home and open the case | Connected to the PC within a minute, sooner if you unlock the PC |
-| Press Disconnect on the PC | Stays disconnected |
+| Press Disconnect on the PC | Stays disconnected, also after restarting Kase, a reboot or suspend |
+| Then connect from the Bluetooth settings | Connects; from then on Kase reconnects them as usual again |
 
 ## 7. AirPods mic switch (after every runtime or WirePlumber update)
 
@@ -113,14 +114,19 @@ What Kase does in each situation, and where. `sup` is `src/supervisor.rs`, `guar
 | Fullscreen game in front | No 8 s knocks (radio time stays with the game) | `overlay_feed::fullscreen_in_front` |
 | Suspend and resume | Sessions restart and the AirPods are wanted back | `Kick::Resumed`, `want_back` |
 | 15 minutes in the case | The 8 s knocks stop; 60 s from then on | `QUICK_RECONNECT_PERIOD` |
-| Disconnect pressed on the PC | Stays disconnected (adverts and knocks ignore it) | `disconnect_watch::plan` (`Local` → `Never`) |
+| Disconnect pressed on the PC | Stays disconnected: no knocks, lid-open nudges, 8 s retries or stay alongside. Remembered across a Kase restart, a reboot and suspend | `disconnect_watch::plan` (`Local` → `Never`); saved to `kept_disconnected.json` by `sup` `settle_kept` once the adapter is still on 3 s later |
+| Bluetooth switched off on the PC | Not remembered as a Disconnect (it also drops links as `Local`) | `sup` `settle_kept` (adapter off → not saved) |
+| Connected again after a Disconnect (KDE, `bluetoothctl`, or the AirPods dialling in) | Accepted, and the remembered Disconnect is cleared | `sup` `reconcile` → `forget_kept` |
+| Unpaired or forgotten after a Disconnect | The remembered Disconnect is cleared, also if it happened while Kase was off | `AdapterEvent::DeviceRemoved` and the startup check → `forget_kept` |
 | Out of range | Normal schedule (20 s for 3 min, then 60 s); a knock as soon as an advert is heard again | `retry_interval`, `ble_kick_due` |
 | Stay alongside after a case reconnect | Priority list sent once the iPhone shows up, the player first; at most 8 per connection | `devices/airpods/alongside.rs` |
 | Reconnect from an iPhone hand-back with pods in the ears | No case card | Overlay only pops the card when the pods are in the case (`kase-overlay` `logic.rs`) |
 | AirPods connect with pods out | The sound goes to the AirPods, unless you picked another output during this connection, another device is playing on them, or the default is a virtual output | `guard` `decide_sink` / `claim_default` |
 
-Known gap: a Disconnect pressed on the PC is forgotten if Kase restarts before the AirPods
-come back; after the restart they are reconnected like any other away AirPods.
+Kase never blocks a connection. An incoming one from the AirPods while a Disconnect is
+remembered counts as the user's choice: it connects and the Disconnect is forgotten. This
+matches 0.7.0's intent, which was that Kase doesn't pull back AirPods you disconnected,
+not that it refuses them.
 
 ## Logs
 

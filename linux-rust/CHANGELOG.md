@@ -6,6 +6,24 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-10-31
+
+### Fixed
+- **A Disconnect pressed on the PC is remembered.** It used to be kept in memory only, so
+  after Kase restarted (a reboot, a crash, an update) the AirPods were reconnected like any
+  other away AirPods. Kase now saves it per device in `kept_disconnected.json` (an atomic
+  write; a missing or unreadable file means nothing is remembered) and does no knocking,
+  lid-open nudges, 8-second retries or stay alongside for those AirPods across a restart,
+  a reboot and suspend. Connecting them again by any route (the Bluetooth settings,
+  `bluetoothctl`, or the AirPods connecting by themselves) or unpairing them clears it.
+  Switching Bluetooth off, which also closes links as "Local", is not remembered as a
+  Disconnect. Every decision is logged. ([#46])
+
+### Changed
+- The README now covers the case card, faster pickup from the case, the lid-open connect,
+  Stay connected alongside my iPhone (with the EarPort credit), where the sound goes on
+  connect, and remembered Disconnects. ([#46])
+
 ## [0.9.2] - 2026-10-31
 
 ### Fixed
@@ -493,3 +511,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#43]: https://github.com/DaBarkle/kase/pull/43
 [#44]: https://github.com/DaBarkle/kase/pull/44
 [#45]: https://github.com/DaBarkle/kase/pull/45
+[#46]: https://github.com/DaBarkle/kase/pull/46

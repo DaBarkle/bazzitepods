@@ -118,6 +118,12 @@ into a short **alert** that names the one thing that changed:
 <img src="linux-rust/docs/screenshots/island-alerts.png" width="640" alt="Eight alerts: Case charging in green, Right AirPod low in amber, Playing on iPhone and Back on this PC in blue, Transparency, AirPods Mic, AirPods Mic Unavailable, and AirPods 4 Disconnected">
 </div>
 
+When the AirPods connect from the open case, the card shows both pods and the case for
+about 6 seconds and folds away 2 seconds after you take a pod out. Closing the lid with the
+pods inside doesn't pop a *Disconnected* alert. The case card is never shown over a
+fullscreen game or video; turn it off with **Show a card when I open the case** in the
+Island tab.
+
 #### Styles
 
 <p align="center">
@@ -187,7 +193,24 @@ press play on the PC, as with a Mac, turn off **Bring AirPods back to this PC** 
 
 When the AirPods leave the PC, for the iPhone or for the day, Kase keeps looking for them.
 Open the case when you get home, or just sit down and unlock the PC, and they reconnect
-without a trip to the Bluetooth menu.
+without a trip to the Bluetooth menu. Kase listens to the AirPods' own Bluetooth adverts:
+opening the lid starts a connect at once. After the pods go into the case, it also tries
+every 8 seconds for 15 minutes while you're at the PC (screen unlocked, not idle, nothing
+fullscreen). Otherwise it tries every 20 seconds for 3 minutes, then every minute.
+
+While your iPhone shares the AirPods, **Stay connected alongside my iPhone** (Settings →
+AirPods, on by default) asks them to keep this PC on their list of devices, so they don't
+drop it for the iPhone.
+
+When the AirPods connect, the sound goes to them. Kase leaves it alone if you pick another
+output while they're connected, while both pods are in the case (it moves when you take one
+out), while another device is playing on them, or when your default is a virtual output
+such as EasyEffects.
+
+Press **Disconnect** in your desktop's Bluetooth settings and the AirPods stay disconnected,
+even after Kase restarts, a reboot or suspend. Connect them again any way you like (the
+Bluetooth settings, `bluetoothctl`, or the AirPods connecting by themselves) and Kase looks
+after them as before. Unpairing them also clears it.
 
 ### The app window
 
@@ -318,6 +341,7 @@ disconnected. Closing the window keeps Kase running in the tray.
 
 **The island**
 - Card, slim island and alerts, on springs
+- A case card with both pods and the case when you open the lid
 - Purist and Classic styles, four sizes, six places
 - Translucent over fullscreen games, solid on the desktop
 - Redraws only while it moves; at rest it uses no CPU
@@ -336,12 +360,15 @@ Only the controls your model supports are shown.
 - Never leaves the audio card switched off, and repairs a stalled connection by itself
 - Returns to AAC after a fallback codec (AAC where your distribution provides it: Fedora,
   Bazzite, Arch, SteamOS; otherwise SBC)
+- The sound goes to the AirPods when they connect, unless you chose another output
 - Reconnects when the AirPods come back, however long they were away, including after a
   day out with your iPhone
-- Disconnecting on purpose keeps them disconnected
+- Opening the case lid reconnects them within seconds
+- Disconnecting on purpose keeps them disconnected, across restarts, reboots and suspend
 
 **Multiple devices**
 - Your PC is home: the AirPods come back a few seconds after your iPhone stops
+- Optionally stays connected alongside your iPhone, so the AirPods don't drop the PC
 - A phone notification never keeps them while you game, watch or talk on Discord
 - Works with apps that don't report playback, such as games and the Plex desktop app
 - Never interrupts a phone call
@@ -528,6 +555,18 @@ power-saving one) or `=high` (the fast one). Undo any of these with
 </details>
 
 <details>
+<summary><b>The AirPods don't reconnect by themselves</b></summary>
+
+<br>
+
+If you pressed **Disconnect** on this PC, Kase leaves them disconnected on purpose, even
+after a restart. Connect them once from your desktop's Bluetooth settings and Kase
+reconnects them by itself again from then on. The log says
+`remembered Disconnect pressed on this PC; not reconnecting` when this is why.
+
+</details>
+
+<details>
 <summary><b>Does it work in Steam Gaming Mode?</b></summary>
 
 <br>
@@ -623,7 +662,9 @@ implementation, the LE advert decryption and the Rust Bluetooth groundwork come 
 LibrePods. Kase builds a new desktop app around them: the island, the window and tray, the
 battery and audio logic, device switching, the mic switch and the packaging. The AirPods
 mic stream follows the approach found in LibrePods
-[pull request #655](https://github.com/librepods-org/librepods/pull/655).
+[pull request #655](https://github.com/librepods-org/librepods/pull/655). **Stay connected
+alongside my iPhone** follows an idea and protocol detail from
+[EarPort](https://github.com/Anoryth/earport) by Anoryth (GPL-3.0), reimplemented for Kase.
 
 This repository is a fork of LibrePods, trimmed to the Kase desktop app in `linux-rust/`.
 LibrePods' notes on the AirPods protocol live on in
