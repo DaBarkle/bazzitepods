@@ -97,6 +97,11 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.9.4" date="2026-10-31">
+      <description>
+        <p>Pressing play on the PC takes the AirPods back from the iPhone even when they connected while the iPhone had them, instead of leaving Discord, videos and Plex silent.</p>
+      </description>
+    </release>
     <release version="0.9.3" date="2026-10-31">
       <description>
         <p>A Disconnect pressed on the PC is now remembered across restarts, reboots and suspend, until you connect the AirPods again or unpair them.</p>

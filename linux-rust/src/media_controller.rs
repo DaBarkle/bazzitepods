@@ -206,12 +206,7 @@ impl MediaController {
             if !was_playing && is_playing {
                 // Copy what we need and release the lock before any await: send_packet
                 // takes the same (non-reentrant) mutex, so holding it here deadlocks.
-                let any_in_ear = aacp_manager
-                    .state
-                    .lock()
-                    .await
-                    .ear_detection_status
-                    .contains(&EarDetectionStatus::InEar);
+                let any_in_ear = aacp_manager.state.lock().await.maybe_worn();
                 if !any_in_ear {
                     info!("Media playback started but buds not in ear, skipping takeover");
                     continue;

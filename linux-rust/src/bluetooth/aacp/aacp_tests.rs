@@ -151,6 +151,8 @@ async fn unknown_or_short_control_commands_are_ignored() {
 #[tokio::test]
 async fn ear_detection_reports_previous_and_new_state() {
     let (m, mut rx) = manager().await;
+    // Not said yet: maybe worn, so a press of play here can still take them back.
+    assert!(m.state.lock().await.maybe_worn());
     m.receive_packet(&packet(&[0x06, 0x00, 0x00, 0x00])).await;
     let AACPEvent::EarDetection(old, new) = next(&mut rx) else {
         panic!("not ear detection");
@@ -174,6 +176,7 @@ async fn ear_detection_reports_previous_and_new_state() {
         new,
         vec![EarDetectionStatus::OutOfEar, EarDetectionStatus::InCase]
     );
+    assert!(!m.state.lock().await.maybe_worn());
 
     // Unknown status bytes are ignored: no event, and the last known state is kept, so
     // media is not paused for a status we can't read.

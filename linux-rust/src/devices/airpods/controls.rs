@@ -96,8 +96,7 @@ pub(super) async fn mic_allowed(
     if route.lock().call {
         return Err("A call is on the AirPods");
     }
-    let ears = aacp.state.lock().await.ear_detection_status.clone();
-    if !ears.is_empty() && !ears.contains(&EarDetectionStatus::InEar) {
+    if !aacp.state.lock().await.maybe_worn() {
         return Err("The AirPods aren't in your ears");
     }
     Ok(())

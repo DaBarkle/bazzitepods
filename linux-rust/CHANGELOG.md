@@ -6,6 +6,17 @@ All notable changes to Kase (formerly BazzitePods) are documented here. The form
 
 ## [Unreleased]
 
+## [0.9.4] - 2026-10-31
+
+### Fixed
+- **Pressing play on the PC takes the AirPods back after they connected while the iPhone
+  had them.** On such a connect the AirPods may not send their in-ear state, and Kase read
+  "not said yet" as "not worn": it logged `buds not in ear, skipping takeover`, left them on
+  the iPhone, and Discord, Plex and browser videos played into a silent output (players
+  hung). Unknown now counts as maybe worn, for a press of play, the route watcher and the
+  mic switch alike; a known out-of-ear or in-case state still keeps them where they are.
+  ([#47])
+
 ## [0.9.3] - 2026-10-31
 
 ### Fixed
@@ -512,3 +523,4 @@ desktops, built on [LibrePods](https://github.com/librepods-org/librepods).
 [#44]: https://github.com/DaBarkle/kase/pull/44
 [#45]: https://github.com/DaBarkle/kase/pull/45
 [#46]: https://github.com/DaBarkle/kase/pull/46
+[#47]: https://github.com/DaBarkle/kase/pull/47
