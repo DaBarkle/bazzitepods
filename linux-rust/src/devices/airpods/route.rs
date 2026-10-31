@@ -394,12 +394,7 @@ pub(super) async fn watch_route(
 
     let (worn, peer_streaming) = {
         let state = aacp.state.lock().await;
-        (
-            state
-                .ear_detection_status
-                .contains(&EarDetectionStatus::InEar),
-            state.peer_streaming,
-        )
+        (state.maybe_worn(), state.peer_streaming)
     };
     let inputs = {
         let state = route.lock();

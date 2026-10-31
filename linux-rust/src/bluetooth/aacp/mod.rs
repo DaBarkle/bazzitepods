@@ -365,6 +365,16 @@ impl AACPManagerState {
             airpods_mac: None,
         }
     }
+
+    /// At least one AirPod is in an ear, or the AirPods haven't said yet. They don't always
+    /// send it on a connect made while another device has them, and treating that as "not
+    /// worn" left a press of play here stuck behind the iPhone.
+    pub fn maybe_worn(&self) -> bool {
+        self.ear_detection_status.is_empty()
+            || self
+                .ear_detection_status
+                .contains(&EarDetectionStatus::InEar)
+    }
 }
 
 #[derive(Clone)]
