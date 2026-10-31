@@ -97,6 +97,11 @@
   <content_rating type="oars-1.1"/>
 
   <releases>
+    <release version="0.9.3" date="2026-10-31">
+      <description>
+        <p>A Disconnect pressed on the PC is now remembered across restarts, reboots and suspend, until you connect the AirPods again or unpair them.</p>
+      </description>
+    </release>
     <release version="0.9.2" date="2026-10-31">
       <description>
         <p>Faster, more reliable reconnecting from the case: opening the lid connects at once, the pods' own Bluetooth adverts tell Kase they went into the case, and an iPhone grabbing them mid-connect no longer slows the PC down.</p>

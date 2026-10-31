@@ -15,7 +15,8 @@ use crate::{
 use bluer::{Adapter, AdapterEvent, Address, DeviceEvent, DeviceProperty};
 use futures::StreamExt;
 use log::{debug, info, warn};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::sync::{Mutex, RwLock};
@@ -181,6 +182,12 @@ impl RunningDevice {
 /// Per-adapter bookkeeping that outlives individual device tasks.
 #[derive(Default)]
 struct AdapterState_ {
+    /// AirPods disconnected on this PC: never reconnected until they connect again by any
+    /// route. Saved in `kept_path`, so restarts, reboots and suspend don't undo it.
+    kept_away: HashSet<Address>,
+    kept_path: PathBuf,
+    /// Disconnects pressed here, saved once the adapter is still on a moment later.
+    pending_keep: HashMap<Address, Instant>,
     running: HashMap<Address, RunningDevice>,
     /// Tasks that were cancelled but may still be cleaning up. A new task for the same device
     /// waits until the old one is gone so the two never overwrite each other's state.
@@ -238,6 +245,7 @@ impl AdapterState_ {
                     addr
                 );
                 self.away.remove(&addr);
+                self.pending_keep.insert(addr, Instant::now());
             }
             ReconnectPlan::UntilBack if log_it => {
                 if self.away.get(&addr).is_some_and(|a| a.bounced) {
@@ -258,6 +266,42 @@ impl AdapterState_ {
                 }
             }
             ReconnectPlan::UntilBack => {}
+        }
+    }
+
+    /// Remember Disconnects pressed here once the adapter is confirmed still on: switching
+    /// Bluetooth off also closes links as "Local", and that must not stop reconnects for good.
+    fn settle_kept(&mut self, powered: bool) {
+        let due: Vec<Address> = self
+            .pending_keep
+            .iter()
+            .filter(|(_, t)| t.elapsed() >= KEEP_CONFIRM)
+            .map(|(a, _)| *a)
+            .collect();
+        for addr in &due {
+            self.pending_keep.remove(addr);
+            if powered {
+                info!(
+                    "AirPods {addr}: remembering the Disconnect; not reconnecting them, even after a restart, until they connect again"
+                );
+                self.kept_away.insert(*addr);
+            } else {
+                info!(
+                    "AirPods {addr}: Bluetooth was switched off, not a Disconnect; not remembering it"
+                );
+            }
+        }
+        if powered && !due.is_empty() {
+            disconnect_watch::save_kept_away(&self.kept_path, &self.kept_away);
+        }
+    }
+
+    /// The AirPods connected again (from KDE, bluetoothctl or by themselves) or were unpaired.
+    fn forget_kept(&mut self, addr: Address, why: &str) {
+        self.pending_keep.remove(&addr);
+        if self.kept_away.remove(&addr) {
+            info!("AirPods {addr} {why}; forgetting the Disconnect pressed on this PC");
+            disconnect_watch::save_kept_away(&self.kept_path, &self.kept_away);
         }
     }
 
@@ -310,6 +354,8 @@ fn retry_interval(away_for: Duration, quick: bool) -> Duration {
 
 /// A session shorter than this that ends on its own counts as bounced.
 const BOUNCE_LIMIT: Duration = Duration::from_secs(10);
+/// How long a Disconnect pressed here waits before it is saved (see [`AdapterState_::settle_kept`]).
+const KEEP_CONFIRM: Duration = Duration::from_secs(3);
 /// About one page timeout, so the next attempt starts as the previous one gives up.
 const QUICK_RECONNECT_INTERVAL: Duration = Duration::from_secs(8);
 const QUICK_RECONNECT_PERIOD: Duration = Duration::from_secs(15 * 60);
@@ -394,7 +440,12 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
         }
     };
 
-    let mut st = AdapterState_::default();
+    let kept_path = disconnect_watch::kept_away_path();
+    let mut st = AdapterState_ {
+        kept_away: disconnect_watch::load_kept_away(&kept_path),
+        kept_path,
+        ..Default::default()
+    };
     let mut watched: HashMap<Address, JoinHandle<()>> = HashMap::new();
 
     let mut adapter_events = match adapter.events().await {
@@ -406,19 +457,37 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
     };
 
     if let Ok(addrs) = adapter.device_addresses().await {
+        let mut paired = HashSet::new();
         for addr in addrs {
             watch_device(adapter, addr, &mut watched, &ctx.kick_tx).await;
+            let Ok(device) = adapter.device(addr) else {
+                continue;
+            };
+            if bounded(device.is_paired()).await == Some(true) {
+                paired.insert(addr);
+            }
             // AirPods away when the app starts (after a reboot, say) come back like ones
             // that went into the case while it ran.
-            if let Ok(device) = adapter.device(addr)
-                && bounded(device.is_paired()).await == Some(true)
+            if paired.contains(&addr)
                 && bounded(device.is_connected()).await == Some(false)
                 && bounded(device.uuids())
                     .await
                     .flatten()
                     .is_some_and(|u| u.contains(&AIRPODS_UUID))
             {
-                st.want_back(addr);
+                if st.kept_away.contains(&addr) {
+                    info!(
+                        "AirPods {addr}: remembered Disconnect pressed on this PC; not reconnecting"
+                    );
+                } else {
+                    st.want_back(addr);
+                }
+            }
+        }
+        // Unpaired or forgotten while Kase wasn't running.
+        for addr in st.kept_away.clone() {
+            if !paired.contains(&addr) {
+                st.forget_kept(addr, "are no longer paired");
             }
         }
     }
@@ -462,6 +531,7 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                 }
                 Some(AdapterEvent::DeviceRemoved(addr)) => {
                     if let Some(h) = watched.remove(&addr) { h.abort(); }
+                    st.forget_kept(addr, "were unpaired");
                 }
                 Some(AdapterEvent::PropertyChanged(_)) => {}
                 None => break,
@@ -522,6 +592,9 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                 }
             }
             _ = sweep.tick() => {
+                if !st.pending_keep.is_empty() {
+                    st.settle_kept(bounded(adapter.is_powered()).await == Some(true));
+                }
                 for addr in st.due() {
                     maybe_reconnect(adapter, addr, &mut st).await;
                 }
@@ -697,6 +770,7 @@ async fn reconcile(
         info!("AirPods connected: {} ({})", name, addr);
         st.away.remove(&addr);
         st.drop_reason.remove(&addr);
+        st.forget_kept(addr, "connected again");
         let dctx = DeviceContext {
             hub: ctx.hub.clone(),
             battery: ctx.battery.clone(),
@@ -720,6 +794,55 @@ async fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn kept_state(name: &str) -> AdapterState_ {
+        let dir = std::env::temp_dir().join(format!("kase-sup-{name}-{}", std::process::id()));
+        AdapterState_ {
+            kept_path: dir.join("kept_disconnected.json"),
+            ..Default::default()
+        }
+    }
+
+    fn settled_now(st: &mut AdapterState_) {
+        for t in st.pending_keep.values_mut() {
+            *t -= KEEP_CONFIRM;
+        }
+    }
+
+    #[test]
+    fn a_disconnect_pressed_here_is_remembered_until_they_connect_again() {
+        let a: Address = "CC:22:FE:24:0C:70".parse().unwrap();
+        let mut st = kept_state("keep");
+        st.drop_reason.insert(a, DropReason::Local);
+        st.note_lost(a, false);
+        assert!(st.away.is_empty(), "no reconnects after a Disconnect here");
+        st.settle_kept(true);
+        assert!(
+            st.kept_away.is_empty(),
+            "not saved before the adapter is confirmed on"
+        );
+        settled_now(&mut st);
+        st.settle_kept(true);
+        assert_eq!(
+            disconnect_watch::load_kept_away(&st.kept_path),
+            HashSet::from([a])
+        );
+        st.forget_kept(a, "connected again");
+        assert!(disconnect_watch::load_kept_away(&st.kept_path).is_empty());
+        let _ = std::fs::remove_dir_all(st.kept_path.parent().unwrap());
+    }
+
+    #[test]
+    fn switching_bluetooth_off_is_not_remembered_as_a_disconnect() {
+        let a: Address = "CC:22:FE:24:0C:70".parse().unwrap();
+        let mut st = kept_state("power");
+        st.drop_reason.insert(a, DropReason::Local);
+        st.note_lost(a, false);
+        settled_now(&mut st);
+        st.settle_kept(false);
+        assert!(st.kept_away.is_empty() && st.pending_keep.is_empty());
+        assert!(!st.kept_path.exists());
+    }
 
     #[test]
     fn retry_interval_schedule() {
