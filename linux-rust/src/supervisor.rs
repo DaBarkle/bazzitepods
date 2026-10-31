@@ -457,18 +457,26 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
     };
 
     if let Ok(addrs) = adapter.device_addresses().await {
-        let mut paired = HashSet::new();
+        // Unpaired or forgotten while Kase wasn't running. Only a clear answer counts: a
+        // D-Bus timeout must not undo a Disconnect.
+        let mut unpaired: HashSet<Address> = st
+            .kept_away
+            .iter()
+            .filter(|a| !addrs.contains(a))
+            .copied()
+            .collect();
         for addr in addrs {
             watch_device(adapter, addr, &mut watched, &ctx.kick_tx).await;
             let Ok(device) = adapter.device(addr) else {
                 continue;
             };
-            if bounded(device.is_paired()).await == Some(true) {
-                paired.insert(addr);
+            let paired = bounded(device.is_paired()).await;
+            if paired == Some(false) {
+                unpaired.insert(addr);
             }
             // AirPods away when the app starts (after a reboot, say) come back like ones
             // that went into the case while it ran.
-            if paired.contains(&addr)
+            if paired == Some(true)
                 && bounded(device.is_connected()).await == Some(false)
                 && bounded(device.uuids())
                     .await
@@ -484,11 +492,8 @@ async fn run_adapter(adapter: &Adapter, ctx: &mut SupervisorCtx) {
                 }
             }
         }
-        // Unpaired or forgotten while Kase wasn't running.
-        for addr in st.kept_away.clone() {
-            if !paired.contains(&addr) {
-                st.forget_kept(addr, "are no longer paired");
-            }
+        for addr in unpaired {
+            st.forget_kept(addr, "are no longer paired");
         }
     }
 
